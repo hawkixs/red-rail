@@ -5,8 +5,9 @@
   session for the boundary contract (section 3)
 - **Brain project key**: `red-rail` (group `red`)
 - **Related**: ReD decision `41d8b3ef` (boundary), ADR #15 (public bricks work alone),
-  red-rail decision `43f85b5d` (pluggable ledger), learning `8c417379` (root cause),
-  ADR-0001 and ADR-0002 in this repository
+  red-rail decisions `43f85b5d` (pluggable ledger) and `ff7686c3` (independent reviewer),
+  brain-v42 decisions `a06f57be` (delivery review 2026-09-12) and `1800f901` (headless-agents),
+  learning `8c417379` (root cause), ADR-0001 to ADR-0003 in this repository
 
 ## 1. Problem
 
@@ -36,6 +37,7 @@ and future ReD project follows with constancy, where drift is **measured** rathe
 | 5 | Boundary with brain-v42 | brain keeps the **ledger**; red-rail owns **policy, execution, review** (section 3) |
 | 6 | Success criterion | Measured: the four DORA metrics + a conformance score + the number of human gestures per delivery, all derived from ledger evidence |
 | 7 | Approach | Declarative rail + a single CLI, borrowing GitHub *environments* (later) and Claude Code skills as facades |
+| 9 | Independent review (2026-09-15) | The review gate is satisfied by an **independent reviewer** owned by red-rail (pull-mode service on the host, one review per head SHA, verdict published as a required GitHub check by a dedicated App and attested), executed through the generic `headless-agents` library pinned to a brain-v42 tag. A review launched from the producing session is a *pre-review*: it improves the PR, it never judges it |
 | 8 | Standalone operation (2026-09-15) | The ledger is a pluggable backend: `file` (the repository's receipts are the ledger, no network) by default, `brain` (brain-v42, shared and observed) as the upgrade. A public ReD brick must work alone; integration is optional and goes through a versioned contract (ReD ADR #15) |
 
 Industry alignment was checked on 2026-09-14: the evidence / policy / execution split is the
@@ -92,6 +94,20 @@ become mirrors. Same files, only the authority changes; `rail metrics` reads the
 so DORA metrics exist in both modes (single-repository view in `file`, cross-project in
 `brain`). Rule 2 holds in both modes. The protocol is the versioned contract between the two
 bricks, tested on both sides; red-rail is never hosted as a plugin inside brain-v42.
+
+### The reviewer and the agent runtime
+
+brain-v42 decision `a06f57be` (2026-09-12) planned an in-house PR reviewer as its lot 4. Under
+the two rules it belongs to red-rail: the review *policy* (what to check, when, with which
+provider) and its *publication* are delivery, and the verdict is evidence. The *runtime* that
+executes judges is the generic `headless-agents` package (brain-v42 workspace member,
+decision `1800f901`): `pydantic` only, never imports `brain_v42`, "executes, never decides" —
+every policy is data the caller supplies. red-rail depends on it as a **library pinned to a
+brain-v42 tag**, never through `brain_v42.agents` (the Dream adapter) and never by importing
+`brain_v42`. The verdict reaches `integration` as a check named in the contract's
+`required_checks` — a generic ledger mechanism (the contract declares, the evaluator checks
+green checks) — so brain learns no review gate. brain-v42's lot 4 shrinks to its own GitHub
+client for the observer; red-rail carries its own minimal one.
 
 The eight `codex/delivery-*` branches are triaged with these two rules (most are ledger-side:
 freshness, dependencies, API pin; `contract-admission` is the one to examine).
@@ -158,10 +174,11 @@ red-rail/
 │   ├── scaffold.py    # copier: new + upgrade
 │   ├── audit.py       # score per repository × stage, against the tier
 │   ├── metrics.py     # DORA + conformance, read from the ledger
+│   ├── reviewer/      # independent reviewer: policy as data, RunSpec builder, GitHub App client, pull service
 │   └── deploy/        # targets: vps-traefik, pc-server-systemd
 ├── template/          # copier: CLAUDE.md, rail.yaml, docs/{specs,plans,adr}, justfile,
 │                      #   .github/workflows/rail.yml, python/go skeletons
-├── workflows/         # rail-ci.yml (reusable GitHub workflow), review.js (tiered judges)
+├── workflows/         # rail-ci.yml (reusable GitHub workflow), pre-review.js (tiered judges, in session)
 ├── skills/            # Claude Code facades: rail-design, rail-plan, rail-review, rail-release, rail-deploy
 └── tests/
 ```
@@ -181,11 +198,17 @@ Four mechanisms carry everything:
    `deploy`, rollback) run from the host, where `rail attest` talks to brain directly. With
    `ledger: file`, CI *validates* the committed receipts (`hygiene.receipts` gate) but never
    writes them.
-4. **The review verdict is a schema, not a runner.** red-rail defines `ReviewVerdict` (JSON)
-   and `rail attest review_verdict`. The default runner is `workflows/review.js` (a tiered
-   Workflow: sonnet fan-out, `wf-judge` on opus to confirm, tiering markers accepted by the
-   PreToolUse hook) launched by the `rail-review` skill; an opencode/Codex worker producing
-   the same schema is interchangeable.
+4. **The review gate needs an independent verdict.** `rail reviewer` runs on the host in pull
+   mode (like the brain observer): one review per PR head SHA, judges executed through
+   `headless-agents` in an isolated seat (`CapabilityProfile(mcp=None)`, read-only, no Brain,
+   throwaway HOME), provider chain agy → codex → claude with the rule *never the producer's
+   provider*, a light mode for docs and small PRs, a deep judge only on an Important finding
+   or a disagreement. The `ReviewVerdict` (JSON, enum-valued) is published as a required
+   check and a review by the `red-rail-reviewer` GitHub App — fail-closed (failure, never
+   neutral), re-run by label — and attested `review_verdict`. Subscriptions are welded to the
+   host HOME, so the reviewer never runs in CI. `workflows/pre-review.js` (a tiered Workflow
+   launched by the `rail-review` skill from the producing session) is a **pre-review**: it
+   improves the PR before the independent verdict and never satisfies the gate.
 
 Skills contain **no rule**: `rail-design` guides the conversation, then calls
 `rail check design`. When a skill and the CLI disagree, the CLI is right.
@@ -205,8 +228,10 @@ is what allows **measuring the drift between git and what is deployed**.
    `gate_passed`. *Human: arbitrates the design.*
 3. **build** — TDD in session or by a worker; PR opened → `brain_delivery_bind_pr`; CI
    (`rail-ci.yml` on the `red-ci` runner) publishes `rail check build` as a check.
-4. **review** — `rail-review` runs `review.js` → verdict JSON → `rail attest review_verdict`.
-   *Human: approves the PR.* Without an attested verdict, `rail check review` fails.
+4. **review** — optional pre-review from the session (`rail-review` → `pre-review.js`), then
+   the independent `rail reviewer` picks up the head SHA, publishes its check and attests
+   `review_verdict`. *Human: approves the PR.* Without an independent verdict and a human
+   approval, `rail check review` fails.
 5. **integrate** — merge; the brain observer sees merged + checks + approval → automatic
    `integration` receipt.
 6. **release** — from the host: `rail release` → tag, image built and pushed with digest,
@@ -251,8 +276,9 @@ Principle: **a gate fails explicitly, never silently; an exception is declared, 
 - **Security.** No secret in the red-rail tree; tokens through stdin as `runnerctl` does;
   gitleaks in the `build` gate; brain stays on the host loopback; the runner VM has no brain
   or VPS access. Judges read PR content as **data**: read-only tools, enum-valued verdicts,
-  no free-form executable text. `review.js` must pass `tiering_gate.py --check` — that is a
-  red-rail test.
+  no free-form executable text. `pre-review.js` must pass `tiering_gate.py --check` — that is a
+  red-rail test. The reviewer's GitHub App private key lives outside the tree, in a private
+  state directory on the host.
 - **The rail is wrong (false positive).** Fix in red-rail, then `rail upgrade` propagates.
   The only bypass is a `gates:` override in `rail.yaml` with a mandatory `reason`, which
   `rail audit` shows as a *declared exception*. No `# rail: ignore` in code.
@@ -264,8 +290,9 @@ Principle: **a gate fails explicitly, never silently; an exception is declared, 
 Every gate tested on fixture repositories (conforming / drifting); the audit matrix as a
 golden test over the 24 real projects (day-0 snapshot); both ledger backends against the
 **same** contract test suite, `BrainLedger` against a fake brain (tool schemas pinned); **the boundary test** (brain evaluator error-code
-list frozen); a fresh scaffold must pass its own `rail check` at `bootstrap`; `review.js`
-passes `tiering_gate.py --check`; `rail deploy --plan` dry-run.
+list frozen); a fresh scaffold must pass its own `rail check` at `bootstrap`; `pre-review.js`
+passes `tiering_gate.py --check`; a contract test on the pinned `headless-agents` API
+(`RunSpec`, `CapabilityProfile`, provider exit codes); `rail deploy --plan` dry-run.
 
 ### Critical dependency
 
@@ -282,7 +309,7 @@ view is what standardisation needs.
 |---|---|---|
 | 0 — Framing | validated spec; ticket `red → brain-v42` (boundary review + `attest` spec); red-rail bootstrapped (two remotes) | ticket open, repository created |
 | 1 — The rail without network | model, gates (incl. `hygiene.receipts`), `Ledger` protocol + `FileLedger`, `rail attest`, `rail metrics`, audit, scaffold, template, `rail-ci.yml`, skills | `rail audit projects/*` outputs the 24-repository matrix; a fresh scaffold passes `bootstrap`; red-rail passes `dev`; attestations and DORA work on a repository with `ledger: file` |
-| 2 — The shared ledger | `BrainLedger`, contract tests on both backends, `review.js` + `ReviewVerdict` | idempotent attestations on brain; boundary test green; a receipt whose digest matches no attestation is reported as drift |
+| 2 — The shared ledger and the reviewer | `BrainLedger`, contract tests on both backends, `reviewer/` on `headless-agents` + `ReviewVerdict`, `pre-review.js` | idempotent attestations on brain; boundary test green; a receipt whose digest matches no attestation is reported as drift; one PR reviewed end to end by the independent reviewer with its check required |
 | 3 — red-probe | release, VPS deployment, observation, drill, metrics | `/version` equals the attested digest; red-monitor sees the container; recovery time measured; four DORA + 10/10 at `prod`; `brain_delivery_get` shows the full chain to `fulfilled` |
 
 ### Non-goals of the POC
@@ -291,6 +318,8 @@ Retrofitting the 20 repositories (`rail upgrade` per tier — the standardisatio
 triaging the `codex/delivery-*` branches; GitLab CI parity (GitHub is the authority, GitLab a
 mirror); deployment from CI with *environments*; automatic incident evidence from
 red-monitor/red-watcher (in the POC, `rail attest incident_detected` is an operator gesture).
+Creating the `red-rail-reviewer` GitHub App and installing it on the repositories is an
+operator gesture (private key outside any tree).
 
 ### Raised for separate decisions
 

@@ -34,7 +34,8 @@ comments, test names. The conversation with the operator stays in French.
   `docs/receipts/*.json` are the ledger, no network) or `brain` (brain-v42, shared and observed;
   receipts become mirrors). red-rail works alone; brain-v42 is the upgrade (ADR-0002).
 - Planned (see the design spec): `ledger/` (protocol + `FileLedger` + `BrainLedger`),
-  `scaffold.py` (copier), `audit.py`, `metrics.py`, `deploy/`, `template/`, `workflows/`, `skills/`.
+  `scaffold.py` (copier), `audit.py`, `metrics.py`, `reviewer/` (independent reviewer on
+  `headless-agents`, own GitHub App), `deploy/`, `template/`, `workflows/`, `skills/`.
 
 Boundary rules with brain-v42, both testable: brain never learns a new gate; red-rail stores
 no durable fact outside the ledger.
@@ -72,6 +73,8 @@ red-rail/
 
 - ADR-0001 — ledger in brain-v42, policy/execution/review in red-rail.
 - ADR-0002 — pluggable ledger, standalone first; never a plugin inside brain-v42.
+- ADR-0003 — the independent PR reviewer lives here and runs on the `headless-agents` library
+  (brain-v42 workspace member, pinned to a tag); a session-launched review is only a pre-review.
 - Design spec: `docs/specs/2026-09-14-red-rail-design.md` (ten stages, three tiers,
   `rail.yaml`, end-to-end flow, failure modes, phasing).
 - Attestations come only from the server host; the runner VM never reaches brain or the VPS.
