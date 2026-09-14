@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from rail.model import RailConfig, Stack, Tier, load_rail_config
+from rail.model import Ledger, RailConfig, Stack, Tier, load_rail_config
 
 MINIMAL = {
     "rail": 1,
@@ -74,3 +74,18 @@ def test_load_rail_config_reads_yaml(tmp_path: Path) -> None:
 def test_load_rail_config_missing_file_is_explicit(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="rail.yaml"):
         load_rail_config(tmp_path)
+
+
+def test_ledger_defaults_to_file_so_rail_works_without_brain() -> None:
+    cfg = RailConfig.model_validate(MINIMAL)
+    assert cfg.ledger is Ledger.FILE
+
+
+def test_ledger_accepts_brain_as_the_shared_backend() -> None:
+    cfg = RailConfig.model_validate({**MINIMAL, "ledger": "brain"})
+    assert cfg.ledger is Ledger.BRAIN
+
+
+def test_ledger_rejects_unknown_backends() -> None:
+    with pytest.raises(ValidationError, match="ledger"):
+        RailConfig.model_validate({**MINIMAL, "ledger": "sqlite"})

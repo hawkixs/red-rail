@@ -4,8 +4,9 @@
 - **Status**: validated in a brainstorm session at the ReD root; pending review by a brain-v42
   session for the boundary contract (section 3)
 - **Brain project key**: `red-rail` (group `red`)
-- **Related**: ReD decision `41d8b3ef` (boundary), learning `8c417379` (root cause),
-  ADR-0001 in this repository
+- **Related**: ReD decision `41d8b3ef` (boundary), ADR #15 (public bricks work alone),
+  red-rail decision `43f85b5d` (pluggable ledger), learning `8c417379` (root cause),
+  ADR-0001 and ADR-0002 in this repository
 
 ## 1. Problem
 
@@ -35,6 +36,7 @@ and future ReD project follows with constancy, where drift is **measured** rathe
 | 5 | Boundary with brain-v42 | brain keeps the **ledger**; red-rail owns **policy, execution, review** (section 3) |
 | 6 | Success criterion | Measured: the four DORA metrics + a conformance score + the number of human gestures per delivery, all derived from ledger evidence |
 | 7 | Approach | Declarative rail + a single CLI, borrowing GitHub *environments* (later) and Claude Code skills as facades |
+| 8 | Standalone operation (2026-09-15) | The ledger is a pluggable backend: `file` (the repository's receipts are the ledger, no network) by default, `brain` (brain-v42, shared and observed) as the upgrade. A public ReD brick must work alone; integration is optional and goes through a versioned contract (ReD ADR #15) |
 
 Industry alignment was checked on 2026-09-14: the evidence / policy / execution split is the
 supply-chain consensus (SLSA provenance vs verifier vs expectations; in-toto layout vs links;
@@ -78,6 +80,19 @@ receipts with two milestones only, `integration` and `fulfilled`. Nothing exists
 2. **red-rail stores no durable fact outside the ledger.** A `docs/receipts/*` file in a
    repository is a *mirror* of an attestation, linked by digest, never the source.
 
+### Standalone operation
+
+brain-v42 works fully without red-rail (its delivery ledger is an optional module, off by
+default). red-rail must work fully without brain-v42: the `Ledger` protocol
+(`contract_set`, `bind`, `attest`, `list`, `get`) has two implementations. `FileLedger` —
+the repository's `docs/receipts/*.json` **are** the ledger: append-only, committed, each
+record carrying a digest and an idempotency key; one operator, one repository, no network.
+`BrainLedger` — brain-v42 is the shared, cross-project, observed authority and the receipts
+become mirrors. Same files, only the authority changes; `rail metrics` reads the protocol,
+so DORA metrics exist in both modes (single-repository view in `file`, cross-project in
+`brain`). Rule 2 holds in both modes. The protocol is the versioned contract between the two
+bricks, tested on both sides; red-rail is never hosted as a plugin inside brain-v42.
+
 The eight `codex/delivery-*` branches are triaged with these two rules (most are ledger-side:
 freshness, dependencies, API pin; `contract-admission` is the one to examine).
 
@@ -120,6 +135,7 @@ project: red-probe
 brain_key: red-probe
 tier: prod
 stack: python        # python | go | docs
+ledger: brain        # file (default, receipts are the ledger) | brain (shared ledger)
 deploy:
   target: vps-traefik
   healthcheck: https://probe.hawkixs.com/healthz
@@ -138,7 +154,7 @@ red-rail/
 │   ├── cli.py         # rail new | check | audit | attest | deploy | metrics | upgrade
 │   ├── model.py       # RailConfig, Tier, Stage, GateResult
 │   ├── gates/         # one module per stage: fn(repo) -> GateResult
-│   ├── ledger.py      # brain client (MCP Streamable HTTP :8765)
+│   ├── ledger/        # Ledger protocol; FileLedger (receipts) and BrainLedger (MCP client)
 │   ├── scaffold.py    # copier: new + upgrade
 │   ├── audit.py       # score per repository × stage, against the tier
 │   ├── metrics.py     # DORA + conformance, read from the ledger
@@ -159,10 +175,12 @@ Four mechanisms carry everything:
    drift table becomes reproducible, versioned, diffable. It also reads `.copier-answers.yml`:
    a repository behind the template is a quantified drift, and `rail upgrade`
    (= `copier update`) resorbs it.
-3. **Attestations only come from the server host.** The runner VM cannot reach brain
-   (127.0.0.1:8765 on the host) and will not be given access: CI exposes its gates as GitHub
-   *checks*, which the brain observer already reads. Post-merge stages (`release`, `deploy`,
-   rollback) run from the host, where `rail attest` talks to brain directly.
+3. **CI never holds ledger credentials.** With `ledger: brain`, the runner VM cannot reach
+   brain (host loopback) and will not be given access: CI exposes its gates as GitHub
+   *checks*, which the brain observer already reads, and post-merge stages (`release`,
+   `deploy`, rollback) run from the host, where `rail attest` talks to brain directly. With
+   `ledger: file`, CI *validates* the committed receipts (`hygiene.receipts` gate) but never
+   writes them.
 4. **The review verdict is a schema, not a runner.** red-rail defines `ReviewVerdict` (JSON)
    and `rail attest review_verdict`. The default runner is `workflows/review.js` (a tiered
    Workflow: sonnet fan-out, `wf-judge` on opus to confirm, tiering markers accepted by the
@@ -213,7 +231,8 @@ restored). No separate instrumentation: the timestamps are those of the evidence
 
 Principle: **a gate fails explicitly, never silently; an exception is declared, never hidden.**
 
-- **brain unreachable.** Local gates run without brain. `rail attest` fails with a non-zero
+- **brain unreachable** (`ledger: brain` only; `file` mode has no network). Local gates run
+  without brain. `rail attest` fails with a non-zero
   exit — no spool, no "later": that would be memory outside the ledger in disguise. Sensitive
   case: deployment succeeded, attestation failed. `rail deploy` writes the local receipt first
   (`docs/receipts/…json`, mirror with digest), attests, and on failure exits with a distinct
@@ -243,8 +262,8 @@ Principle: **a gate fails explicitly, never silently; an exception is declared, 
 ### red-rail's own tests (TDD)
 
 Every gate tested on fixture repositories (conforming / drifting); the audit matrix as a
-golden test over the 24 real projects (day-0 snapshot); the ledger client against a fake
-brain (contract tests on tool schemas); **the boundary test** (brain evaluator error-code
+golden test over the 24 real projects (day-0 snapshot); both ledger backends against the
+**same** contract test suite, `BrainLedger` against a fake brain (tool schemas pinned); **the boundary test** (brain evaluator error-code
 list frozen); a fresh scaffold must pass its own `rail check` at `bootstrap`; `review.js`
 passes `tiering_gate.py --check`; `rail deploy --plan` dry-run.
 
@@ -252,15 +271,18 @@ passes `tiering_gate.py --check`; `rail deploy --plan` dry-run.
 
 `brain_delivery_attest` does not exist. It is an append-only table, one tool and one list —
 small and purely ledger — but **brain-v42 delivers it**, in its own session, after refuting
-the boundary contract. Without it there are no attestations, hence no stages 6–9.
+the boundary contract. It gates the *shared* ledger (`BrainLedger`, phase 2), not the POC
+itself: with `FileLedger` (phase 1) every stage 6–9 can be attested and measured without
+brain. The POC's proof is nevertheless expected in `brain` mode, because the cross-project
+view is what standardisation needs.
 
 ### Phases — each with a measured proof
 
 | Phase | Content | Proof |
 |---|---|---|
 | 0 — Framing | validated spec; ticket `red → brain-v42` (boundary review + `attest` spec); red-rail bootstrapped (two remotes) | ticket open, repository created |
-| 1 — The rail without network | model, gates, audit, scaffold, template, `rail-ci.yml`, skills | `rail audit projects/*` outputs the 24-repository matrix; a fresh scaffold passes `bootstrap`; red-rail passes `dev` |
-| 2 — The ledger | brain client, `rail attest`, `review.js` + `ReviewVerdict`, `rail metrics` | idempotent attestations; boundary test green |
+| 1 — The rail without network | model, gates (incl. `hygiene.receipts`), `Ledger` protocol + `FileLedger`, `rail attest`, `rail metrics`, audit, scaffold, template, `rail-ci.yml`, skills | `rail audit projects/*` outputs the 24-repository matrix; a fresh scaffold passes `bootstrap`; red-rail passes `dev`; attestations and DORA work on a repository with `ledger: file` |
+| 2 — The shared ledger | `BrainLedger`, contract tests on both backends, `review.js` + `ReviewVerdict` | idempotent attestations on brain; boundary test green; a receipt whose digest matches no attestation is reported as drift |
 | 3 — red-probe | release, VPS deployment, observation, drill, metrics | `/version` equals the attested digest; red-monitor sees the container; recovery time measured; four DORA + 10/10 at `prod`; `brain_delivery_get` shows the full chain to `fulfilled` |
 
 ### Non-goals of the POC

@@ -3,3 +3,4 @@ project: red-rail
 brain_key: red-rail
 tier: dev
 stack: python
+ledger: brain

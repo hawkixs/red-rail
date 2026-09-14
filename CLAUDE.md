@@ -30,8 +30,11 @@ comments, test names. The conversation with the operator stays in French.
   `fn(repo: Path) -> GateResult`; it never raises. The same function runs locally, in CI and
   behind a Claude Code skill, so policy exists once.
 - `src/rail/cli.py` — `rail`. Exit code is the verdict; `--json` is the contract for machines.
-- Planned (see the design spec): `ledger.py` (brain client), `scaffold.py` (copier),
-  `audit.py`, `metrics.py`, `deploy/`, `template/`, `workflows/`, `skills/`.
+- `ledger:` in `rail.yaml` selects the evidence authority: `file` (default — the repository's
+  `docs/receipts/*.json` are the ledger, no network) or `brain` (brain-v42, shared and observed;
+  receipts become mirrors). red-rail works alone; brain-v42 is the upgrade (ADR-0002).
+- Planned (see the design spec): `ledger/` (protocol + `FileLedger` + `BrainLedger`),
+  `scaffold.py` (copier), `audit.py`, `metrics.py`, `deploy/`, `template/`, `workflows/`, `skills/`.
 
 Boundary rules with brain-v42, both testable: brain never learns a new gate; red-rail stores
 no durable fact outside the ledger.
@@ -68,6 +71,7 @@ red-rail/
 ## Key technical decisions
 
 - ADR-0001 — ledger in brain-v42, policy/execution/review in red-rail.
+- ADR-0002 — pluggable ledger, standalone first; never a plugin inside brain-v42.
 - Design spec: `docs/specs/2026-09-14-red-rail-design.md` (ten stages, three tiers,
   `rail.yaml`, end-to-end flow, failure modes, phasing).
 - Attestations come only from the server host; the runner VM never reaches brain or the VPS.
