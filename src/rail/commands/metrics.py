@@ -21,7 +21,9 @@ def _fmt(value: float | None, unit: str) -> str:
 
 @click.command("metrics")
 @repo_option
-@click.option("--window", type=int, default=30, show_default=True, help="Window in days.")
+@click.option(
+    "--window", type=click.IntRange(min=1), default=30, show_default=True, help="Window in days."
+)
 @click.option("--ci", is_flag=True, help="Skip workstation-only gates in the conformance score.")
 @json_option
 def command(repo: Path, window: int, ci: bool, as_json: bool) -> None:

@@ -9,24 +9,21 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from pydantic import ValidationError
-
 from rail import gitrepo
 from rail.gates import GateResult, GateSpec, Stage
-from rail.model import MANIFEST_NAME, Stack, load_rail_config
+from rail.model import MANIFEST_NAME, Stack, try_load_rail_config
 from rail.policy import effective
 
 CONVENTIONAL = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]+\))?!?: \S")
 
 
 def _stack(repo: Path) -> Stack | None:
-    try:
-        return load_rail_config(repo).stack
-    except (FileNotFoundError, ValidationError):
-        return None
+    cfg = try_load_rail_config(repo)
+    return cfg.stack if cfg else None
 
 
-def tests(repo: Path) -> GateResult:
+def has_tests(repo: Path) -> GateResult:
+    # named `has_tests`, not `tests`: pytest would collect a `tests` function on import
     stack = _stack(repo)
     if stack is None:
         return GateResult(Stage.BUILD, "tests", False, f"{MANIFEST_NAME} unreadable")
@@ -135,7 +132,7 @@ def commits(repo: Path) -> GateResult:
 
 
 GATES = [
-    GateSpec(Stage.BUILD, "tests", tests),
+    GateSpec(Stage.BUILD, "tests", has_tests),
     GateSpec(Stage.BUILD, "lint", lint),
     GateSpec(Stage.BUILD, "secrets", secrets),
     GateSpec(Stage.BUILD, "commits", commits),

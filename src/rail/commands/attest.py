@@ -15,21 +15,20 @@ from pydantic import ValidationError
 from rail.commands._options import json_option, repo_option
 from rail.ledger import AttestationKind, LedgerError, Record, RecordKind, open_ledger
 from rail.ledger.file import load_receipt, receipt_filename
+from rail.model import load_rail_config
 
-_INT = re.compile(r"-?\d{1,12}")
-_FLOAT = re.compile(r"-?\d+\.\d+")
+_INT = re.compile(r"-?(0|[1-9]\d{0,11})")
 
 
 def coerce(value: str) -> Any:
-    """`key=value` data: true/false, short integers and decimals become typed; anything else
-    (a version, a sha, a digest) stays text."""
+    """`key=value` data: `true`/`false` and plain integers (no leading zero) become typed;
+    anything else — a version like `1.20`, a sha prefix like `0123…`, a decimal — stays text,
+    because re-typing an identifier corrupts it. Use `--data-json` for other types."""
     lowered = value.lower()
     if lowered in ("true", "false"):
         return lowered == "true"
     if _INT.fullmatch(value):
         return int(value)
-    if _FLOAT.fullmatch(value):
-        return float(value)
     return value
 
 
@@ -89,8 +88,6 @@ def command(
     attestation = AttestationKind(kind)
     try:
         ledger = open_ledger(repo)
-        from rail.model import load_rail_config
-
         project = load_rail_config(repo).project
         if replay is not None:
             source = load_receipt(replay)

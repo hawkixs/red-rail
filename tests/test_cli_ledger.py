@@ -222,3 +222,40 @@ def test_ledger_list_reads_back(tmp_path: Path) -> None:
     )
     rows = json.loads(out.output)
     assert [r["payload"]["kind"] for r in rows] == ["deployed"]
+
+
+def test_attest_data_keeps_identifiers_as_text(tmp_path: Path) -> None:
+    """Review finding: a version, a sha prefix or a digest must never be re-typed."""
+    repo = _repo(tmp_path)
+    out = CliRunner().invoke(
+        main,
+        [
+            "attest",
+            "released",
+            "--repo",
+            str(repo),
+            "--json",
+            "--data",
+            "version=1.20",
+            "--data",
+            "sha=0123456789ab",
+            "--data",
+            "digest=00",
+            "--data",
+            "attempts=2",
+            "--data",
+            "ratio=0.5",
+            "--data",
+            "drill=false",
+        ],
+    )
+    assert out.exit_code == 0, out.output
+    data = json.loads(out.output)["payload"]["data"]
+    assert data == {
+        "version": "1.20",
+        "sha": "0123456789ab",
+        "digest": "00",
+        "attempts": 2,
+        "ratio": "0.5",
+        "drill": False,
+    }

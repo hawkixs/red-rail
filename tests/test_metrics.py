@@ -124,3 +124,52 @@ def test_cli_metrics(tmp_path: Path) -> None:
     assert set(payload["conformance"]) == {"passed", "applicable", "exceptions", "score"}
     out = CliRunner().invoke(main, ["metrics", "--repo", str(repo)])
     assert out.exit_code == 0 and "change failure rate" in out.output
+
+
+def test_one_rollback_counts_one_failure_for_the_latest_deployment(tmp_path: Path) -> None:
+    """Review finding: a rollback belongs to the deployment it undoes, not to every
+    deployment of the previous 24 hours."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    head = git(repo, "rev-parse", "HEAD")
+    h = timedelta(hours=1)
+    _ledger_at(repo, T0 + 1 * h).attest(
+        "red-alpha",
+        AttestationKind.DEPLOYED,
+        {"sha": head, "digest": "sha256:a"},
+        issuer="op",
+        idempotency_key="d1",
+    )
+    _ledger_at(repo, T0 + 2 * h).attest(
+        "red-alpha",
+        AttestationKind.DEPLOYED,
+        {"sha": head, "digest": "sha256:b"},
+        issuer="op",
+        idempotency_key="d2",
+    )
+    _ledger_at(repo, T0 + 4 * h).attest(
+        "red-alpha",
+        AttestationKind.ROLLED_BACK,
+        {"drill": False},
+        issuer="op",
+        idempotency_key="rb1",
+    )
+    m = compute_metrics(FileLedger(repo / RECEIPTS_DIR), "red-alpha", repo, now=T0 + 10 * h)
+    assert m.deployments == 2 and m.change_failure_rate == 0.5
+
+
+def test_cli_metrics_rejects_a_zero_window(tmp_path: Path) -> None:
+    out = CliRunner().invoke(main, ["metrics", "--repo", str(_history(tmp_path)), "--window", "0"])
+    assert out.exit_code == 2 and "window" in out.output
+
+
+def test_window_scopes_incidents_and_rollbacks_too(tmp_path: Path) -> None:
+    """Sweep finding: --window applies to every metric, not only to the deployment count."""
+    repo = _history(tmp_path)
+    m = compute_metrics(
+        FileLedger(repo / RECEIPTS_DIR),
+        "red-alpha",
+        repo,
+        now=T0 + timedelta(days=60),
+        window_days=30,
+    )
+    assert m.recovery_time_hours is None  # the incident at T0+80h is outside the window

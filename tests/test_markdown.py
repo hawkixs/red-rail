@@ -98,3 +98,16 @@ def test_structure_inside_fences_is_ignored() -> None:
     assert markdown.fenced_blocks(four, "python") == [f"x = 1\n{FENCE}\ny = 2\n"]
     cited = f"see docs/specs/2026-09-14-a.md\n{FENCE}\ndocs/specs/2026-01-01-quoted.md\n{FENCE}\n"
     assert markdown.spec_references(cited) == ["docs/specs/2026-09-14-a.md"]
+
+
+def test_a_fence_may_close_with_more_backticks() -> None:
+    """Review finding: CommonMark closes a fence with at least as many backticks."""
+    text = f"{FENCE}bash\nmake ci\n{FENCE}`\n\n### Task 1.1: real\nexpect PASS\n"
+    assert markdown.fenced_blocks(text, "bash") == ["make ci\n"]
+    assert [s.splitlines()[0] for s in markdown.task_sections(text)] == ["### Task 1.1: real"]
+
+
+def test_command_lines_keep_a_hash_inside_quotes() -> None:
+    assert markdown.command_lines('make check ARGS="x #y"  # comment\n') == [
+        'make check ARGS="x #y"'
+    ]

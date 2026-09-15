@@ -34,34 +34,29 @@ def _on_history(
     repo: Path,
     kind: AttestationKind,
     accept: Callable[[dict[str, Any]], str | None],
-) -> GateResult:
+) -> tuple[GateResult, Record | None]:
     """Newest `kind` attestation: `accept(data)` returns a rejection reason or None; then its
-    `sha` must be an ancestor of HEAD."""
+    `sha` must be present and an ancestor of HEAD. Returns the record it judged."""
     records = _attestations(repo, kind)
     if isinstance(records, str):
-        return GateResult(stage, code, False, records)
+        return GateResult(stage, code, False, records), None
     if not records:
-        return GateResult(stage, code, False, f"no {kind.value} attestation")
+        return GateResult(stage, code, False, f"no {kind.value} attestation"), None
     newest = records[-1]
     data = newest.data
+    label = f"{kind.value} {newest.digest[:19]}"
     rejection = accept(data)
     if rejection:
-        return GateResult(stage, code, False, f"{kind.value} {newest.digest[:19]}: {rejection}")
-    sha = str(data.get("sha", ""))
-    distance = gitrepo.distance(repo, sha) if sha else None
+        return GateResult(stage, code, False, f"{label}: {rejection}"), newest
+    sha = "" if data.get("sha") is None else str(data["sha"])
+    if not sha:
+        return GateResult(stage, code, False, f"{label}: missing sha"), newest
+    distance = gitrepo.distance(repo, sha)
     if distance is None:
         return GateResult(
-            stage,
-            code,
-            False,
-            f"{kind.value} {newest.digest[:19]} for {sha[:12] or '?'} not on HEAD's history",
-        )
-    return GateResult(
-        stage,
-        code,
-        True,
-        f"{kind.value} {newest.digest[:19]} for {sha[:12]} at distance {distance}",
-    )
+            stage, code, False, f"{label} for {sha[:12]} not on HEAD's history"
+        ), newest
+    return GateResult(stage, code, True, f"{label} for {sha[:12]} at distance {distance}"), newest
 
 
 def verdict(repo: Path) -> GateResult:
@@ -72,27 +67,24 @@ def verdict(repo: Path) -> GateResult:
             return f"verdict is {data.get('verdict')!r}"
         return None
 
-    return _on_history(Stage.REVIEW, "verdict", repo, AttestationKind.REVIEW_VERDICT, accept)
+    return _on_history(Stage.REVIEW, "verdict", repo, AttestationKind.REVIEW_VERDICT, accept)[0]
 
 
 def integrated(repo: Path) -> GateResult:
-    return _on_history(Stage.INTEGRATE, "receipt", repo, AttestationKind.INTEGRATED, lambda d: None)
+    return _on_history(
+        Stage.INTEGRATE, "receipt", repo, AttestationKind.INTEGRATED, lambda d: None
+    )[0]
 
 
 def released(repo: Path) -> GateResult:
     def accept(data: dict[str, Any]) -> str | None:
-        missing = [k for k in ("version", "digest") if not data.get(k)]
+        missing = [k for k in ("version", "digest") if data.get(k) in (None, "")]
         return f"missing {', '.join(missing)}" if missing else None
 
-    result = _on_history(Stage.RELEASE, "released", repo, AttestationKind.RELEASED, accept)
-    if result.passed:
-        records = _attestations(repo, AttestationKind.RELEASED)
-        assert not isinstance(records, str)
+    result, record = _on_history(Stage.RELEASE, "released", repo, AttestationKind.RELEASED, accept)
+    if result.passed and record is not None:
         return GateResult(
-            result.stage,
-            result.code,
-            True,
-            f"{result.details}, version {records[-1].data['version']}",
+            result.stage, result.code, True, f"{result.details}, version {record.data['version']}"
         )
     return result
 
@@ -117,6 +109,11 @@ def deployed(repo: Path) -> GateResult:
         return GateResult(Stage.DEPLOY, "deployed", False, "no deployed attestation")
     expected = release.data.get("digest")
     actual = deploy.data.get("digest")
+    if expected in (None, "") or actual in (None, ""):
+        side = "released" if expected in (None, "") else "deployed"
+        return GateResult(
+            Stage.DEPLOY, "deployed", False, f"the {side} attestation carries no digest to compare"
+        )
     if actual != expected:
         return GateResult(
             Stage.DEPLOY,

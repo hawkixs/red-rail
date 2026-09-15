@@ -165,3 +165,36 @@ def test_receipts_reject_a_reused_idempotency_key(tmp_path: Path) -> None:
     result = receipts(repo)
     assert not result.passed and "idempotency key" in result.details
     assert first.digest != second.digest
+
+
+def test_rail_config_rejects_unknown_gate_keys(tmp_path: Path) -> None:
+    """Review finding: a typo in `gates:` must be an error, not a silent no-op."""
+    from rail.gates.hygiene import rail_config
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    (repo / "rail.yaml").write_text(
+        (repo / "rail.yaml").read_text()
+        + "gates:\n  hygiene.recipts:\n    value: false\n    reason: typo\n"
+    )
+    result = rail_config(repo)
+    assert not result.passed and "hygiene.recipts" in result.details
+
+
+def test_claude_md_reads_the_target_after_make_flags(tmp_path: Path) -> None:
+    """Review finding: `make -j4 ci` and `make -C . ci` name the target `ci`."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    (repo / "CLAUDE.md").write_text(
+        '`red-alpha`\n\n```bash\nmake -j4 ci\nmake -C . test\nmake check ARGS="x #y"\n```\n'
+    )
+    result = claude_md(repo)
+    assert result.passed, result.details
+
+
+def test_make_targets_reads_multi_target_lines(tmp_path: Path) -> None:
+    """Sweep finding: `build ci: deps` declares two targets."""
+    from rail.gates.hygiene import make_targets
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    (repo / "Makefile").write_text(".PHONY: build ci\nbuild ci: deps\n\t@true\ndeps:\n\t@true\n")
+    assert make_targets(repo) == {"build", "ci", "deps"}
+    assert task_runner(repo).passed

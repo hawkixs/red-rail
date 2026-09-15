@@ -3,15 +3,19 @@ operator already uses and authenticates; red-rail never handles a token (spec §
 
 from __future__ import annotations
 
+import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from rail.policy import GATE_DEFAULTS
+
 CANONICAL_OWNER = "hawkixs"
 MIRROR_GROUP = "hawkixs_project/red"
-CANONICAL_URL = "git@github.com:hawkixs/{slug}.git"
-MIRROR_URL = "ssh://git@gitlab.hawkixs.local:2222/hawkixs_project/red/{slug}.git"
+# the hosts are the policy's (hygiene.canonical_host / hygiene.mirror_host): one place to change
+CANONICAL_URL = f"git@{GATE_DEFAULTS['hygiene.canonical_host']}:{CANONICAL_OWNER}/{{slug}}.git"
+MIRROR_URL = f"ssh://git@{GATE_DEFAULTS['hygiene.mirror_host']}:2222/{MIRROR_GROUP}/{{slug}}.git"
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -20,13 +24,19 @@ class RemoteError(Exception):
     """A remote step failed; the message says what was done and what not to do next."""
 
 
+_ABSENT = re.compile(r"not found|could not resolve|404", re.IGNORECASE)
+
+
 def _run(
     args: list[str], *, run: Runner, cwd: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
     kwargs: dict[str, Any] = {"capture_output": True, "text": True, "check": False}
     if cwd is not None:
         kwargs["cwd"] = str(cwd)
-    return run(args, **kwargs)
+    try:
+        return run(args, **kwargs)
+    except (FileNotFoundError, OSError) as exc:
+        raise RemoteError(f"{args[0]} is not available on this host: {exc}") from exc
 
 
 def _ok(args: list[str], *, run: Runner, what: str, cwd: Path | None = None) -> str:
@@ -38,12 +48,20 @@ def _ok(args: list[str], *, run: Runner, what: str, cwd: Path | None = None) -> 
 
 
 def ensure_absent(slug: str, *, run: Runner) -> None:
+    """Both hosts must answer 'not found'. Any other failure (auth, network, rate limit) is
+    not a free slug: it is a question the tool could not answer, and it stops here."""
     for args, where in (
         (["gh", "repo", "view", f"{CANONICAL_OWNER}/{slug}"], "GitHub"),
         (["glab", "repo", "view", f"{MIRROR_GROUP}/{slug}"], "GitLab"),
     ):
-        if _run(args, run=run).returncode == 0:
+        done = _run(args, run=run)
+        if done.returncode == 0:
             raise RemoteError(f"{where} already has {slug}; pick another slug")
+        detail = (done.stderr or done.stdout).strip()
+        if not _ABSENT.search(detail):
+            raise RemoteError(
+                f"cannot tell whether {where} has {slug} (exit {done.returncode}): {detail}"
+            )
 
 
 def create_github(slug: str, description: str, *, run: Runner) -> None:

@@ -84,16 +84,17 @@ def discover(root: Path) -> list[Path]:
 
 
 def audit_project(repo: Path, *, ci: bool = False) -> ProjectAudit:
-    results = run_gates(repo, ci=ci)
     tier = declared_tier(repo)
     applicable = set(applicable_stages(repo))
+    results = run_gates(repo, stages=applicable, ci=ci)
     stages: list[StageScore] = []
     passed = total = 0
     exceptions: list[str] = []
     for stage in Stage:
         mine = [r for r in results if r.stage is stage and not r.skipped]
-        if stage not in applicable:
-            stages.append(StageScore(stage.value, "n/a", 0, len(mine)))
+        if stage not in applicable or not mine:
+            # outside the tier, or every gate of the stage was skipped: nothing was judged
+            stages.append(StageScore(stage.value, "n/a", 0, 0))
             continue
         ok = sum(1 for r in mine if r.passed)
         passed += ok

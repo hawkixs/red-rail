@@ -134,3 +134,28 @@ def test_cli_audit_json_and_matrix(tmp_path: Path) -> None:
     assert json.loads(out.output) == json.loads(GOLDEN.read_text())
     out = CliRunner().invoke(main, ["audit", str(projects / "not-a-project")])
     assert out.exit_code == 2 and "no project found" in out.output
+
+
+def test_audit_runs_only_the_applicable_stages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding: a bootstrap project must not pay for gitleaks and the evidence gates."""
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        build_gates, "run_gitleaks", lambda repo: calls.append(repo) or (0, "clean")
+    )
+    projects = fixture_root(tmp_path)
+    alpha = audit_project(projects / "red-alpha")
+    assert calls == []
+    assert {g["stage"] for g in alpha.gates} == {"hygiene", "intent", "design"}
+    audit_project(projects / "red-beta")
+    assert calls == [projects / "red-beta"]
+
+
+def test_discover_follows_a_symlinked_project(tmp_path: Path) -> None:
+    projects = fixture_root(tmp_path)
+    real = tmp_path / "elsewhere" / "projects" / "red-link"
+    conforming_tree(tmp_path / "elsewhere", "red-link", "bootstrap")
+    (projects / "red-link").symlink_to(real, target_is_directory=True)
+    names = [p.name for p in discover(projects)]
+    assert names == ["red-alpha", "red-beta", "red-delta", "red-gamma", "red-link"]

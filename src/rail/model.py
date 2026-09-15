@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 MANIFEST_NAME = "rail.yaml"
 
@@ -75,6 +75,15 @@ class RailConfig(BaseModel):
         if self.tier is Tier.PROD and self.deploy is None:
             raise ValueError("tier 'prod' requires a 'deploy' target")
         return self
+
+
+def try_load_rail_config(repo: Path) -> RailConfig | None:
+    """The manifest when it is present and valid, else None — the one definition of
+    "unreadable" shared by every gate and command (the `rail_config` gate reports why)."""
+    try:
+        return load_rail_config(repo)
+    except (FileNotFoundError, ValidationError):
+        return None
 
 
 def load_rail_config(repo: Path) -> RailConfig:

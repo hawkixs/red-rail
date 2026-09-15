@@ -30,49 +30,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -158,94 +158,6 @@
           "details": "no dated spec in docs/specs (expected <date>-<topic>.md)",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-09-11-validate-command-plan.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 2\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "20/20 subject(s) not conventional, first: 'factory: implement plan 2d70085c-1b16-445f-adf3-9f217f550991 (ticket 57ba7058)'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -278,49 +190,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -406,94 +318,6 @@
           "details": "2026-04-05-dream-otel-metrics.md: missing section(s): problem, decisions, non-goals, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-08-03-maintenance-campaign-plan.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 2\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": true,
-          "details": "20 conventional subject(s) (English is not machine-checked)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -526,49 +350,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 2,
@@ -654,94 +478,6 @@
           "details": "no dated spec in docs/specs (expected <date>-<topic>.md)",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "no dated plan in docs/plans (expected <date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "12/12 subject(s) not conventional, first: 'Update README.md'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -774,49 +510,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -900,94 +636,6 @@
           "code": "spec",
           "passed": false,
           "details": "no dated spec in docs/specs (expected <date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-04-03-daemon-feature-activation.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": true,
-          "details": "20 conventional subject(s) (English is not machine-checked)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
           "exception": null,
           "skipped": null
         }
@@ -1022,49 +670,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -1150,94 +798,6 @@
           "details": "no dated spec in docs/specs (expected <date>-<topic>.md)",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-03-28-service-integration.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": true,
-          "details": "2 conventional subject(s) (English is not machine-checked)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -1270,49 +830,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 4,
@@ -1398,94 +958,6 @@
           "details": "2026-09-12-worldbox-w9-design.md: missing section(s): problem, decisions, non-goals, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-09-12-worldbox-w9.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": true,
-          "details": "20 conventional subject(s) (English is not machine-checked)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -1518,49 +990,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -1646,94 +1118,6 @@
           "details": "2026-05-09-sprint-backup-red-writer-prod.md: missing section(s): problem, non-goals, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-09-16-drive-offsite-push.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 12\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "13/20 subject(s) not conventional, first: '\ud83d\udd27 chore(backup): arm nightly retention after the first manual pass'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -1766,49 +1150,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -1894,94 +1278,6 @@
           "details": "no dated spec in docs/specs (expected <date>-<topic>.md)",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-04-01-cli-digest-command.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 1\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": true,
-          "details": "20 conventional subject(s) (English is not machine-checked)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -2014,49 +1310,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -2142,94 +1438,6 @@
           "details": "2026-07-12-brain-explorer-gestion-design.md: missing section(s): problem, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": true,
-          "details": "2026-07-12-brain-explorer-gestion.md: 10 task(s) verified, spec docs/specs/2026-07-12-brain-explorer-gestion-design.md",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 8\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "20/20 subject(s) not conventional, first: '\ud83d\udc1b fix: merge duplicate ticket rows in detail'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -2262,49 +1470,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -2390,94 +1598,6 @@
           "details": "2026-05-14-dagster-queue-recovery.md: missing section(s): problem, decisions, non-goals, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-04-19-api-tables-endpoint.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 2\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": true,
-          "details": "20 conventional subject(s) (English is not machine-checked)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -2510,49 +1630,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 2,
@@ -2638,94 +1758,6 @@
           "details": "no dated spec in docs/specs (expected <date>-<topic>.md)",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-07-11-add-farewell-plan.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "3/3 subject(s) not conventional, first: '\ud83d\udd27 chore: commit uv.lock + replayability notes (e2e finding #3)'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -2758,49 +1790,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 4,
@@ -2886,94 +1918,6 @@
           "details": "2026-08-01-pz-b42-20-stable-design.md: 4 mandatory sections present",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-08-01-pz-b42-20-stable-bascule.md: no `### Task` section",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "13/20 subject(s) not conventional, first: '\ud83d\udcdd docs(specs,plans): corrige CarSpawnRate stale (=1\u2192=3) et crit\u00e8re spawnregions'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -3006,49 +1950,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -3134,94 +2078,6 @@
           "details": "2026-08-06-red-gift-journal-psych-design.md: missing section(s): problem, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": true,
-          "details": "2026-08-06-red-gift-journal-psych-plan.md: 13 task(s) verified, spec docs/specs/2026-08-06-red-gift-journal-psych-design.md",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 4\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "20/20 subject(s) not conventional, first: '\ud83d\udc1b fix: copy the new project into the image, and guard the omission'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -3254,49 +2110,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -3382,94 +2238,6 @@
           "details": "2026-09-11-red-lab-github-delivery-design.md: missing section(s): problem, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-09-12-factory-contract-flow-and-per-ticket-models.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 12\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "20/20 subject(s) not conventional, first: '\ud83d\udcdd docs(factory): describe the review repair pass and the named wontfix note'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -3502,49 +2270,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -3630,94 +2398,6 @@
           "details": "2026-08-07-red-life-ghost-topology-design.md: missing section(s): success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-08-07-red-life-v2-signal-core.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "20/20 subject(s) not conventional, first: '\ud83c\udfa8 fix(frontend): deux populations de clients, deux tableaux'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -3750,49 +2430,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 2,
@@ -3878,94 +2558,6 @@
           "details": "2026-07-13-red-phone-bootstrap-design.md: missing section(s): problem, decisions, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-07-13-red-phone-bootstrap-plan.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "1/1 subject(s) not conventional, first: '\ud83c\udf89 chore: bootstrap red-phone documentation'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -3998,49 +2590,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -4126,94 +2718,6 @@
           "details": "2026-04-19-fill-listener-design.md: missing section(s): problem, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-04-19-fill-listener.md: no `### Task` section",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "20/20 subject(s) not conventional, first: '\ud83e\uddea test(fill-listener): concurrent reconciler + listener no-race smoke'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -4270,25 +2774,25 @@
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 17,
@@ -4429,39 +2933,7 @@
           "stage": "integrate",
           "code": "receipt",
           "passed": true,
-          "details": "integrated sha256:d3e38f6fd8cb for d7a11a99a919 at distance 22",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "no released attestation",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "no released attestation to deploy",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "no deployed attestation to drill",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "no fulfilled attestation",
+          "details": "integrated sha256:d3e38f6fd8cb for d7a11a99a919 at distance 24",
           "exception": null,
           "skipped": null
         }
@@ -4496,49 +2968,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -4624,94 +3096,6 @@
           "details": "no dated spec in docs/specs (expected <date>-<topic>.md)",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "no dated plan in docs/plans (expected <date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "3/3 subject(s) not conventional, first: '\ud83d\udcdd docs: record the runner policy decision in CLAUDE.md'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -4744,49 +3128,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -4872,94 +3256,6 @@
           "details": "2026-07-02-red-shrik-tier-frontier-design.md: missing section(s): success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-07-05-red-shrik-antigravity-story-bridge.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 6\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "20/20 subject(s) not conventional, first: '\ud83d\udd12 harden(bot): arm agy autonomy deliberately + escape kv LIKE'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -4992,49 +3288,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 2,
@@ -5120,94 +3416,6 @@
           "details": "no dated spec in docs/specs (expected <date>-<topic>.md)",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "no dated plan in docs/plans (expected <date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "1/1 subject(s) not conventional, first: '\ud83c\udf89 chore: initialize red-story context'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -5240,49 +3448,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -5368,94 +3576,6 @@
           "details": "2026-07-01-red-viewer-bootstrap-design.md: missing section(s): problem, non-goals, success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-07-01-red-viewer-mvp-live-wall-implementation.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": true,
-          "details": "gitleaks: no leaks found",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "1/1 subject(s) not conventional, first: '\ud83c\udf89 chore: bootstrap red-viewer (fondations + spec)'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -5488,49 +3608,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -5616,94 +3736,6 @@
           "details": "2026-07-27-smoke-traefik-false-positive-design.md: missing section(s): success criteria",
           "exception": null,
           "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-07-27-smoke-traefik-false-positive.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 1\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "20/20 subject(s) not conventional, first: '\ud83d\udd07 chore(watcher): retirer les notifications ban/unban fail2ban'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
         }
       ]
     },
@@ -5736,49 +3768,49 @@
           "stage": "plan",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "build",
           "status": "n/a",
           "passed": 0,
-          "total": 4
+          "total": 0
         },
         {
           "stage": "review",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "integrate",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "release",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "deploy",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "observe",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         },
         {
           "stage": "learn",
           "status": "n/a",
           "passed": 0,
-          "total": 1
+          "total": 0
         }
       ],
       "passed": 3,
@@ -5862,94 +3894,6 @@
           "code": "spec",
           "passed": false,
           "details": "2026-07-25-whiteboard-library-ux-design.md: missing section(s): decisions, success criteria",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "plan",
-          "code": "plan",
-          "passed": false,
-          "details": "2026-07-25-whiteboard-library-ux.md: references no spec (docs/specs/<date>-<topic>.md)",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "tests",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "lint",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "secrets",
-          "passed": false,
-          "details": "gitleaks found leaks: \u001b[90m12:37AM\u001b[0m \u001b[33mWRN\u001b[0m \u001b[1mleaks found: 10\u001b[0m",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "build",
-          "code": "commits",
-          "passed": false,
-          "details": "20/20 subject(s) not conventional, first: '\ud83e\uddea test: await whiteboard scene initialization'",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "review",
-          "code": "verdict",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "integrate",
-          "code": "receipt",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "release",
-          "code": "released",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "deploy",
-          "code": "deployed",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "observe",
-          "code": "drill",
-          "passed": false,
-          "details": "rail.yaml unreadable",
-          "exception": null,
-          "skipped": null
-        },
-        {
-          "stage": "learn",
-          "code": "fulfilled",
-          "passed": false,
-          "details": "rail.yaml unreadable",
           "exception": null,
           "skipped": null
         }

@@ -9,13 +9,12 @@ import pytest
 
 from rail.gates import Stage
 from rail.gates import build as build_gates
-from rail.gates.build import GATES, commits, lint, secrets, tests
+from rail.gates.build import GATES, commits, has_tests, lint, secrets
 from tests.helpers import commit_all, conforming_tree, init_repo
 
 # `tests` is a gate function, not a pytest test: its name matches pytest's default
 # `python_functions = test*` glob, so without this it gets collected and fails at
 # setup (it needs a `repo` argument pytest cannot supply as a fixture).
-tests.__test__ = False
 
 
 def test_registry() -> None:
@@ -25,14 +24,14 @@ def test_registry() -> None:
 
 def test_tests_gate_per_stack(tmp_path: Path) -> None:
     py = conforming_tree(tmp_path / "py", "red-alpha", "dev")
-    assert tests(py).passed and "1 test file" in tests(py).details
+    assert has_tests(py).passed and "1 test file" in has_tests(py).details
     (py / "tests" / "test_smoke.py").unlink()
-    assert not tests(py).passed
+    assert not has_tests(py).passed
     go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
-    assert tests(go).passed
+    assert has_tests(go).passed
     docs = conforming_tree(tmp_path / "docs", "red-gamma", "dev", stack="docs")
-    assert tests(docs).passed and "docs" in tests(docs).details
-    assert "rail.yaml" in tests(tmp_path).details
+    assert has_tests(docs).passed and "docs" in has_tests(docs).details
+    assert "rail.yaml" in has_tests(tmp_path).details
 
 
 def test_lint_gate_per_stack(tmp_path: Path) -> None:

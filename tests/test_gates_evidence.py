@@ -110,3 +110,35 @@ def test_released_without_version_or_digest_is_incomplete(tmp_path: Path) -> Non
     _attest(_ledger(repo), AttestationKind.RELEASED, "r1", sha=gitrepo.head_sha(repo))
     result = released(repo)
     assert not result.passed and "version" in result.details
+
+
+def test_a_record_without_sha_is_reported_as_missing_sha(tmp_path: Path) -> None:
+    """Review finding: every history gate names a missing sha instead of 'for ? not on history'."""
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    _attest(_ledger(repo), AttestationKind.INTEGRATED, "i1", note="no sha here")
+    result = integrated(repo)
+    assert not result.passed and "missing sha" in result.details
+
+
+def test_released_accepts_a_falsy_but_present_value(tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-beta", "prod")
+    _attest(
+        _ledger(repo),
+        AttestationKind.RELEASED,
+        "r1",
+        sha=gitrepo.head_sha(repo),
+        version=0,
+        digest="sha256:aaa",
+    )
+    assert released(repo).passed
+
+
+def test_deployed_requires_digests_on_both_sides(tmp_path: Path) -> None:
+    """Sweep finding: two attestations without digest must not compare equal (None == None)."""
+    repo = conforming_tree(tmp_path, "red-beta", "prod")
+    head = gitrepo.head_sha(repo)
+    ledger = _ledger(repo)
+    _attest(ledger, AttestationKind.RELEASED, "r1", sha=head, version="1.0.0")
+    _attest(ledger, AttestationKind.DEPLOYED, "d1", sha=head)
+    result = deployed(repo)
+    assert not result.passed and "digest" in result.details

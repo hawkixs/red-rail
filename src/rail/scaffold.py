@@ -16,10 +16,10 @@ import yaml
 
 from rail import remotes
 from rail.gates import GateResult, run_gates
-from rail.ledger import RECEIPTS_DIR, Contract, Deliverable, Record
+from rail.ledger import Contract, Deliverable, Record, open_ledger
 from rail.ledger.file import FileLedger
 from rail.model import Stack, Tier
-from rail.policy import stages_for
+from rail.policy import applicable_stages
 
 TEMPLATE_SOURCE = "git@github.com:hawkixs/red-rail.git"
 ANSWERS_FILE = ".copier-answers.yml"
@@ -87,15 +87,18 @@ Nothing beyond the bootstrap: no feature is designed here.
 def render(project: NewProject, *, copy: Callable[..., Any] = copier.run_copy) -> Path:
     if project.dest.exists():
         raise ScaffoldError(f"{project.dest} already exists")
-    copy(
-        project.template,
-        project.dest,
-        data=project.answers,
-        defaults=True,
-        quiet=True,
-        unsafe=False,
-        vcs_ref=project.template_ref,
-    )
+    try:
+        copy(
+            project.template,
+            project.dest,
+            data=project.answers,
+            defaults=True,
+            quiet=True,
+            unsafe=False,
+            vcs_ref=project.template_ref,
+        )
+    except Exception as exc:  # copier raises its own hierarchy; the CLI needs one error type
+        raise ScaffoldError(f"copier could not render {project.template}: {exc}") from exc
     return project.dest
 
 
@@ -117,7 +120,9 @@ def write_bootstrap_spec(project: NewProject, *, today: date | None = None) -> P
 
 
 def record_contract(project: NewProject, *, clock: Callable[[], datetime] | None = None) -> Record:
-    ledger = FileLedger(project.dest / RECEIPTS_DIR, clock=clock)
+    ledger = open_ledger(project.dest)  # the backend the rendered manifest declares
+    if clock is not None and isinstance(ledger, FileLedger):
+        ledger = FileLedger(ledger.root, clock=clock)
     contract = Contract(
         objective=project.description,
         acceptance_criteria=[f"`rail check` passes at tier {project.tier.value}"],
@@ -134,31 +139,44 @@ def record_contract(project: NewProject, *, clock: Callable[[], datetime] | None
     )
 
 
+GIT = "git"
+
+
+def _run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run([GIT, *args], capture_output=True, text=True, check=False)
+    except (FileNotFoundError, OSError) as exc:
+        raise ScaffoldError(f"{GIT} is not available on this host: {exc}") from exc
+
+
+def _identity_flags(dest: Path) -> list[str]:
+    """`-c user.name/user.email` when either is unset, so a bare host can still commit."""
+    for key in ("user.name", "user.email"):
+        if _run_git(["-C", str(dest), "config", "--get", key]).returncode != 0:
+            return ["-c", "user.name=rail", "-c", "user.email=rail@localhost"]
+    return []
+
+
 def _git(dest: Path, *args: str) -> str:
-    identity: list[str] = []
-    probe = subprocess.run(
-        ["git", "-C", str(dest), "config", "--get", "user.email"], capture_output=True, text=True
-    )
-    if probe.returncode != 0:
-        identity = ["-c", "user.name=rail", "-c", "user.email=rail@localhost"]
-    done = subprocess.run(
-        ["git", *identity, "-C", str(dest), *args], capture_output=True, text=True
-    )
+    done = _run_git([*_identity_flags(dest), "-C", str(dest), *args])
     if done.returncode != 0:
         raise ScaffoldError(f"git {' '.join(args)} failed: {(done.stderr or done.stdout).strip()}")
     return done.stdout.strip()
 
 
 def init_git(project: NewProject) -> str:
-    subprocess.run(["git", "init", "-q", "-b", "main", str(project.dest)], check=True)
+    done = _run_git(["init", "-q", "-b", "main", str(project.dest)])
+    if done.returncode != 0:
+        raise ScaffoldError(f"git init failed: {(done.stderr or done.stdout).strip()}")
     _git(project.dest, "add", "-A")
     _git(project.dest, "commit", "-q", "-m", f"chore: bootstrap {project.slug} with the ReD rail")
     return _git(project.dest, "rev-parse", "HEAD")
 
 
 def verify(project: NewProject) -> list[GateResult]:
-    """The gates of the declared tier, CI scope (no remotes yet, no roster from a fresh tree)."""
-    return run_gates(project.dest, stages=stages_for(project.tier), ci=True)
+    """The gates of the tier the rendered manifest declares (what `rail check` will read), CI
+    scope: no remotes yet, no roster from a fresh tree."""
+    return run_gates(project.dest, stages=applicable_stages(project.dest), ci=True)
 
 
 def new_project(

@@ -9,7 +9,7 @@ from pathlib import Path
 
 _HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
 _NUMBERING = re.compile(r"^(?:\d+(?:\.\d+)*[.)]?|[IVXLC]+\.)\s+")
-_FENCE = re.compile(r"^(`{3,})([\w+-]*)[^\n]*\n(.*?)^\1[ \t]*$", re.MULTILINE | re.DOTALL)
+_FENCE = re.compile(r"^(`{3,})([\w+-]*)[^\n]*\n(.*?)^\1`*[ \t]*$", re.MULTILINE | re.DOTALL)
 _DATED = re.compile(r"^\d{4}-\d{2}-\d{2}-.+\.md$")
 _SPEC_REF = re.compile(r"docs/specs/[\w.\-/]+\.md")
 _TASK = re.compile(r"^###\s+Task\b.*$", re.MULTILINE)
@@ -38,6 +38,16 @@ def fenced_blocks(text: str, lang: str | None = None) -> list[str]:
     return [m.group(3) for m in _FENCE.finditer(text) if lang is None or m.group(2) == lang]
 
 
+def _strip_comment(line: str) -> str:
+    """Drop a trailing ` # comment`, unless the `#` sits inside quotes."""
+    for index in range(len(line) - 1):
+        if line[index] == " " and line[index + 1] == "#":
+            before = line[:index]
+            if before.count('"') % 2 == 0 and before.count("'") % 2 == 0:
+                return before.rstrip()
+    return line
+
+
 def command_lines(block: str) -> list[str]:
     """Executable lines of a shell fence: comments, blank lines and `$ ` prompts removed."""
     lines = []
@@ -45,7 +55,7 @@ def command_lines(block: str) -> list[str]:
         line = raw.strip()
         if line.startswith("$ "):
             line = line[2:].strip()
-        line = line.split(" #", 1)[0].rstrip()
+        line = _strip_comment(line)
         if line and not line.startswith("#"):
             lines.append(line)
     return lines

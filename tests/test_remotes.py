@@ -105,3 +105,34 @@ def test_second_push_failure_never_rewrites_the_first(
     with pytest.raises(RemoteError, match="do not rewrite"):
         publish(repo, "red-probe", "A probe.", run=hosts)
     assert (tmp_path / "hosts" / "gh" / "red-probe.git").is_dir()
+
+
+def test_a_missing_tool_is_a_remote_error(tmp_path: Path) -> None:
+    """Review finding: gh/glab absent from PATH must not surface as a raw traceback."""
+    repo = _local(tmp_path)
+
+    def no_tools(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError(args[0])
+
+    with pytest.raises(RemoteError, match="gh"):
+        publish(repo, "red-probe", "A probe.", run=no_tools)
+
+
+def test_ensure_absent_distinguishes_absent_from_broken(tmp_path: Path) -> None:
+    """Review finding: an auth or network failure of `gh repo view` is not 'the slug is free'."""
+    calls: list[list[str]] = []
+
+    def broken(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 4, "", "gh: authentication required (HTTP 401)")
+
+    with pytest.raises(RemoteError, match="cannot tell"):
+        remotes.ensure_absent("red-probe", run=broken)
+    assert len(calls) == 1  # stopped at the first unanswerable question
+
+    def absent(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args, 1, "", "GraphQL: Could not resolve to a Repository"
+        )
+
+    remotes.ensure_absent("red-probe", run=absent)  # no error: both hosts answered "not found"

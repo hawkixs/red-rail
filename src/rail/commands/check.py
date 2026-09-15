@@ -6,11 +6,10 @@ import json
 from pathlib import Path
 
 import click
-from pydantic import ValidationError
 
 from rail.commands._options import json_option, repo_option
 from rail.gates import GateResult, Stage, run_gates
-from rail.model import load_rail_config
+from rail.model import try_load_rail_config
 from rail.policy import applicable_stages, declared_tier
 
 VERDICTS = {"pass": "PASS", "fail": "FAIL", "skip": "SKIP", "exception": "EXC "}
@@ -26,10 +25,8 @@ def _verdict(result: GateResult) -> str:
 
 def project_name(repo: Path) -> str:
     """The manifest's project, else the directory name (the manifest gate reports the rest)."""
-    try:
-        return load_rail_config(repo).project
-    except (FileNotFoundError, ValidationError):
-        return repo.absolute().name
+    cfg = try_load_rail_config(repo)
+    return cfg.project if cfg else repo.absolute().name
 
 
 def report(

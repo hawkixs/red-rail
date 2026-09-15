@@ -70,14 +70,19 @@ def compute_metrics(
     rollbacks = [
         r
         for r in ledger.list(project, attestation=AttestationKind.ROLLED_BACK)
-        if not r.data.get("drill")
+        if not r.data.get("drill") and r.recorded_at >= since
     ]
-    incidents = ledger.list(project, attestation=AttestationKind.INCIDENT_DETECTED)
+    incidents = [
+        r
+        for r in ledger.list(project, attestation=AttestationKind.INCIDENT_DETECTED)
+        if r.recorded_at >= since
+    ]
     restores = [
         r
         for r in ledger.list(project, attestation=AttestationKind.RESTORED)
-        if not r.data.get("drill")
+        if not r.data.get("drill") and r.recorded_at >= since
     ]
+    # the contract is the start of the lead time, however old it is: never windowed
     contracts = ledger.list(project, kind=RecordKind.CONTRACT)
 
     commit_leads: list[float] = []
@@ -89,11 +94,13 @@ def compute_metrics(
     contract_leads = (
         [_hours(d.recorded_at - contracts[0].recorded_at) for d in deployed] if contracts else []
     )
-    failures = sum(
-        1
-        for d in deployed
-        if any(d.recorded_at < r.recorded_at <= d.recorded_at + FAILURE_WINDOW for r in rollbacks)
-    )
+    failed: set[str] = set()
+    for rollback in rollbacks:
+        # a rollback undoes the latest deployment before it, and only that one
+        before = [d for d in deployed if d.recorded_at < rollback.recorded_at]
+        if before and rollback.recorded_at <= before[-1].recorded_at + FAILURE_WINDOW:
+            failed.add(before[-1].digest)
+    failures = len(failed)
     recoveries: list[float] = []
     for incident in incidents:
         after = [r for r in restores if r.recorded_at > incident.recorded_at]

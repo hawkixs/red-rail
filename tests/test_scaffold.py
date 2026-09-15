@@ -161,3 +161,59 @@ def test_cli_new_and_upgrade(template_dir: Path, tmp_path: Path) -> None:
     assert out.exit_code == 2 and "red-<kebab-case>" in out.output
     out = CliRunner().invoke(main, ["upgrade", "--repo", str(tmp_path / "red-probe")])
     assert out.exit_code == 1 and "_commit" in out.output
+
+
+def test_render_wraps_copier_failures(template_dir: Path, tmp_path: Path) -> None:
+    """Review finding: a copier failure (bad ref, clone error) is a ScaffoldError, never a
+    traceback."""
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("could not clone template")
+
+    with pytest.raises(ScaffoldError, match="could not clone template"):
+        render(_project(template_dir, tmp_path / "red-probe"), copy=broken)
+
+
+def test_init_git_failures_are_scaffold_errors(
+    template_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rail import scaffold
+
+    project = _project(template_dir, tmp_path / "red-probe")
+    render(project)
+    monkeypatch.setattr(scaffold, "GIT", "git-that-does-not-exist")
+    with pytest.raises(ScaffoldError, match="git-that-does-not-exist"):
+        scaffold.init_git(project)
+
+
+def test_git_identity_fallback_covers_a_missing_name(
+    template_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding: a host with user.email but no user.name must still commit."""
+    project = _project(template_dir, tmp_path / "red-probe")
+    render(project)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("[user]\n\temail = someone@example.invalid\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / ".gitconfig"))
+    monkeypatch.delenv("GIT_AUTHOR_NAME", raising=False)
+    monkeypatch.delenv("GIT_COMMITTER_NAME", raising=False)
+    from rail.scaffold import init_git
+
+    assert len(init_git(project)) == 40
+
+
+def test_verify_scores_the_rendered_manifest(template_dir: Path, tmp_path: Path) -> None:
+    """Review finding: rail new must check the tier that landed on disk, not the one in memory."""
+    from rail.gates import Stage
+    from rail.scaffold import record_contract, verify, write_bootstrap_spec
+
+    project = _project(template_dir, tmp_path / "red-probe")
+    render(project)
+    write_bootstrap_spec(project)
+    record_contract(project, clock=CLOCK)
+    manifest = project.dest / "rail.yaml"
+    manifest.write_text(manifest.read_text().replace("tier: bootstrap", "tier: dev"))
+    stages = {r.stage for r in verify(project)}
+    assert Stage.PLAN in stages and Stage.BUILD in stages

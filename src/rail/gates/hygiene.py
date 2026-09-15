@@ -17,23 +17,16 @@ from rail import gitrepo, markdown
 from rail.gates import GateResult, GateSpec, Stage
 from rail.ledger import RECEIPTS_DIR, LedgerError
 from rail.ledger.file import load_receipt, receipt_filename
-from rail.model import MANIFEST_NAME, RailConfig, load_rail_config
+from rail.model import MANIFEST_NAME, load_rail_config, try_load_rail_config
 from rail.policy import effective
 
 DOCS_DIRS = ("docs/specs", "docs/plans", "docs/adr")
 ROSTER_MARKER = "| Projet |"
-_MAKE_TARGET = re.compile(r"^([A-Za-z0-9_./-]+)\s*:(?!=)", re.MULTILINE)
-
-
-def _config(repo: Path) -> RailConfig | None:
-    try:
-        return load_rail_config(repo)
-    except (FileNotFoundError, ValidationError):
-        return None
+_MAKE_TARGET = re.compile(r"^([A-Za-z0-9_./ \t-]+?)\s*:(?!=)", re.MULTILINE)  # `a b: deps` = two
 
 
 def _project_name(repo: Path) -> str:
-    cfg = _config(repo)
+    cfg = try_load_rail_config(repo)
     return cfg.project if cfg else repo.absolute().name
 
 
@@ -41,13 +34,36 @@ def make_targets(repo: Path) -> set[str]:
     makefile = repo / "Makefile"
     if not makefile.is_file():
         return set()
-    found = {m.group(1) for m in _MAKE_TARGET.finditer(makefile.read_text())}
+    found = {t for m in _MAKE_TARGET.finditer(makefile.read_text()) for t in m.group(1).split()}
     return {t for t in found if not t.startswith(".")}
 
 
 def _short(path: Path) -> str:
     """`<parent>/<name>`: enough to identify the roster, no absolute path in a receipt or audit."""
     return f"{path.parent.name}/{path.name}"
+
+
+_MAKE_VALUE_FLAGS = {"-C", "-f", "-j", "-I", "-o", "-W"}
+
+
+def make_target(line: str) -> str | None:
+    """The target a documented `make …` line invokes: the first word that is neither a flag
+    (`-j4`), a flag value (`-C dir`) nor a `VAR=value` assignment. None when not `make`."""
+    words = line.split()
+    if not words or words[0] != "make":
+        return None
+    skip_next = False
+    for word in words[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if word in _MAKE_VALUE_FLAGS:
+            skip_next = True
+            continue
+        if word.startswith("-") or "=" in word:
+            continue
+        return word
+    return None
 
 
 def find_roster(repo: Path) -> Path | None:
@@ -70,7 +86,23 @@ def rail_config(repo: Path) -> GateResult:
         first = exc.errors()[0]
         location = ".".join(str(part) for part in first["loc"]) or "<root>"
         return GateResult(Stage.HYGIENE, "rail_config", False, f"{location}: {first['msg']}")
+    unknown = sorted(set(cfg.gates) - known_gate_keys())
+    if unknown:
+        return GateResult(
+            Stage.HYGIENE,
+            "rail_config",
+            False,
+            f"gates: unknown key(s) {', '.join(unknown)} — a typo disables nothing, it is an error",
+        )
     return GateResult(Stage.HYGIENE, "rail_config", True, f"tier={cfg.tier.value}")
+
+
+def known_gate_keys() -> set[str]:
+    """Every gate id in the registry plus every typed parameter in the policy defaults."""
+    from rail.gates import registry
+    from rail.policy import GATE_DEFAULTS
+
+    return {spec.gate_id for spec in registry()} | set(GATE_DEFAULTS)
 
 
 def docs_layout(repo: Path) -> GateResult:
@@ -86,7 +118,7 @@ def claude_md(repo: Path) -> GateResult:
         return GateResult(Stage.HYGIENE, "claude_md", False, "CLAUDE.md is missing")
     text = path.read_text()
     problems: list[str] = []
-    cfg = _config(repo)
+    cfg = try_load_rail_config(repo)
     if cfg is None:
         problems.append(f"{MANIFEST_NAME} unreadable, brain key not verifiable")
     elif f"`{cfg.brain_key}`" not in text:
@@ -96,8 +128,8 @@ def claude_md(repo: Path) -> GateResult:
     for block in markdown.fenced_blocks(text, "bash"):
         for line in markdown.command_lines(block):
             commands += 1
-            words = line.split()
-            if words[0] == "make" and len(words) > 1 and words[1] not in targets:
+            target = make_target(line)
+            if target is not None and target not in targets:
                 problems.append(f"`{line}` names a Makefile target that does not exist")
     if problems:
         return GateResult(Stage.HYGIENE, "claude_md", False, "; ".join(problems))

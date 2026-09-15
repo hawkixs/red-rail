@@ -12,10 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
-
 from rail.gates import Stage
-from rail.model import Tier, load_rail_config
+from rail.model import Tier, try_load_rail_config
 
 TIER_STAGES: dict[Tier, tuple[Stage, ...]] = {
     Tier.BOOTSTRAP: (Stage.HYGIENE, Stage.INTENT, Stage.DESIGN),
@@ -77,10 +75,8 @@ def stages_for(tier: Tier) -> tuple[Stage, ...]:
 
 def declared_tier(repo: Path) -> Tier | None:
     """The tier written in `rail.yaml`, or None when the manifest is missing or invalid."""
-    try:
-        return load_rail_config(repo).tier
-    except (FileNotFoundError, ValidationError):
-        return None
+    cfg = try_load_rail_config(repo)
+    return cfg.tier if cfg else None
 
 
 def applicable_stages(repo: Path) -> tuple[Stage, ...]:
@@ -91,9 +87,8 @@ def applicable_stages(repo: Path) -> tuple[Stage, ...]:
 def effective(repo: Path, key: str) -> tuple[Any, str | None]:
     """(value, reason): the manifest override when declared, else the versioned default."""
     default = GATE_DEFAULTS.get(key, True)
-    try:
-        cfg = load_rail_config(repo)
-    except (FileNotFoundError, ValidationError):
+    cfg = try_load_rail_config(repo)
+    if cfg is None:
         return default, None
     override = cfg.gates.get(key)
     if override is None:
