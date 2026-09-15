@@ -1,0 +1,39 @@
+# copier template for a ReD sub-project. `rail new` drives it; `rail upgrade` is `copier update`.
+# The template files live under template/project; this file must sit at the repository root.
+_min_copier_version: "9.0.0"
+_subdirectory: template/project
+_answers_file: .copier-answers.yml
+_templates_suffix: .jinja
+
+project:
+  type: str
+  help: Project slug (red-<name>, kebab-case)
+  validator: >-
+    {% if not (project | regex_search('^red-[a-z0-9]+(-[a-z0-9]+)*$')) %}
+    project must match red-<kebab-case>
+    {% endif %}
+description:
+  type: str
+  help: One sentence — what the project does
+brain_key:
+  type: str
+  default: "{{ project }}"
+  help: brain-v42 project key (group red)
+tier:
+  type: str
+  choices: [bootstrap, dev, prod]
+  default: bootstrap
+  help: Maturity tier the project is scored against
+stack:
+  type: str
+  choices: [python, go, docs]
+  default: python
+deploy_target:
+  type: str
+  choices: [vps-traefik, pc-server-systemd]
+  default: vps-traefik
+  when: "{{ tier == 'prod' }}"
+healthcheck:
+  type: str
+  default: "https://{{ project[4:] }}.hawkixs.com/healthz"
+  when: "{{ tier == 'prod' }}"

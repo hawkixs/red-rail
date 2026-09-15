@@ -1,0 +1,7 @@
+"""The package imports and carries a version."""
+
+from {{ project | replace('-', '_') }} import __version__
+
+
+def test_version() -> None:
+    assert __version__

@@ -1,0 +1,13 @@
+{% if stack == 'python' -%}
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+*.egg-info/
+{% elif stack == 'go' -%}
+bin/
+{% endif -%}
+.env

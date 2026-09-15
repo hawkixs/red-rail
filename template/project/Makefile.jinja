@@ -1,0 +1,51 @@
+# {{ project }} task runner. Every target is what CI runs, nothing more.
+
+.PHONY: sync lint test check ci
+
+RAIL_FLAGS ?=
+
+{% if stack == 'python' -%}
+## Install the project and its dev extras
+sync:
+	uv sync --extra dev
+
+## Lint and format check
+lint:
+	uv run ruff check src/ tests/
+	uv run ruff format --check src/ tests/
+
+## Run the test suite
+test:
+	uv run pytest -q
+{% elif stack == 'go' -%}
+## Download the modules
+sync:
+	go mod download
+
+## Vet and format check
+lint:
+	go vet ./...
+	test -z "$$(gofmt -l .)"
+
+## Run the test suite
+test:
+	go test ./...
+{% else -%}
+## Nothing to install for a documentation project
+sync:
+	@true
+
+## Nothing to lint yet
+lint:
+	@true
+
+## Nothing to test yet
+test:
+	@true
+{% endif %}
+## Run the rail gates against this repository (RAIL_FLAGS=--ci in CI)
+check:
+	rail check $(RAIL_FLAGS)
+
+## What CI runs, in order
+ci: lint test check
