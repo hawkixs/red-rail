@@ -1,0 +1,103 @@
+{
+  "projects": [
+    {
+      "declared_tier": "bootstrap",
+      "exceptions": [],
+      "name": "red-alpha",
+      "score": {
+        "applicable": 10,
+        "passed": 10
+      },
+      "stages": {
+        "build": "n/a",
+        "deploy": "n/a",
+        "design": "pass",
+        "hygiene": "pass",
+        "integrate": "n/a",
+        "intent": "pass",
+        "learn": "n/a",
+        "observe": "n/a",
+        "plan": "n/a",
+        "release": "n/a",
+        "review": "n/a"
+      },
+      "template_version": null,
+      "tier_used": "bootstrap"
+    },
+    {
+      "declared_tier": "dev",
+      "exceptions": [],
+      "name": "red-beta",
+      "score": {
+        "applicable": 17,
+        "passed": 17
+      },
+      "stages": {
+        "build": "pass",
+        "deploy": "n/a",
+        "design": "pass",
+        "hygiene": "pass",
+        "integrate": "pass",
+        "intent": "pass",
+        "learn": "n/a",
+        "observe": "n/a",
+        "plan": "pass",
+        "release": "n/a",
+        "review": "pass"
+      },
+      "template_version": "v0.1.0",
+      "tier_used": "dev"
+    },
+    {
+      "declared_tier": null,
+      "exceptions": [],
+      "name": "red-delta",
+      "score": {
+        "applicable": 10,
+        "passed": 3
+      },
+      "stages": {
+        "build": "n/a",
+        "deploy": "n/a",
+        "design": "fail",
+        "hygiene": "fail",
+        "integrate": "n/a",
+        "intent": "fail",
+        "learn": "n/a",
+        "observe": "n/a",
+        "plan": "n/a",
+        "release": "n/a",
+        "review": "n/a"
+      },
+      "template_version": null,
+      "tier_used": "bootstrap"
+    },
+    {
+      "declared_tier": "prod",
+      "exceptions": [
+        "review.verdict: reviewer arrives in phase 2"
+      ],
+      "name": "red-gamma",
+      "score": {
+        "applicable": 21,
+        "passed": 17
+      },
+      "stages": {
+        "build": "pass",
+        "deploy": "fail",
+        "design": "pass",
+        "hygiene": "pass",
+        "integrate": "pass",
+        "intent": "pass",
+        "learn": "fail",
+        "observe": "fail",
+        "plan": "pass",
+        "release": "fail",
+        "review": "exception"
+      },
+      "template_version": null,
+      "tier_used": "prod"
+    }
+  ],
+  "schema_version": 1
+}

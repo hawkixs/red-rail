@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 GITHUB_URL = "git@github.com:hawkixs/{name}.git"
@@ -146,3 +148,57 @@ def conforming_tree(root: Path, name: str, tier: str, *, stack: str = "python") 
         (repo / "main_test.go").write_text("package main\n")
     commit_all(repo, "chore: bootstrap the fixture")
     return repo
+
+
+def with_evidence(repo: Path, *, through: str, clock: Callable[[], datetime] | None = None) -> None:
+    """Write the file-ledger evidence a conforming project has at a given stage: `design`
+    (contract), `integrate` (+ independent approving verdict and integration receipt on HEAD)
+    or `learn` (+ release, deployment, rollback drill and fulfilment)."""
+    from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
+    from rail.ledger.file import FileLedger
+
+    name = repo.name
+    head = git(repo, "rev-parse", "HEAD")
+    ticks = [datetime(2026, 9, 15, 9, 0, tzinfo=UTC) + timedelta(minutes=i) for i in range(50)]
+    ledger = FileLedger(repo / RECEIPTS_DIR, clock=clock or (lambda: ticks.pop(0)))
+    contract = Contract(
+        objective=f"ship {name}",
+        acceptance_criteria=["rail check passes"],
+        deliverables=[Deliverable(key="main", repository=f"hawkixs/{name}")],
+    )
+    ledger.contract_set(name, contract, reason="bootstrap", issuer="op", idempotency_key="c1")
+    if through == "design":
+        return
+    ledger.attest(
+        name,
+        AttestationKind.REVIEW_VERDICT,
+        {"sha": head, "independent": True, "verdict": "approve"},
+        issuer="reviewer",
+        idempotency_key="v1",
+    )
+    ledger.attest(
+        name, AttestationKind.INTEGRATED, {"sha": head}, issuer="op", idempotency_key="i1"
+    )
+    if through == "integrate":
+        return
+    ledger.attest(
+        name,
+        AttestationKind.RELEASED,
+        {"sha": head, "version": "1.0.0", "digest": "sha256:aaa"},
+        issuer="op",
+        idempotency_key="r1",
+    )
+    ledger.attest(
+        name,
+        AttestationKind.DEPLOYED,
+        {"sha": head, "digest": "sha256:aaa"},
+        issuer="op",
+        idempotency_key="d1",
+    )
+    ledger.attest(
+        name, AttestationKind.ROLLED_BACK, {"drill": True}, issuer="op", idempotency_key="rb1"
+    )
+    ledger.attest(
+        name, AttestationKind.RESTORED, {"drill": True}, issuer="op", idempotency_key="rs1"
+    )
+    ledger.attest(name, AttestationKind.FULFILLED, {}, issuer="op", idempotency_key="f1")
