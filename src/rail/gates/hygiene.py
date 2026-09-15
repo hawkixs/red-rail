@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from rail.gates import GateResult, Stage
+from rail.gates import GateResult, GateSpec, Stage
 from rail.model import MANIFEST_NAME, load_rail_config
 
 DOCS_DIRS = ("docs/specs", "docs/plans", "docs/adr")
@@ -29,3 +29,9 @@ def docs_layout(repo: Path) -> GateResult:
     if missing:
         return GateResult(Stage.HYGIENE, "docs_layout", False, "missing: " + ", ".join(missing))
     return GateResult(Stage.HYGIENE, "docs_layout", True, "docs/{specs,plans,adr} present")
+
+
+GATES = [
+    GateSpec(Stage.HYGIENE, "rail_config", rail_config),
+    GateSpec(Stage.HYGIENE, "docs_layout", docs_layout),
+]

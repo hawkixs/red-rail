@@ -41,4 +41,7 @@ def test_check_json_is_machine_readable(tmp_path: Path) -> None:
     payload = json.loads(out.output)
     assert payload["passed"] is False
     assert {g["code"] for g in payload["gates"]} == {"rail_config", "docs_layout"}
-    assert all(set(g) == {"stage", "code", "passed", "details"} for g in payload["gates"])
+    assert all(
+        set(g) == {"stage", "code", "passed", "details", "exception", "skipped"}
+        for g in payload["gates"]
+    )
