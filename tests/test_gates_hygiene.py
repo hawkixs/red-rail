@@ -93,6 +93,15 @@ def test_roster_entry_reads_the_red_root(tmp_path: Path) -> None:
     assert not result.passed and "red-alpha" in result.details
 
 
+def test_roster_entry_folds_dotdot_paths_to_the_root(tmp_path: Path) -> None:
+    """`rail audit ..` hands the gate `<repo>/../<project>`: the roster must still be found."""
+    conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    write_roster(tmp_path, ["red-other"])
+    via_dotdot = tmp_path / "projects" / "red-alpha" / ".." / "red-alpha"
+    result = roster_entry(via_dotdot)
+    assert not result.passed and "red-alpha has no row" in result.details
+
+
 def test_roster_entry_is_standalone_without_a_roster(tmp_path: Path) -> None:
     result = roster_entry(conforming_tree(tmp_path, "red-alpha", "bootstrap"))
     assert result.passed and "standalone" in result.details

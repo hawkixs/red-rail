@@ -7,6 +7,7 @@ remotes, the ReD root roster two directories up) and are reported as skipped und
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -44,10 +45,17 @@ def make_targets(repo: Path) -> set[str]:
     return {t for t in found if not t.startswith(".")}
 
 
+def _short(path: Path) -> str:
+    """`<parent>/<name>`: enough to identify the roster, no absolute path in a receipt or audit."""
+    return f"{path.parent.name}/{path.name}"
+
+
 def find_roster(repo: Path) -> Path | None:
     """The ReD root `CLAUDE.md` (two levels up: `<root>/projects/<repo>`), if it holds
     the roster."""
-    candidate = repo.absolute().parent.parent / "CLAUDE.md"
+    # normpath folds `..` lexically (`rail audit ..` hands us `<repo>/../<project>`) without
+    # resolving symlinks, so a symlinked project still points at the ReD root
+    candidate = Path(os.path.normpath(repo.absolute())).parent.parent / "CLAUDE.md"
     if candidate.is_file() and ROSTER_MARKER in candidate.read_text():
         return candidate
     return None
@@ -148,8 +156,10 @@ def roster_entry(repo: Path) -> GateResult:
         )
     name = _project_name(repo)
     if re.search(rf"^\|\s*{re.escape(name)}\s*\|", roster.read_text(), re.MULTILINE):
-        return GateResult(Stage.HYGIENE, "roster_entry", True, f"listed in {roster}")
-    return GateResult(Stage.HYGIENE, "roster_entry", False, f"{name} has no row in {roster}")
+        return GateResult(Stage.HYGIENE, "roster_entry", True, f"listed in {_short(roster)}")
+    return GateResult(
+        Stage.HYGIENE, "roster_entry", False, f"{name} has no row in {_short(roster)}"
+    )
 
 
 def receipts(repo: Path) -> GateResult:
