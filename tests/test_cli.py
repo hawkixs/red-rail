@@ -6,15 +6,23 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from rail.cli import main
+from tests.helpers import conforming_tree, write_roster
+
+HYGIENE_CODES = {
+    "rail_config",
+    "docs_layout",
+    "claude_md",
+    "task_runner",
+    "settings",
+    "remotes",
+    "roster_entry",
+    "receipts",
+}
 
 
 def _conforming_repo(tmp_path: Path) -> Path:
-    (tmp_path / "rail.yaml").write_text(
-        "rail: 1\nproject: red-probe\nbrain_key: red-probe\ntier: bootstrap\nstack: docs\n"
-    )
-    for sub in ("specs", "plans", "adr"):
-        (tmp_path / "docs" / sub).mkdir(parents=True)
-    return tmp_path
+    write_roster(tmp_path, ["red-alpha"])
+    return conforming_tree(tmp_path, "red-alpha", "bootstrap")
 
 
 def test_version_is_printed() -> None:
@@ -40,7 +48,7 @@ def test_check_json_is_machine_readable(tmp_path: Path) -> None:
     assert out.exit_code == 1
     payload = json.loads(out.output)
     assert payload["passed"] is False
-    assert {g["code"] for g in payload["gates"]} == {"rail_config", "docs_layout"}
+    assert {g["code"] for g in payload["gates"]} == HYGIENE_CODES
     assert all(
         set(g) == {"stage", "code", "passed", "details", "exception", "skipped"}
         for g in payload["gates"]
