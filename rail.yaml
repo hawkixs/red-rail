@@ -3,4 +3,10 @@ project: red-rail
 brain_key: red-rail
 tier: dev
 stack: python
-ledger: brain
+# Standalone first (ADR-0002): the receipts under docs/receipts/ are the ledger in phase 1;
+# `ledger: brain` returns with BrainLedger in phase 2.
+ledger: file
+gates:
+  review.verdict:
+    value: false
+    reason: "independent reviewer arrives in phase 2 (ADR-0003); until then no verdict can be independent"

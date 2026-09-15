@@ -29,13 +29,23 @@ comments, test names. The conversation with the operator stays in French.
 - `src/rail/gates/` — one module per stage. A gate is a pure function
   `fn(repo: Path) -> GateResult`; it never raises. The same function runs locally, in CI and
   behind a Claude Code skill, so policy exists once.
-- `src/rail/cli.py` — `rail`. Exit code is the verdict; `--json` is the contract for machines.
-- `ledger:` in `rail.yaml` selects the evidence authority: `file` (default — the repository's
-  `docs/receipts/*.json` are the ledger, no network) or `brain` (brain-v42, shared and observed;
-  receipts become mirrors). red-rail works alone; brain-v42 is the upgrade (ADR-0002).
-- Planned (see the design spec): `ledger/` (protocol + `FileLedger` + `BrainLedger`),
-  `scaffold.py` (copier), `audit.py`, `metrics.py`, `reviewer/` (independent reviewer on
-  `headless-agents`, own GitHub App), `deploy/`, `template/`, `workflows/`, `skills/`.
+- `src/rail/policy.py` — tier defaults (`TIER_STAGES`, `GATE_DEFAULTS`, spec section aliases)
+  and `effective(repo, key)`: a `gates:` override in `rail.yaml` is a declared exception,
+  reported by `rail check` and `rail audit`, never hidden.
+- `src/rail/gates/` — `hygiene`, `intent`, `design`, `plan`, `build`, `evidence` (stages 5–10
+  read the ledger). Workstation-only gates (`hygiene.remotes`, `hygiene.roster_entry`) are
+  skipped explicitly under `rail check --ci`.
+- `src/rail/ledger/` — the `Ledger` protocol and `FileLedger` (`docs/receipts/*.json`,
+  append-only, digest + idempotency key, fails closed on a tampered receipt). `BrainLedger`
+  is phase 2. `ledger:` in `rail.yaml` selects the authority: `file` (default, no network) or
+  `brain` (brain-v42, shared and observed; receipts become mirrors) — ADR-0002.
+- `src/rail/commands/` — one module per command, auto-discovered by `src/rail/cli.py`:
+  `check`, `attest`, `contract`, `ledger`, `audit`, `metrics`, `new`, `upgrade`. Exit code is
+  the verdict; `--json` is the contract for machines.
+- `src/rail/audit.py` (repository × stage matrix, golden-tested), `src/rail/metrics.py` (four
+  DORA metrics + conformance from the ledger), `src/rail/scaffold.py` (copier: `copier.yml` at
+  the root, files under `template/project/`), `src/rail/remotes.py` (`gh` + `glab`, no token).
+- Phase 2: `ledger/brain.py`, `reviewer/`, `workflows/pre-review.js`. Phase 3: `deploy/`.
 
 Boundary rules with brain-v42, both testable: brain never learns a new gate; red-rail stores
 no durable fact outside the ledger.
@@ -52,22 +62,28 @@ make ci                        # what CI runs: lint, test, check
 uv run pytest -q               # tests
 uv run ruff check src/ tests/  # lint
 uv run rail check              # the rail gates against this repository
+make audit                     # dated drift snapshot of the sibling projects (docs/audits/)
+make skills-install            # symlink the facade skills into ~/.claude/skills
 ```
 
 ## Structure
 
 ```
 red-rail/
-├── Makefile               # sync, lint, test, check, ci — `make ci` is exactly what CI runs
-├── rail.yaml              # this project's manifest (tier dev)
-├── src/rail/              # package `rail`
-├── tests/
+├── Makefile               # sync, lint, test, check, ci, audit, skills-install — `make ci` is CI
+├── rail.yaml              # this project's manifest (tier dev, ledger file, one declared exception)
+├── copier.yml             # the project template's questions; files live in template/project/
+├── src/rail/              # package `rail`: gates/, ledger/, commands/, audit, metrics, scaffold
+├── tests/                 # incl. tests/golden/audit-matrix.json and the deterministic fixtures
 ├── docs/specs/            # design specs (dated)
 ├── docs/plans/            # implementation plans (dated)
 ├── docs/adr/              # architecture decision records (numbered)
-├── template/              # copier template (phase 1)
-├── workflows/             # reusable CI workflow + review Workflow script (phases 1-2)
-└── skills/                # Claude Code facades, no rules inside (phase 1)
+├── docs/receipts/         # the file ledger: written by `rail attest` / `rail contract`, never by hand
+├── docs/audits/           # dated snapshots of `rail audit ..` (the drift table, versioned)
+├── template/project/      # copier template (CLAUDE.md, rail.yaml, Makefile, CI, docs, skeletons)
+├── .github/workflows/     # continuous-integration.yml + rail-ci.yml (reusable, called by projects)
+├── workflows/             # pre-review.js (phase 2)
+└── skills/                # Claude Code facades, no rules inside
 ```
 
 ## Key technical decisions

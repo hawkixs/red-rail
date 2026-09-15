@@ -16,14 +16,23 @@ production — with executable gates and measured drift.
 
 ```bash
 uv sync --extra dev
-uv run rail check            # run the gates against the current repository
-uv run rail check --json     # machine-readable report; exit code is the verdict
+uv run rail check                 # the gates of the declared tier; exit code is the verdict
+uv run rail check design --json   # one stage, machine-readable
+uv run rail audit ..              # repository × stage matrix over the sibling projects
+uv run rail contract set --objective "…" --reason "…"   # stage 1: the delivery contract
+uv run rail attest deployed --data sha=<sha> --data digest=<digest>   # evidence, from the host
+uv run rail ledger list           # read the evidence back
+uv run rail metrics               # four DORA metrics + conformance, from the ledger
+uv run rail new red-probe --description "…" --tier prod --stack python   # scaffold + remotes
+uv run rail upgrade --repo ../red-probe   # re-apply the template's latest tag
 ```
 
 ## Development
 
 ```bash
 make ci                      # lint, test, check — exactly what CI runs
+make audit                   # dated drift snapshot under docs/audits/
+make skills-install          # facade skills into ~/.claude/skills
 ```
 
 Private repository. Canonical remote: GitHub `hawkixs/red-rail`; mirror: GitLab

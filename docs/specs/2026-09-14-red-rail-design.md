@@ -194,6 +194,12 @@ red-rail/
 └── tests/
 ```
 
+> Implementation note (phase 1, 2026-09-15): GitHub only calls reusable workflows from
+> `.github/workflows/`, so `rail-ci.yml` lives there; `workflows/` keeps `pre-review.js`.
+> `rail check --ci` reports the workstation-only gates (`hygiene.remotes`,
+> `hygiene.roster_entry`) as skipped, explicitly, because a CI checkout has one remote and no
+> ReD root.
+
 Four mechanisms carry everything:
 
 1. **A gate is a pure function of the repository state** → `GateResult{stage, code, passed,
@@ -322,6 +328,12 @@ view is what standardisation needs.
 | 1 — The rail without network | model, gates (incl. `hygiene.receipts`), `Ledger` protocol + `FileLedger`, `rail attest`, `rail metrics`, audit, scaffold, template, `rail-ci.yml`, skills | `rail audit projects/*` outputs the 24-repository matrix; a fresh scaffold passes `bootstrap`; red-rail passes `dev`; attestations and DORA work on a repository with `ledger: file` |
 | 2 — The shared ledger and the reviewer | `BrainLedger`, contract tests on both backends, `reviewer/` on `headless-agents` + `ReviewVerdict`, `pre-review.js` | idempotent attestations on brain; boundary test green; a receipt whose digest matches no attestation is reported as drift; one PR reviewed end to end by the independent reviewer with its check required |
 | 3 — red-probe | release, VPS deployment, observation, drill, metrics | `/version` equals the attested digest; red-monitor sees the container; recovery time measured; four DORA + 10/10 at `prod`; `brain_delivery_get` shows the full chain to `fulfilled` |
+
+### Success criteria
+
+The phase proofs above are the success criteria of the POC: each phase is done when its
+proof line is observed, and decision 6 (four DORA metrics, conformance score, human
+gestures — all derived from ledger evidence) is the measure of the whole.
 
 ### Non-goals of the POC
 
