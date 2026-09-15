@@ -45,10 +45,28 @@ def test_docs_layout_gate_names_every_missing_directory(tmp_path: Path) -> None:
 
 def test_run_gates_returns_one_result_per_gate_and_never_raises(tmp_path: Path) -> None:
     results = run_gates(tmp_path)
-    assert [r.code for r in results] == ["rail_config", "docs_layout"]
-    assert all(not r.passed for r in results)
+    assert [r.code for r in results] == [
+        "rail_config",
+        "docs_layout",
+        "claude_md",
+        "task_runner",
+        "settings",
+        "remotes",
+        "roster_entry",
+        "receipts",
+    ]
+    by_code = {r.code: r for r in results}
+    structural = ("rail_config", "docs_layout", "claude_md", "task_runner", "settings", "remotes")
+    assert all(not by_code[code].passed for code in structural)
+    # vacuous pass on an empty tree: no receipts to check, no roster in scope
+    assert by_code["receipts"].passed
+    assert by_code["roster_entry"].passed
 
 
 def test_run_gates_all_pass_on_conforming_repo(tmp_path: Path) -> None:
-    results = run_gates(_conforming_repo(tmp_path))
-    assert all(r.passed for r in results)
+    from tests.helpers import conforming_tree, write_roster
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    write_roster(tmp_path, ["red-alpha"])
+    results = run_gates(repo)
+    assert all(r.passed for r in results), [r for r in results if not r.passed]

@@ -91,4 +91,10 @@ def test_run_gates_filters_by_stage(tmp_path: Path) -> None:
     assert [r.code for r in run_gates(tmp_path, stages=[Stage.HYGIENE])] == [
         "rail_config",
         "docs_layout",
+        "claude_md",
+        "task_runner",
+        "settings",
+        "remotes",
+        "roster_entry",
+        "receipts",
     ]
