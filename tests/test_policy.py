@@ -87,7 +87,7 @@ def test_run_gate_reports_a_crash_as_a_failed_gate(tmp_path: Path) -> None:
 
 
 def test_run_gates_filters_by_stage(tmp_path: Path) -> None:
-    assert run_gates(tmp_path, stages=[Stage.DESIGN]) == []
+    assert [r.gate_id for r in run_gates(tmp_path, stages=[Stage.DESIGN])] == ["design.spec"]
     assert [r.code for r in run_gates(tmp_path, stages=[Stage.HYGIENE])] == [
         "rail_config",
         "docs_layout",

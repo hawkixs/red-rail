@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
 from rail.gates import GateResult, Stage, run_gates
+from rail.gates import build as build_gates
 from rail.gates.hygiene import docs_layout, rail_config
 
 
@@ -43,30 +46,59 @@ def test_docs_layout_gate_names_every_missing_directory(tmp_path: Path) -> None:
     assert "docs/adr" in result.details
 
 
-def test_run_gates_returns_one_result_per_gate_and_never_raises(tmp_path: Path) -> None:
+def test_run_gates_returns_one_result_per_gate_and_never_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # gitleaks answers "no leaks" on an empty directory; pin the gate to a failure so the
+    # assertion below does not depend on the host's gitleaks
+    monkeypatch.setattr(build_gates, "run_gitleaks", lambda repo: (1, "not a git repository"))
     results = run_gates(tmp_path)
-    assert [r.code for r in results] == [
-        "rail_config",
-        "docs_layout",
-        "claude_md",
-        "task_runner",
-        "settings",
-        "remotes",
-        "roster_entry",
-        "receipts",
+    assert [r.gate_id for r in results] == [
+        "hygiene.rail_config",
+        "hygiene.docs_layout",
+        "hygiene.claude_md",
+        "hygiene.task_runner",
+        "hygiene.settings",
+        "hygiene.remotes",
+        "hygiene.roster_entry",
+        "hygiene.receipts",
+        "intent.contract",
+        "design.spec",
+        "plan.plan",
+        "build.tests",
+        "build.lint",
+        "build.secrets",
+        "build.commits",
+        "review.verdict",
+        "integrate.receipt",
+        "release.released",
+        "deploy.deployed",
+        "observe.drill",
+        "learn.fulfilled",
     ]
-    by_code = {r.code: r for r in results}
-    structural = ("rail_config", "docs_layout", "claude_md", "task_runner", "settings", "remotes")
-    assert all(not by_code[code].passed for code in structural)
+    by_id = {r.gate_id: r for r in results}
     # vacuous pass on an empty tree: no receipts to check, no roster in scope
-    assert by_code["receipts"].passed
-    assert by_code["roster_entry"].passed
+    vacuous = ("hygiene.receipts", "hygiene.roster_entry")
+    assert all(by_id[gate_id].passed for gate_id in vacuous)
+    assert all(not r.passed for r in results if r.gate_id not in vacuous)
 
 
 def test_run_gates_all_pass_on_conforming_repo(tmp_path: Path) -> None:
+    from rail.gates import Stage
+    from rail.ledger import RECEIPTS_DIR, Contract, Deliverable
+    from rail.ledger.file import FileLedger
     from tests.helpers import conforming_tree, write_roster
 
     repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
     write_roster(tmp_path, ["red-alpha"])
-    results = run_gates(repo)
+    FileLedger(repo / RECEIPTS_DIR).contract_set(
+        "red-alpha",
+        Contract(
+            objective="x", deliverables=[Deliverable(key="m", repository="hawkixs/red-alpha")]
+        ),
+        reason="bootstrap",
+        issuer="op",
+        idempotency_key="c1",
+    )
+    results = run_gates(repo, stages=[Stage.HYGIENE, Stage.INTENT, Stage.DESIGN])
     assert all(r.passed for r in results), [r for r in results if not r.passed]

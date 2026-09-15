@@ -66,10 +66,17 @@ class GateSpec:
 
 
 def registry() -> list[GateSpec]:
-    """Gates in evaluation order. Imported lazily so `rail.gates` stays dependency-free."""
-    from rail.gates import hygiene
+    """Gates in stage order. Imported lazily so `rail.gates` stays dependency-free."""
+    from rail.gates import build, design, evidence, hygiene, intent, plan
 
-    return list(hygiene.GATES)
+    return [
+        *hygiene.GATES,
+        *intent.GATES,
+        *design.GATES,
+        *plan.GATES,
+        *build.GATES,
+        *evidence.GATES,
+    ]
 
 
 def run_gate(spec: GateSpec, repo: Path, *, ci: bool = False) -> GateResult:
