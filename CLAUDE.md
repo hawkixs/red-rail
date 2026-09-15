@@ -48,7 +48,7 @@ Python 3.12+, uv, Click, Pydantic 2, PyYAML. copier for the template. pytest + r
 
 ```bash
 uv sync --extra dev            # install
-just ci                        # what CI runs: lint, test, check
+make ci                        # what CI runs: lint, test, check
 uv run pytest -q               # tests
 uv run ruff check src/ tests/  # lint
 uv run rail check              # the rail gates against this repository
@@ -58,6 +58,7 @@ uv run rail check              # the rail gates against this repository
 
 ```
 red-rail/
+├── Makefile               # sync, lint, test, check, ci — `make ci` is exactly what CI runs
 ├── rail.yaml              # this project's manifest (tier dev)
 ├── src/rail/              # package `rail`
 ├── tests/

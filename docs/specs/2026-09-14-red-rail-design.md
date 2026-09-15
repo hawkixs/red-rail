@@ -176,7 +176,7 @@ red-rail/
 │   ├── metrics.py     # DORA + conformance, read from the ledger
 │   ├── reviewer/      # independent reviewer: policy as data, RunSpec builder, GitHub App client, pull service
 │   └── deploy/        # targets: vps-traefik, pc-server-systemd
-├── template/          # copier: CLAUDE.md, rail.yaml, docs/{specs,plans,adr}, justfile,
+├── template/          # copier: CLAUDE.md, rail.yaml, docs/{specs,plans,adr}, Makefile,
 │                      #   .github/workflows/rail.yml, python/go skeletons
 ├── workflows/         # rail-ci.yml (reusable GitHub workflow), pre-review.js (tiered judges, in session)
 ├── skills/            # Claude Code facades: rail-design, rail-plan, rail-review, rail-release, rail-deploy

@@ -23,7 +23,7 @@ uv run rail check --json     # machine-readable report; exit code is the verdict
 ## Development
 
 ```bash
-just ci                      # lint, test, check — exactly what CI runs
+make ci                      # lint, test, check — exactly what CI runs
 ```
 
 Private repository. Canonical remote: GitHub `hawkixs/red-rail`; mirror: GitLab
