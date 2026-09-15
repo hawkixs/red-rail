@@ -30,7 +30,7 @@ class Stack(StrEnum):
     DOCS = "docs"
 
 
-class Ledger(StrEnum):
+class LedgerBackend(StrEnum):
     """Where evidence is authoritative: the repository's receipts, or brain-v42 (shared)."""
 
     FILE = "file"
@@ -66,7 +66,7 @@ class RailConfig(BaseModel):
     brain_key: str = Field(min_length=1, max_length=50)
     tier: Tier
     stack: Stack
-    ledger: Ledger = Ledger.FILE
+    ledger: LedgerBackend = LedgerBackend.FILE
     deploy: DeployConfig | None = None
     gates: dict[str, GateOverride] = Field(default_factory=dict)
 
