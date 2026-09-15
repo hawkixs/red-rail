@@ -72,6 +72,8 @@ def task_sections(text: str) -> list[str]:
     """Bodies of `### Task …` sections, each starting with its heading line. Headings quoted
     inside fenced code (a plan that shows a sample plan) do not start a section."""
     starts = [m.start() for m in _TASK.finditer(_mask_fences(text))]
+    if not starts:
+        return []
     return [text[s:e].rstrip() for s, e in zip(starts, starts[1:] + [len(text)], strict=True)]
 
 
