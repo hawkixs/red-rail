@@ -33,7 +33,7 @@
 | `rail.gates` | `Stage`, `Scope`, `GateResult(stage, code, passed, details, exception=None, skipped=None)`, `GateSpec(stage, code, fn, scope="repo")`, `registry()`, `run_gate(spec, repo, *, ci=False)`, `run_gates(repo, *, stages=None, ci=False)` |
 | `rail.policy` | `TIER_STAGES`, `REQUIRED_SPEC_SECTIONS`, `GATE_DEFAULTS`, `stages_for(tier)`, `declared_tier(repo)`, `applicable_stages(repo)`, `effective(repo, key) -> (value, reason)` |
 | `rail.model` | unchanged except `Ledger` enum renamed `LedgerBackend` |
-| `rail.ledger` | `RecordKind`, `AttestationKind`, `Deliverable`, `Contract`, `PullRequestRef`, `Record`, `Ledger` (Protocol), `LedgerError`, `LedgerUnavailable`, `IdempotencyConflict`, `canonical_json`, `compute_digest`, `RECEIPTS_DIR`, `open_ledger(repo)` |
+| `rail.ledger` | `RecordKind`, `AttestationKind`, `RequiredCheck`, `ReviewPolicy`, `Deliverable`, `Contract`, `PullRequestRef`, `Record`, `Ledger` (Protocol), `LedgerError`, `LedgerUnavailable`, `IdempotencyConflict`, `canonical_json`, `compute_digest`, `RECEIPTS_DIR`, `open_ledger(repo)` |
 | `rail.ledger.file` | `FileLedger(root, *, clock=None)`, `receipt_filename(record)`, `load_receipt(path)` |
 | `rail.gitrepo` | `is_git_repo`, `head_sha`, `is_ancestor`, `distance`, `remotes`, `recent_subjects`, `commit_timestamp`, `latest_tag` |
 | `rail.markdown` | `headings`, `has_section`, `fenced_blocks`, `command_lines`, `latest_doc`, `spec_references`, `task_sections`, `has_verification` |
@@ -526,7 +526,17 @@ from pathlib import Path
 
 import pytest
 
-from rail.ledger import RECEIPTS_DIR, AttestationKind, Ledger, LedgerError, LedgerUnavailable, open_ledger
+from pydantic import ValidationError
+
+from rail.ledger import (
+    RECEIPTS_DIR,
+    AttestationKind,
+    Ledger,
+    LedgerError,
+    LedgerUnavailable,
+    RequiredCheck,
+    open_ledger,
+)
 from rail.ledger.file import FileLedger, load_receipt, receipt_filename
 from tests.ledger_contract import LedgerContract
 
@@ -593,6 +603,14 @@ def test_open_ledger_reads_the_manifest(tmp_path: Path) -> None:
     assert ledger.root == tmp_path / RECEIPTS_DIR
 
 
+def test_required_check_names_its_publisher() -> None:
+    check = RequiredCheck(name="red-rail/review", app_slug="red-rail-reviewer")
+    assert check.kind == "check_run" and check.provider_id is None
+    assert RequiredCheck(kind="commit_status", name="ci", provider_id=42).app_slug is None
+    with pytest.raises(ValidationError, match="publisher"):
+        RequiredCheck(name="anonymous")
+
+
 def test_open_ledger_refuses_brain_until_phase_2(tmp_path: Path) -> None:
     (tmp_path / "rail.yaml").write_text(MANIFEST + "ledger: brain\n")
     with pytest.raises(LedgerUnavailable, match="phase 2"):
@@ -634,9 +652,9 @@ import json
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 RECEIPTS_DIR = "docs/receipts"
 SCHEMA_VERSION = 1
@@ -672,13 +690,40 @@ class IdempotencyConflict(LedgerError):
     """An idempotency key was reused with different content."""
 
 
+class RequiredCheck(BaseModel):
+    """A trusted check selector as brain-v42's evaluator compares it: kind + name + the App
+    that publishes it (`app_slug` or numeric `provider_id`) — no App identity is ever wired
+    in code, so a third-party App's check is first-class (ticket 04bc1f4a, ADR-0001 am. 4)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["check_run", "commit_status"] = "check_run"
+    name: str = Field(min_length=1, max_length=200)
+    app_slug: str | None = Field(default=None, min_length=1, max_length=200)
+    provider_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _publisher_named(self) -> RequiredCheck:
+        if self.app_slug is None and self.provider_id is None:
+            raise ValueError("a required check names its publisher: app_slug or provider_id")
+        return self
+
+
+class ReviewPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    required_approvals: int = Field(default=1, ge=0, le=100)
+    allowed_reviewers: list[str] = Field(default_factory=list, max_length=200)
+
+
 class Deliverable(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: str = Field(min_length=1, max_length=64)
     repository: str = Field(min_length=3, max_length=201)  # owner/name, as brain-v42 expects
     target_branch: str = "main"
-    required_checks: list[str] = Field(default_factory=list)
+    required_checks: list[RequiredCheck] = Field(default_factory=list, max_length=100)
+    review: ReviewPolicy = Field(default_factory=ReviewPolicy)
 
 
 class Contract(BaseModel):
@@ -942,7 +987,7 @@ class FileLedger:
 ```bash
 uv run pytest tests/test_ledger_file.py tests/test_model.py -q
 ```
-Expected: `26 passed` (7 contract + 7 file-specific + 12 model).
+Expected: `27 passed` (7 contract + 8 file-specific + 12 model).
 
 - [ ] **Step 8: Lint, then commit**
 
@@ -3262,7 +3307,13 @@ def test_contract_set_records_a_contract_from_the_canonical_remote(tmp_path: Pat
     record = json.loads(out.output)
     assert record["kind"] == "contract"
     assert record["payload"]["contract"]["deliverables"] == [
-        {"key": "main", "repository": "hawkixs/red-alpha", "target_branch": "main", "required_checks": []}
+        {
+            "key": "main",
+            "repository": "hawkixs/red-alpha",
+            "target_branch": "main",
+            "required_checks": [],
+            "review": {"required_approvals": 1, "allowed_reviewers": []},
+        }
     ]
     assert record["payload"]["contract"]["acceptance_criteria"] == ["rail check passes", "deployed once"]
     records = FileLedger(repo / RECEIPTS_DIR).list("red-alpha", kind=RecordKind.CONTRACT)
