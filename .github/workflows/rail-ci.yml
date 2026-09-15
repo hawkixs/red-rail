@@ -1,0 +1,78 @@
+name: rail-ci
+
+# Reusable workflow: a project's `make ci`, then the rail gates in CI scope. Called by the
+# template's continuous-integration.yml. CI never holds ledger credentials (spec §5): the
+# gates are exposed as this check, attestations happen on the host.
+on:
+  workflow_call:
+    inputs:
+      stack:
+        description: "python | go | docs — must match rail.yaml"
+        type: string
+        required: true
+      rail-ref:
+        description: "Tag or branch of hawkixs/red-rail to install"
+        type: string
+        default: main
+      runs-on:
+        description: "Runner label as a JSON string, e.g. '[\"self-hosted\",\"Linux\",\"X64\",\"red-ci\"]'"
+        type: string
+        default: '"ubuntu-latest"'
+    secrets:
+      RAIL_READ_TOKEN:
+        description: "Read token for hawkixs/red-rail while it is private (not needed once public)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  rail:
+    name: make ci + rail check
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out the project (full history for the build gate and gitleaks)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check out red-rail
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: hawkixs/red-rail
+          ref: ${{ inputs.rail-ref }}
+          path: .rail
+          token: ${{ secrets.RAIL_READ_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          checksum: "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
+
+      - name: Install gitleaks (pinned, checksum verified)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 /tmp/gitleaks "$HOME/.local/bin/gitleaks"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install rail
+        run: uv tool install ./.rail
+
+      - name: Project CI (make ci, rail gates in CI scope)
+        env:
+          RAIL_FLAGS: --ci
+        run: make ci
+
+      - name: Rail check (machine-readable)
+        run: rail check --ci --json
