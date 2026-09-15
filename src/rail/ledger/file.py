@@ -93,9 +93,18 @@ class FileLedger:
     # -- internals ------------------------------------------------------------------------
 
     def _records(self) -> list[Record]:
+        """Every receipt, verified: a digest that no longer matches its content is a tampered
+        ledger and stops the read — the gates never build evidence on it (fail closed)."""
         if not self.root.is_dir():
             return []
-        records = [load_receipt(p) for p in sorted(self.root.glob("*.json"))]
+        records = []
+        for path in sorted(self.root.glob("*.json")):
+            record = load_receipt(path)
+            if not record.verify():
+                raise LedgerError(
+                    f"tampered receipt {path.name}: digest does not match its content"
+                )
+            records.append(record)
         return sorted(records, key=lambda r: (r.recorded_at, r.digest))
 
     def _append(

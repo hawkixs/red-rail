@@ -96,6 +96,22 @@ def test_a_tampered_receipt_fails_verification(tmp_path: Path) -> None:
     assert load_receipt(path).verify() is False
 
 
+def test_a_tampered_receipt_stops_every_read(tmp_path: Path) -> None:
+    """Fail closed: a digest mismatch is a broken ledger, not a record to reason about."""
+    ledger = FileLedger(tmp_path, clock=_clock())
+    record = ledger.attest(
+        "red-probe", AttestationKind.DEPLOYED, {"sha": "b" * 40}, issuer="op", idempotency_key="d1"
+    )
+    path = tmp_path / receipt_filename(record)
+    raw = json.loads(path.read_text())
+    raw["payload"]["data"]["sha"] = "c" * 40
+    path.write_text(json.dumps(raw))
+    with pytest.raises(LedgerError, match="tampered"):
+        ledger.list("red-probe")
+    with pytest.raises(LedgerError, match="tampered"):
+        ledger.attest("red-probe", AttestationKind.FULFILLED, {}, issuer="op", idempotency_key="f1")
+
+
 def test_a_malformed_receipt_is_a_broken_ledger(tmp_path: Path) -> None:
     (tmp_path / "junk.json").write_text("{not json")
     with pytest.raises(LedgerError, match="junk.json"):
