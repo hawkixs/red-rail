@@ -14,7 +14,7 @@
 
 ## Scope decisions frozen for this plan (measured on 2026-09-18)
 
-- **The brain API is v1.0, frozen on 2026-09-18** (red-rail decision `4e7c2545`, learning `190b86a8`; brain-v42 PR #151 merged on `main@9bdb3812`, contract file `docs/contracts/delivery_attestations.json`, `contract_version: 1`). Nothing below is coded against a running brain until brain-v42 announces the release SHA/tag and migration 054 is applied; every test runs against an in-memory fake that implements the published contract. Batch 4 is the only batch that touches the live brain and it is gated on operator gestures listed there.
+- **The brain API is v1.0, frozen on 2026-09-18 and in production since 12:19Z the same day** (red-rail decision `4e7c2545`, learning `190b86a8`; brain-v42 PR #151 merged on `main@9bdb38122fb7603927f18d1aaec8544ae4b1300d`, migration 054 applied, canary `gate_passed` ×2 = 1 row on ticket `78fc643a`). The contract is pinned by the annotated tag **`delivery-attestations-v1.0`** (on that exact SHA; it names the contract version, never the package version, and moves only on a contract break): `docs/contracts/delivery_attestations.json` sha256 `b654b9a3479f02c3d80baf1d49777fb93356b5d34a7cd17b70e5e2205fd9a3fe`, `docs/contracts/delivery_finding_codes.json` sha256 `0978138aee9ae4be24b12b81e0097960eadf1e78f0936b1a7074b60516f208b4` (both verified locally on the tag on 2026-09-18). Every test runs against an in-memory fake that implements the published contract; Batch 4 is the only batch that touches the live brain and it is gated on the operator gestures listed there.
 - **Mapping `Ledger` protocol ↔ brain** (one subject per ticket, decided with brain-v42): `Record.project` = the rail project = the ticket's `to_project` = `actor_project` for every kind, incidents included; `Record.issuer` = the `X-Brain-Agent` label the rail sends (`operator` from the CLI by default, `red-rail-reviewer` from the reviewer); `Record.recorded_at` = `emitted_at` (the evidence time — brain's `recorded_at` is server time and is not the evidence); `Record.payload["data"]` = brain `payload`; `Record.idempotency_key` = brain `idempotency_key`; `Record.digest` is red-rail's record digest computed locally from those fields, identical for the mirror written before the call and for the row read back from brain. brain's own payload digest (`sha256("brain-delivery-attestation:v1\n" + canonical(payload))`, bare hex) is recomputed by `rail.ledger.brain_digest(data)` and cross-checked against `DeliveryAttestation.digest` on every read; a mismatch is a `LedgerError` (tampered or foreign row), never silently accepted.
 - **Mirror first, attestation second, replay from the mirror** (spec §7): in `brain` mode `attest()` writes the receipt in `docs/receipts/` exactly as `FileLedger` does, then calls `brain_delivery_attest` with `emitted_at` = the receipt's `recorded_at`. A brain failure after the mirror raises `Unattested(receipt_path, cause)`; `rail attest` exits `2` with the exact replay command (`rail attest KIND --from docs/receipts/<file>.json`). A replay sends the same key, same payload, same `emitted_at` → brain returns the same row (`replay_equality`). `list()` and `get()` read brain, never the mirrors.
 - **Idempotency keys** are deterministic per event and written in the mirror before the call: `gate_passed:<sha>:<stage>.<code>`, `review_verdict:<head_sha>:<check_run_id>`, `integrated:<sha>`, `released:<version>`, and for recurring events `deployed|rolled_back|restored|incident_detected:<target>:<digest-or-sha>:<emitted_at UTC, seconds>`. `rail attest` derives the default key from the kind and the data it is given; the `--key` override stays.
@@ -24,7 +24,7 @@
 - **Drift = a mirror without an attestation.** `rail audit` and `rail check` compare the local receipts of an attestation kind with `ledger.list(project)` by record digest; a mirror whose digest is absent from the shared ledger is reported (`hygiene.receipts` fails with `mirror without attestation: <file>`), exactly the phase-2 proof line.
 - **The verdict gate names its issuer**: `review.verdict` accepts only a `review_verdict` record with `independent: true`, `verdict: approve`, `sha` on HEAD's history **and** `issuer == review.reviewer_identity` (tier default `red-rail-reviewer`, overridable in `gates:` with a reason). In `brain` mode the issuer is brain's `issuer_identity`, verifiable; in `file` mode it is what the receipt says (one operator, one repository).
 - **Contract shape aligned with brain's `ContractInput`**: `Contract` gains `priority: int = 0` and `acceptance_mode: "automatic" | "explicit" = "explicit"` (the rail's `fulfilled` is an explicit `brain_delivery_accept`), `Deliverable` gains `repository_id: int | None` and `no_checks_reason: str | None`. Existing receipts stay valid (defaults), the file ledger maps 1:1 onto `brain_delivery_contract_set`.
-- **Transport** (brain-v42, 2026-09-18): `POST http://127.0.0.1:8765/mcp`, `Authorization: Bearer <MCP_HTTP_TOKEN>` mandatory, `X-Brain-Tool-Profile: native` so the delivery tools are callable by name, `X-Brain-Agent: <issuer>` (free label, normalised server-side). The token comes from the environment variable `MCP_HTTP_TOKEN`, else from the operator's private env file (`RAIL_BRAIN_TOKEN_FILE`, default `~/.config/brain-v42/mcp-token.env`, mode 0600, owner, no symlink), never from the tree. Tool errors travel as `ToolError("<code>: <message>")`; the client keeps the code.
+- **Transport** (brain-v42, 2026-09-18): `POST http://127.0.0.1:8765/mcp`, `Authorization: Bearer <token>` mandatory, `X-Brain-Tool-Profile: native` so the delivery tools are callable by name, `X-Brain-Agent: <issuer>` (free label, normalised server-side). **The bearer lives in a private file and nowhere else** (the reference client's rule, restated by brain-v42 on 2026-09-18): raw token, trimmed, printable ASCII, no newline inside, mode 0600, owner only, no symlink — read from the absolute path in `RAIL_BRAIN_TOKEN_FILE`, default `~/.config/red-rail/brain-token`; never an environment variable holding the value, never a command-line argument, never in a tree. The URL is not a secret (`RAIL_BRAIN_URL`, loopback enforced). Tool errors travel as `ToolError("<code>: <message>")`; the client keeps the code.
 - **The fake brain is a real FastMCP server in memory** (`tests/fake_brain.py`), implementing the six delivery tools the rail calls with the published behaviours (uniqueness triple, replay equality, form codes, scopes, keyset cursor). Its tool schemas are pinned by a test against the contract file. `BrainLedger` runs the whole `tests/ledger_contract.py` suite against it.
 - **Reviewer policy is data** (`rail.reviewer.policy.ReviewPolicy`, defaults in code, overridable by `~/.config/red-rail/reviewer.yaml`): provider chain `agy → codex → claude`; models measured on the neighbours (brain-v42 Dream defaults, canaried 2026-09-12): light tier `agy: gemini-3.8-flash-high`, `codex: gpt-5.6-luna`, `claude: claude-sonnet-5`; deep tier `agy: gemini-3.1-pro-high`, `codex: gpt-6-astra`, `claude: claude-opus-5`. Light mode = one judge when the PR is docs-only or changes ≤ 200 lines; deep mode = two judges on two providers, plus one deep-tier judge only on an `important`/`blocking` finding or a disagreement. **Never the producer's provider**: the producer is read from the PR commits' `Co-Authored-By` trailers (`Claude` → claude, `Codex`/`OpenAI` → codex, `Antigravity`/`Gemini` → agy) and removed from the chain for that PR. Fail-closed: no parsable verdict → check `failure`, PR review `REQUEST_CHANGES`, never `neutral`. Re-run by adding the label `rail-review:rerun`.
 - **Judges read the PR as data**: `CapabilityProfile()` (no MCP, no tools), `max_turns=1`, isolated seat from `headless_agents.sandbox.build_toolless_home` + `sandbox_environment`, diff bounded to 120 000 characters (truncated with a marker that the verdict reports as `diff_truncated`), reply parsed as one JSON object validated by `ReviewVerdict` (`extra="forbid"`, enum-valued).
@@ -38,7 +38,7 @@
 | Symbol | Module | Shape |
 |---|---|---|
 | `read_private_file(path) -> bytes` | `rail.private` | absolute path, regular file, owner = uid, mode `0600`/`0400`, no symlink on the last component; else `PrivateFileError` |
-| `private_env_value(path, key) -> str` | `rail.private` | `KEY=VALUE` line of a private env file, quotes stripped |
+| `private_token(path) -> str` | `rail.private` | the raw content of a private file, trimmed; refuses a newline inside or a non-printable byte |
 | `brain_digest(data: dict) -> str` | `rail.ledger` | brain's payload digest, bare hex |
 | `Ledger.attest(project, kind, data, *, issuer, idempotency_key, emitted_at=None) -> Record` | `rail.ledger` | `emitted_at` fixes `recorded_at` (replay); `None` = now |
 | `Unattested(LedgerError)` | `rail.ledger` | `.receipt: Path`, `.cause: str` — mirror written, brain refused |
@@ -54,8 +54,10 @@
 
 ## Operator gestures (outside any task; Batch 4 needs them all)
 
-1. **brain-v42 release**: wait for brain-v42's message with the release SHA/tag after `apply 054` and its canary; then set `BRAIN_REF` in `src/rail/contracts/pins.py` to that tag and re-run `make contracts-check` (Task 2.1) — the vendored contract files must be identical to the tag's.
-2. **MCP token**: `~/.config/brain-v42/mcp-token.env` exists on the host (0600) with `MCP_HTTP_TOKEN=…`; nothing to copy — the rail reads it in place. Verify: `uv run rail brain ping` (Task 3.1) answers `brain-v42 reachable as red-rail`.
+1. **brain-v42 release** — DONE 2026-09-18: `delivery-attestations-v1.0` on `9bdb3812…`, in production; `pins.py` names that tag and the two file digests (Task 1.2). `make contracts-check` must stay green after any re-vendoring.
+2. **MCP token file**: create the rail's own private token file from the operator's env file (the value only, no `KEY=`, no trailing newline):
+   `umask 077 && mkdir -p ~/.config/red-rail && grep '^MCP_HTTP_TOKEN=' ~/.config/brain-v42/mcp-token.env | cut -d= -f2- | tr -d '"\n' > ~/.config/red-rail/brain-token && chmod 600 ~/.config/red-rail/brain-token`.
+   Verify: `uv run rail brain ping` (Task 3.1) answers `brain-v42 reachable … as red-rail`.
 3. **GitHub App `red-rail-reviewer`**: create it on the `hawkixs` account (Settings → Developer settings → GitHub Apps → New): permissions `Checks: Read and write`, `Pull requests: Read and write`, `Contents: Read-only`, `Metadata: Read-only`; no webhook (pull mode); generate a private key, save it as `~/.config/red-rail/reviewer-app.pem` with `chmod 600`; install the App on `hawkixs/red-rail`; note the **App ID** and the **Installation ID** (`https://github.com/settings/installations/<id>`). Write `~/.config/red-rail/reviewer.yaml` (0600) as documented in Task 3.3.
 4. **Delivery ticket for red-rail**: from a brain session, `brain_ticket_create(from_project="red", to_project="red-rail", kind="request", title="Deliver red-rail phase 2 — shared ledger and independent reviewer", body="…")` → keep the UUID for `rail.yaml` (Task 4.1). Self-tickets are valid in brain (confirmed 2026-09-18) but no canary proved a self-ticket contract yet — Task 4.1 is that canary.
 5. **Observer registration**: register `hawkixs/red-rail` for project `red-rail` in brain-v42's observer settings (`~/.config/brain-v42/delivery-observer.env`, brain-v42 runbook) so `brain_delivery_bind_pr` accepts the PR and the `integration` receipt appears after the merge.
@@ -87,7 +89,7 @@ from pathlib import Path
 
 import pytest
 
-from rail.private import PrivateFileError, private_env_value, read_private_file
+from rail.private import PrivateFileError, private_token, read_private_file
 
 
 def _private(path: Path, content: str, mode: int = 0o600) -> Path:
@@ -127,15 +129,16 @@ def test_refuses_a_directory(tmp_path: Path) -> None:
         read_private_file(tmp_path)
 
 
-def test_env_value_reads_one_key_with_quotes_stripped(tmp_path: Path) -> None:
-    path = _private(
-        tmp_path / "mcp-token.env",
-        '# comment\nOTHER=1\nMCP_HTTP_TOKEN="s3cret"\nexport LATER=2\n',
-    )
-    assert private_env_value(path, "MCP_HTTP_TOKEN") == "s3cret"
-    assert private_env_value(path, "LATER") == "2"
-    with pytest.raises(PrivateFileError, match="no MISSING="):
-        private_env_value(path, "MISSING")
+def test_private_token_is_the_trimmed_printable_content(tmp_path: Path) -> None:
+    assert private_token(_private(tmp_path / "token", "s3cret-Token_42\n")) == "s3cret-Token_42"
+    with pytest.raises(PrivateFileError, match="one line"):
+        private_token(_private(tmp_path / "two", "abc\ndef\n"))
+    with pytest.raises(PrivateFileError, match="printable ASCII"):
+        private_token(_private(tmp_path / "utf", "sécret\n"))
+    with pytest.raises(PrivateFileError, match="empty"):
+        private_token(_private(tmp_path / "empty", "\n"))
+    with pytest.raises(PrivateFileError, match="too long"):
+        private_token(_private(tmp_path / "long", "x" * 8193))
 
 
 def test_owner_must_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,21 +206,24 @@ def read_private_file(path: Path) -> bytes:
             os.close(fd)
 
 
-def private_env_value(path: Path, key: str) -> str:
-    """`KEY=VALUE` from a private env file (`export` prefix and quotes tolerated)."""
-    for raw in read_private_file(path).decode("utf-8", errors="strict").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].lstrip()
-        name, sep, value = line.partition("=")
-        if sep and name.strip() == key:
-            value = value.strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                value = value[1:-1]
-            return value
-    raise PrivateFileError(f"{path}: no {key}= line")
+def private_token(path: Path) -> str:
+    """A bearer token as the brain-v42 reference client reads it: the raw content of a
+    private file, trimmed, one line of printable ASCII, at most 8192 bytes."""
+    raw = read_private_file(path)
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise PrivateFileError(f"{path}: a token is printable ASCII") from exc
+    value = text.strip()
+    if not value:
+        raise PrivateFileError(f"{path}: empty token file")
+    if len(value) > 8192:
+        raise PrivateFileError(f"{path}: token too long")
+    if "\n" in value or "\r" in value:
+        raise PrivateFileError(f"{path}: a token file holds one line")
+    if any(not 33 <= ord(c) <= 126 for c in value):
+        raise PrivateFileError(f"{path}: a token is printable ASCII without spaces")
+    return value
 ```
 
 - [ ] **Step 4: Run the tests, expect PASS**
@@ -301,11 +307,13 @@ Expected: `make lint test` exit 0 (`180 passed` or more), commit created.
 ```bash
 mkdir -p src/rail/contracts
 BRAIN=/home/hawixs/hawkixs_infra/git_repo/ReD_v1/projects/brain-v42
-git -C "$BRAIN" show 9bdb3812:docs/contracts/delivery_finding_codes.json > src/rail/contracts/delivery_finding_codes.json
-git -C "$BRAIN" show 9bdb3812:docs/contracts/delivery_attestations.json > src/rail/contracts/delivery_attestations.json
+git -C "$BRAIN" fetch -q origin --tags
+git -C "$BRAIN" show delivery-attestations-v1.0:docs/contracts/delivery_finding_codes.json > src/rail/contracts/delivery_finding_codes.json
+git -C "$BRAIN" show delivery-attestations-v1.0:docs/contracts/delivery_attestations.json > src/rail/contracts/delivery_attestations.json
+sha256sum src/rail/contracts/*.json
 python3 -c "import json;print(len(json.load(open('src/rail/contracts/delivery_finding_codes.json'))['codes']), json.load(open('src/rail/contracts/delivery_attestations.json'))['contract_version'])"
 ```
-Expected: `43 1`.
+Expected: `b654b9a3479f02c3d80baf1d49777fb93356b5d34a7cd17b70e5e2205fd9a3fe  …/delivery_attestations.json`, `0978138aee9ae4be24b12b81e0097960eadf1e78f0936b1a7074b60516f208b4  …/delivery_finding_codes.json`, then `43 1`.
 
 - [ ] **Step 2: Write the failing boundary tests**
 
@@ -329,7 +337,7 @@ from rail.contracts import (
     finding_codes,
     vendored_path,
 )
-from rail.contracts.pins import BRAIN_CHECKOUT, BRAIN_REF
+from rail.contracts.pins import BRAIN_CHECKOUT, BRAIN_REF, CONTRACT_SHA256
 
 EXPECTED_CODES = {
     "base_mismatch",
@@ -451,6 +459,16 @@ def test_vendored_files_equal_the_pinned_ref() -> None:
         assert json.loads(published) == json.loads(vendored_path(name).read_text()), name
 
 
+def test_vendored_files_match_the_pinned_digests() -> None:
+    """Runs everywhere (CI included): the bytes we ship are the bytes brain-v42 tagged."""
+    import hashlib
+
+    assert BRAIN_REF == "delivery-attestations-v1.0"
+    for name, expected in CONTRACT_SHA256.items():
+        digest = hashlib.sha256(vendored_path(name).read_bytes()).hexdigest()
+        assert digest == expected, f"{name}: {digest} != pinned {expected}"
+
+
 def test_vendored_files_ship_with_the_package() -> None:
     for name in ("delivery_finding_codes.json", "delivery_attestations.json"):
         assert vendored_path(name).is_file()
@@ -476,9 +494,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-BRAIN_REF = "9bdb3812"  # main after PR #151 (attestations lot merged, 2026-09-18)
+# Annotated tag on 9bdb38122fb7603927f18d1aaec8544ae4b1300d (PR #151, in production since
+# 2026-09-18 12:19Z); it names the CONTRACT version and moves only on a contract break.
+BRAIN_REF = "delivery-attestations-v1.0"
 BRAIN_CHECKOUT = Path.home() / "hawkixs_infra/git_repo/ReD_v1/projects/brain-v42"
 HEADLESS_AGENTS_TAG = "headless-agents-v0.2.0"
+# sha256 of the vendored files as published at BRAIN_REF (verified 2026-09-18).
+CONTRACT_SHA256 = {
+    "delivery_attestations.json": (
+        "b654b9a3479f02c3d80baf1d49777fb93356b5d34a7cd17b70e5e2205fd9a3fe"
+    ),
+    "delivery_finding_codes.json": (
+        "0978138aee9ae4be24b12b81e0097960eadf1e78f0936b1a7074b60516f208b4"
+    ),
+}
 ```
 
 `src/rail/contracts/__init__.py`:
@@ -536,7 +565,7 @@ In `pyproject.toml`, after `[tool.setuptools.packages.find]`, add:
 ```bash
 uv run pytest tests/test_boundary.py -q
 ```
-Expected: `5 passed` (the parity test runs on the workstation, skips in CI).
+Expected: `6 passed` (the parity test runs on the workstation and skips in CI; the digest test runs everywhere).
 
 - [ ] **Step 6: `make contracts-check` for the operator**
 
@@ -1853,27 +1882,32 @@ def test_http_client_refuses_a_non_loopback_url() -> None:
         BrainClient.http("http://brain.example.com/mcp", token="t", agent="a")
 
 
-def test_settings_read_the_token_from_the_environment_first(
+def test_settings_read_the_token_from_a_private_file_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    env_file = tmp_path / "mcp-token.env"
-    env_file.write_text("MCP_HTTP_TOKEN=from-file\n")
-    env_file.chmod(0o600)
-    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(env_file))
-    monkeypatch.delenv("MCP_HTTP_TOKEN", raising=False)
+    token_file = tmp_path / "brain-token"
+    token_file.write_text("from-file\n")
+    token_file.chmod(0o600)
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(token_file))
     monkeypatch.delenv("RAIL_BRAIN_URL", raising=False)
     settings = BrainSettings.from_environment(os.environ)
     assert settings.token == "from-file" and settings.url == "http://127.0.0.1:8765/mcp"
-    monkeypatch.setenv("MCP_HTTP_TOKEN", "from-env")
-    assert BrainSettings.from_environment(os.environ).token == "from-env"
+    assert settings.token_file == token_file
+    monkeypatch.setenv("MCP_HTTP_TOKEN", "from-env")  # never read: the value is not an env var
+    assert BrainSettings.from_environment(os.environ).token == "from-file"
 
 
 def test_settings_fail_closed_without_a_private_token_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("MCP_HTTP_TOKEN", raising=False)
-    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "missing.env"))
-    with pytest.raises(PrivateFileError):
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "missing"))
+    with pytest.raises(PrivateFileError, match="not found"):
+        BrainSettings.from_environment(os.environ)
+    loose = tmp_path / "loose"
+    loose.write_text("t\n")
+    loose.chmod(0o644)
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(loose))
+    with pytest.raises(PrivateFileError, match="mode 644"):
         BrainSettings.from_environment(os.environ)
 ```
 
@@ -1897,11 +1931,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from rail.private import private_env_value
+from rail.private import private_token
 
 DEFAULT_URL = "http://127.0.0.1:8765/mcp"
-DEFAULT_TOKEN_FILE = "~/.config/brain-v42/mcp-token.env"
-TOKEN_VARIABLE = "MCP_HTTP_TOKEN"
+DEFAULT_TOKEN_FILE = "~/.config/red-rail/brain-token"  # the rail's own private file
 LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
@@ -1911,18 +1944,19 @@ def is_loopback(url: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class BrainSettings:
+    """The bearer is read from a private file and from nowhere else (reference client's
+    rule): `RAIL_BRAIN_TOKEN_FILE` names the path, the environment never holds the value."""
+
     url: str
     token: str
+    token_file: Path
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> BrainSettings:
         env = os.environ if environ is None else environ
         url = env.get("RAIL_BRAIN_URL", DEFAULT_URL)
-        token = env.get(TOKEN_VARIABLE, "").strip()
-        if not token:
-            path = Path(env.get("RAIL_BRAIN_TOKEN_FILE", DEFAULT_TOKEN_FILE)).expanduser()
-            token = private_env_value(path, TOKEN_VARIABLE)
-        return cls(url=url, token=token)
+        path = Path(env.get("RAIL_BRAIN_TOKEN_FILE", DEFAULT_TOKEN_FILE)).expanduser()
+        return cls(url=url, token=private_token(path), token_file=path)
 ```
 
 - [ ] **Step 6: Write `src/rail/brain/client.py`**
@@ -3551,8 +3585,7 @@ def test_open_ledger_builds_the_brain_backend_from_the_manifest(
         isinstance(ledger, BrainLedger)
         and str(ledger.ticket) == "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"
     )
-    monkeypatch.delenv("MCP_HTTP_TOKEN", raising=False)
-    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "missing.env"))
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "missing"))
     with pytest.raises(LedgerError, match="token"):
         open_ledger(repo)
 ```
@@ -4080,22 +4113,20 @@ from tests.helpers import conforming_tree
 
 def test_ping_fails_closed_without_a_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
-    monkeypatch.delenv("MCP_HTTP_TOKEN", raising=False)
-    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "none.env"))
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "none"))
     out = CliRunner().invoke(main, ["brain", "ping", "--repo", str(repo)])
     assert out.exit_code == 1 and "not found" in out.output
 
 
 def test_ping_refuses_a_remote_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
-    monkeypatch.setenv("MCP_HTTP_TOKEN", "t")
+    token_file = tmp_path / "brain-token"
+    token_file.write_text("t0ken\n")
+    token_file.chmod(0o600)
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(token_file))
     monkeypatch.setenv("RAIL_BRAIN_URL", "http://brain.example.com/mcp")
     out = CliRunner().invoke(main, ["brain", "ping", "--repo", str(repo)])
-    assert (
-        out.exit_code == 1
-        and "loopback" in out.output
-        and "t" not in out.output.split("error:")[1].split()
-    )
+    assert out.exit_code == 1 and "loopback" in out.output and "t0ken" not in out.output
 ```
 
 - [ ] **Step 7: Retire the phase-1 refusals**
@@ -4118,8 +4149,7 @@ def test_attest_in_brain_mode_without_a_token_fails_closed(
         .read_text()
         .replace("ledger: file\n", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n")
     )
-    monkeypatch.delenv("MCP_HTTP_TOKEN", raising=False)
-    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "none.env"))
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "none"))
     out = CliRunner().invoke(main, ["attest", "deployed", "--repo", str(repo), "--data", "sha=abc"])
     assert out.exit_code == 1 and "brain token" in out.output
     assert not list((repo / RECEIPTS_DIR).glob("*-deployed-*.json"))
@@ -5508,7 +5538,7 @@ options `--required-check` (multiple), `--allowed-reviewer` (multiple), `--requi
 
 - `docs/adr/0002-pluggable-ledger-standalone-first.md` — append `## Amendment (2026-09-18): the brain API v1.0 and the mapping` with: the freeze (decision `4e7c2545`, brain-v42 PR #151, `docs/contracts/delivery_attestations.json` vendored at `pins.BRAIN_REF`), the mapping table of the "Scope decisions" section above (project ↔ `to_project`/`actor_project`, issuer ↔ `X-Brain-Agent`, `recorded_at` ↔ `emitted_at`, `data` ↔ `payload`, record digest computed locally, brain payload digest cross-checked), mirror-first + replay, milestones read from the ticket, `ticket:` in the manifest, ledger-scoped gates skipped in CI, `hygiene.mirrors` as the drift gate, deterministic keys.
 - `docs/specs/2026-09-14-red-rail-design.md` — under the §5 implementation note add: "Phase 2 (2026-09-18): gates that read the ledger are `ledger`-scoped and skipped under `--ci` when `ledger: brain` (CI holds no credential); `rail.yaml` names the delivery `ticket` in brain mode; `integrated`/`fulfilled` are brain milestones read from the ticket."
-- `README.md` and `CLAUDE.md` — commands (`rail brain ping`, `rail reviewer once|run`, `rail contract set --required-check …`, `rail attest … --from` replay after exit 2), extras (`uv sync --all-extras`), operator files (`~/.config/brain-v42/mcp-token.env`, `~/.config/red-rail/reviewer.yaml`, `~/.config/red-rail/reviewer-app.pem`), the structure tree (`src/rail/brain/`, `src/rail/contracts/`, `src/rail/reviewer/`, `workflows/pre-review.js`, seven skills), the architecture bullets (BrainLedger, ledger scope, mirrors gate, reviewer). Keep every command executable (`hygiene.claude_md` checks them).
+- `README.md` and `CLAUDE.md` — commands (`rail brain ping`, `rail reviewer once|run`, `rail contract set --required-check …`, `rail attest … --from` replay after exit 2), extras (`uv sync --all-extras`), operator files (`~/.config/red-rail/brain-token`, `~/.config/red-rail/reviewer.yaml`, `~/.config/red-rail/reviewer-app.pem`), the structure tree (`src/rail/brain/`, `src/rail/contracts/`, `src/rail/reviewer/`, `workflows/pre-review.js`, seven skills), the architecture bullets (BrainLedger, ledger scope, mirrors gate, reviewer). Keep every command executable (`hygiene.claude_md` checks them).
 
 ```bash
 uv run rail check design plan hygiene && make lint test
@@ -5574,7 +5604,8 @@ uv run rail ledger list --attestation gate_passed
 Expected: both commands print the same receipt (`gate_passed:<sha>:design.spec`, same digest); the list shows **one** row read back from brain; `brain_delivery_get` (via a brain session) shows one attestation with `issuer_identity: operator`.
 
 ```bash
-MCP_HTTP_TOKEN=wrong uv run rail attest deployed --data sha=$sha --data digest=sha256:proof --data target=proof; echo "exit=$?"
+(umask 077; printf 'wrong' > /tmp/wrong-token)
+RAIL_BRAIN_TOKEN_FILE=/tmp/wrong-token uv run rail attest deployed --data sha=$sha --data digest=sha256:proof --data target=proof; echo "exit=$?"
 uv run rail check hygiene | grep mirrors
 ```
 Expected: `error: attestation not recorded (unreachable); the receipt … is written — replay with: rail attest deployed --from docs/receipts/<file>.json`, `exit=2`; then `FAIL  hygiene.mirrors  mirror without attestation: <file>` — the drift line of the phase-2 proof.
