@@ -1,0 +1,15 @@
+{
+  "digest": "sha256:3bd3a9196064ffbfaa6003c6cb431ae0edea0e23dd45c8abe90fda7f0dc87034",
+  "idempotency_key": "integrated:a0a22332ccbd965163187989f577cb2d39b78e0c",
+  "issuer": "operator",
+  "kind": "attestation",
+  "payload": {
+    "data": {
+      "sha": "a0a22332ccbd965163187989f577cb2d39b78e0c"
+    },
+    "kind": "integrated"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-18T11:58:33.464020Z",
+  "schema_version": 1
+}
