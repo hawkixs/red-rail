@@ -48,3 +48,30 @@ def test_gitleaks_is_installed_with_a_checksum_in_both_workflows() -> None:
 def test_red_rail_ci_runs_rail_check_in_ci_scope() -> None:
     runs = [s["run"] for s in _steps(_load("continuous-integration.yml")) if "run" in s]
     assert any("rail check --ci --json" in r for r in runs)
+
+
+def test_a_container_job_trusts_the_workspace_before_running_git() -> None:
+    """actions/checkout adds `safe.directory` to a temporary global config that later steps
+    of a container job never see; git then refuses the runner-owned workspace and every
+    history gate reports "not a git repository" (PR #1, run 35033439270)."""
+    for name in ("rail-ci.yml", "continuous-integration.yml"):
+        for job_name, job in _load(name)["jobs"].items():
+            if "container" not in job:
+                continue
+            steps = job["steps"]
+            checkout = next(i for i, s in enumerate(steps) if "checkout" in s.get("uses", ""))
+            trust = [
+                i
+                for i, s in enumerate(steps)
+                if "safe.directory" in s.get("run", "") and "$GITHUB_WORKSPACE" in s["run"]
+            ]
+            assert trust and trust[0] > checkout, (
+                f"{name}/{job_name}: no `git config --global --add safe.directory "
+                f'"$GITHUB_WORKSPACE"` step after the checkout'
+            )
+            first_git_user = next(
+                i
+                for i, s in enumerate(steps)
+                if "uv run" in s.get("run", "") or "rail" in s.get("run", "")
+            )
+            assert trust[0] < first_git_user, f"{name}/{job_name}: workspace trusted too late"
