@@ -1,0 +1,35 @@
+{
+  "digest": "sha256:b5c77084c62b05bb1d4b4e42db9f685f6be7b325b02b911ff49b371b0f54f01f",
+  "idempotency_key": "contract:red-rail:1",
+  "issuer": "operator",
+  "kind": "contract",
+  "payload": {
+    "contract": {
+      "acceptance_criteria": [
+        "rail audit projects/* outputs the 24-repository matrix",
+        "a fresh scaffold passes rail check at tier bootstrap",
+        "red-rail passes rail check at tier dev",
+        "attestations and DORA metrics work on a repository with ledger: file"
+      ],
+      "constraints": [],
+      "deliverables": [
+        {
+          "key": "main",
+          "repository": "hawkixs/red-rail",
+          "required_checks": [],
+          "review": {
+            "allowed_reviewers": [],
+            "required_approvals": 1
+          },
+          "target_branch": "main"
+        }
+      ],
+      "objective": "One delivery standard for the ReD ecosystem: executable gates, measured drift, evidence in a ledger",
+      "schema_version": 1
+    },
+    "reason": "phase 1 \u2014 the rail without network (spec \u00a78)"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-15T22:33:30.512917Z",
+  "schema_version": 1
+}

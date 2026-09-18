@@ -22,6 +22,8 @@ tiered Workflows, opencode/Codex workers). Delivery practice has drifted:
 - Delivery logic grew inside brain-v42 (migration 053, eight `delivery_*` tables, six MCP
   tools, a GitHub observer, eight `codex/delivery-*` branches) because the workflow was
   improved from the brain-v42 session. brain-v42 is public (Apache-2.0) and sold as a memory.
+  *(Measured on 2026-09-15 by brain-v42, ticket `04bc1f4a`: six such branches, all already
+  merged — nothing in flight; ADR-0001 amendment 6.)*
 
 The goal is one standard for the whole lifecycle — idea to production — that every current
 and future ReD project follows with constancy, where drift is **measured** rather than noticed.
@@ -76,9 +78,14 @@ receipts with two milestones only, `integration` and `fulfilled`. Nothing exists
 
 ### Two testable boundary rules
 
-1. **brain never learns a new gate.** If a brain-v42 change adds an evaluator error code of
-   the form `review_*`, `spec_*`, `deploy_*`, it violates the contract. A red-rail test reads
-   brain's error-code list and fails when it moves.
+1. **brain never learns a new gate.** The evaluator's finding codes are a closed list,
+   published by brain-v42 as `DELIVERY_FINDING_CODES` (43 codes on 2026-09-15, listed in
+   ADR-0001 amendment 1). A red-rail test freezes that list — the list, not prefixes:
+   `review_changes_requested` and `review_approval_missing` are legitimate because the contract
+   declares the approvals they check — and fails when it moves; the test never imports
+   `brain_v42`. What brain still interprets is named in ADR-0001 amendment 2 (`_eligible_work`
+   as a non-authoritative hint, ticket lifecycle as coordination, freshness to become a
+   contract field).
 2. **red-rail stores no durable fact outside the ledger.** A `docs/receipts/*` file in a
    repository is a *mirror* of an attestation, linked by digest, never the source.
 
@@ -103,14 +110,18 @@ provider) and its *publication* are delivery, and the verdict is evidence. The *
 executes judges is the generic `headless-agents` package (brain-v42 workspace member,
 decision `1800f901`): `pydantic` only, never imports `brain_v42`, "executes, never decides" —
 every policy is data the caller supplies. red-rail depends on it as a **library pinned to a
-brain-v42 tag**, never through `brain_v42.agents` (the Dream adapter) and never by importing
-`brain_v42`. The verdict reaches `integration` as a check named in the contract's
+brain-v42 tag** — `headless-agents-v0.2.0`, the member's own tag convention, pinned as
+`git+https://github.com/hawkixs/brain-v42.git@headless-agents-v0.2.0#subdirectory=packages/headless-agents`
+(ADR-0001 amendment 8) — never through `brain_v42.agents` (the Dream adapter) and never by
+importing `brain_v42`. The verdict reaches `integration` as a check named in the contract's
 `required_checks` — a generic ledger mechanism (the contract declares, the evaluator checks
 green checks) — so brain learns no review gate. brain-v42's lot 4 shrinks to its own GitHub
 client for the observer; red-rail carries its own minimal one.
 
-The eight `codex/delivery-*` branches are triaged with these two rules (most are ledger-side:
-freshness, dependencies, API pin; `contract-admission` is the one to examine).
+The `codex/delivery-*` branches were to be triaged with these two rules; on 2026-09-15
+brain-v42 measured six of them, all merged and all ledger-side, and no `contract-admission`
+branch anywhere (ADR-0001 amendments 5–6). The admission rule stands for the future: form is
+brain's strict contract models, admissibility beyond form is red-rail's.
 
 ## 4. The rail model
 
@@ -182,6 +193,12 @@ red-rail/
 ├── skills/            # Claude Code facades: rail-design, rail-plan, rail-review, rail-release, rail-deploy
 └── tests/
 ```
+
+> Implementation note (phase 1, 2026-09-15): GitHub only calls reusable workflows from
+> `.github/workflows/`, so `rail-ci.yml` lives there; `workflows/` keeps `pre-review.js`.
+> `rail check --ci` reports the workstation-only gates (`hygiene.remotes`,
+> `hygiene.roster_entry`) as skipped, explicitly, because a CI checkout has one remote and no
+> ReD root.
 
 Four mechanisms carry everything:
 
@@ -311,6 +328,12 @@ view is what standardisation needs.
 | 1 — The rail without network | model, gates (incl. `hygiene.receipts`), `Ledger` protocol + `FileLedger`, `rail attest`, `rail metrics`, audit, scaffold, template, `rail-ci.yml`, skills | `rail audit projects/*` outputs the 24-repository matrix; a fresh scaffold passes `bootstrap`; red-rail passes `dev`; attestations and DORA work on a repository with `ledger: file` |
 | 2 — The shared ledger and the reviewer | `BrainLedger`, contract tests on both backends, `reviewer/` on `headless-agents` + `ReviewVerdict`, `pre-review.js` | idempotent attestations on brain; boundary test green; a receipt whose digest matches no attestation is reported as drift; one PR reviewed end to end by the independent reviewer with its check required |
 | 3 — red-probe | release, VPS deployment, observation, drill, metrics | `/version` equals the attested digest; red-monitor sees the container; recovery time measured; four DORA + 10/10 at `prod`; `brain_delivery_get` shows the full chain to `fulfilled` |
+
+### Success criteria
+
+The phase proofs above are the success criteria of the POC: each phase is done when its
+proof line is observed, and decision 6 (four DORA metrics, conformance score, human
+gestures — all derived from ledger evidence) is the measure of the whole.
 
 ### Non-goals of the POC
 

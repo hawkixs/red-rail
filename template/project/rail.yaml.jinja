@@ -1,0 +1,12 @@
+rail: 1
+project: {{ project }}
+brain_key: {{ brain_key }}
+tier: {{ tier }}
+stack: {{ stack }}
+ledger: file
+{%- if tier == 'prod' %}
+deploy:
+  target: {{ deploy_target }}
+  healthcheck: {{ healthcheck }}
+{%- endif %}
+gates: {}

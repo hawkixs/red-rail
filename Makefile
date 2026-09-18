@@ -1,6 +1,9 @@
 # red-rail task runner. Every target is what CI runs, nothing more.
 
-.PHONY: sync lint test check ci
+.PHONY: sync lint test check ci audit skills-install
+
+RAIL_FLAGS ?=
+DATE ?= $(shell date +%F)
 
 ## Install the project and its dev extras
 sync:
@@ -15,9 +18,21 @@ lint:
 test:
 	uv run pytest -q
 
-## Run the rail gates against this repository (dogfooding)
+## Run the rail gates against this repository (dogfooding; RAIL_FLAGS=--ci in CI)
 check:
-	uv run rail check
+	uv run rail check $(RAIL_FLAGS)
 
 ## What CI runs, in order
 ci: lint test check
+
+## Audit every ReD project and keep the dated snapshot (the drift table, versioned)
+audit:
+	mkdir -p docs/audits
+	uv run rail audit .. --json > docs/audits/$(DATE)-projects.json
+	uv run rail audit .. > docs/audits/$(DATE)-projects.md
+	uv run rail audit ..
+
+## Symlink the facade skills into ~/.claude/skills (operator's workstation)
+skills-install:
+	mkdir -p $(HOME)/.claude/skills
+	for d in skills/*/; do ln -sfn "$(CURDIR)/$$d" "$(HOME)/.claude/skills/$$(basename $$d)"; done

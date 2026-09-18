@@ -1,0 +1,175 @@
+"""Stages 5–10 read evidence from the ledger. A gate passes when the newest matching
+attestation is on HEAD's history; the distance in commits is reported so drift is
+measured. Phase 3 adds the live checks (`/version`, red-monitor); phase 1 checks the
+evidence chain itself."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+
+from rail import gitrepo
+from rail.gates import GateResult, GateSpec, Stage
+from rail.ledger import AttestationKind, LedgerError, Record, open_ledger
+from rail.model import MANIFEST_NAME, load_rail_config
+
+
+def _attestations(repo: Path, kind: AttestationKind) -> list[Record] | str:
+    """Chronological attestations of `kind`, or the reason they cannot be read."""
+    try:
+        cfg = load_rail_config(repo)
+        return open_ledger(repo).list(cfg.project, attestation=kind)
+    except (FileNotFoundError, ValidationError):
+        return f"{MANIFEST_NAME} unreadable"
+    except LedgerError as exc:
+        return str(exc)
+
+
+def _on_history(
+    stage: Stage,
+    code: str,
+    repo: Path,
+    kind: AttestationKind,
+    accept: Callable[[dict[str, Any]], str | None],
+) -> tuple[GateResult, Record | None]:
+    """Newest `kind` attestation: `accept(data)` returns a rejection reason or None; then its
+    `sha` must be present and an ancestor of HEAD. Returns the record it judged."""
+    records = _attestations(repo, kind)
+    if isinstance(records, str):
+        return GateResult(stage, code, False, records), None
+    if not records:
+        return GateResult(stage, code, False, f"no {kind.value} attestation"), None
+    newest = records[-1]
+    data = newest.data
+    label = f"{kind.value} {newest.digest[:19]}"
+    rejection = accept(data)
+    if rejection:
+        return GateResult(stage, code, False, f"{label}: {rejection}"), newest
+    sha = "" if data.get("sha") is None else str(data["sha"])
+    if not sha:
+        return GateResult(stage, code, False, f"{label}: missing sha"), newest
+    distance = gitrepo.distance(repo, sha)
+    if distance is None:
+        return GateResult(
+            stage, code, False, f"{label} for {sha[:12]} not on HEAD's history"
+        ), newest
+    return GateResult(stage, code, True, f"{label} for {sha[:12]} at distance {distance}"), newest
+
+
+def verdict(repo: Path) -> GateResult:
+    def accept(data: dict[str, Any]) -> str | None:
+        if not data.get("independent"):
+            return "pre-review from the producing session, not an independent verdict"
+        if data.get("verdict") != "approve":
+            return f"verdict is {data.get('verdict')!r}"
+        return None
+
+    return _on_history(Stage.REVIEW, "verdict", repo, AttestationKind.REVIEW_VERDICT, accept)[0]
+
+
+def integrated(repo: Path) -> GateResult:
+    return _on_history(
+        Stage.INTEGRATE, "receipt", repo, AttestationKind.INTEGRATED, lambda d: None
+    )[0]
+
+
+def released(repo: Path) -> GateResult:
+    def accept(data: dict[str, Any]) -> str | None:
+        missing = [k for k in ("version", "digest") if data.get(k) in (None, "")]
+        return f"missing {', '.join(missing)}" if missing else None
+
+    result, record = _on_history(Stage.RELEASE, "released", repo, AttestationKind.RELEASED, accept)
+    if result.passed and record is not None:
+        return GateResult(
+            result.stage, result.code, True, f"{result.details}, version {record.data['version']}"
+        )
+    return result
+
+
+def _newest(repo: Path, kind: AttestationKind) -> Record | None | str:
+    records = _attestations(repo, kind)
+    if isinstance(records, str):
+        return records
+    return records[-1] if records else None
+
+
+def deployed(repo: Path) -> GateResult:
+    release = _newest(repo, AttestationKind.RELEASED)
+    if isinstance(release, str):
+        return GateResult(Stage.DEPLOY, "deployed", False, release)
+    if release is None:
+        return GateResult(Stage.DEPLOY, "deployed", False, "no released attestation to deploy")
+    deploy = _newest(repo, AttestationKind.DEPLOYED)
+    if isinstance(deploy, str):
+        return GateResult(Stage.DEPLOY, "deployed", False, deploy)
+    if deploy is None:
+        return GateResult(Stage.DEPLOY, "deployed", False, "no deployed attestation")
+    expected = release.data.get("digest")
+    actual = deploy.data.get("digest")
+    if expected in (None, "") or actual in (None, ""):
+        side = "released" if expected in (None, "") else "deployed"
+        return GateResult(
+            Stage.DEPLOY, "deployed", False, f"the {side} attestation carries no digest to compare"
+        )
+    if actual != expected:
+        return GateResult(
+            Stage.DEPLOY,
+            "deployed",
+            False,
+            f"deployed digest {actual} differs from released {expected}",
+        )
+    return GateResult(Stage.DEPLOY, "deployed", True, f"deployed {expected} ({deploy.digest[:19]})")
+
+
+def drill(repo: Path) -> GateResult:
+    deploy = _newest(repo, AttestationKind.DEPLOYED)
+    if isinstance(deploy, str):
+        return GateResult(Stage.OBSERVE, "drill", False, deploy)
+    if deploy is None:
+        return GateResult(Stage.OBSERVE, "drill", False, "no deployed attestation to drill")
+    rollbacks = _attestations(repo, AttestationKind.ROLLED_BACK)
+    restores = _attestations(repo, AttestationKind.RESTORED)
+    if isinstance(rollbacks, str) or isinstance(restores, str):
+        return GateResult(Stage.OBSERVE, "drill", False, "ledger unreadable")
+    after = [r for r in rollbacks if r.data.get("drill") and r.recorded_at > deploy.recorded_at]
+    if not after:
+        return GateResult(
+            Stage.OBSERVE, "drill", False, "no rollback drill after the last deployment"
+        )
+    restored = [
+        r for r in restores if r.data.get("drill") and r.recorded_at > after[-1].recorded_at
+    ]
+    if not restored:
+        return GateResult(
+            Stage.OBSERVE, "drill", False, "no restored attestation after the drill's rollback"
+        )
+    return GateResult(
+        Stage.OBSERVE, "drill", True, f"drill {after[-1].digest[:19]} → {restored[-1].digest[:19]}"
+    )
+
+
+def fulfilled(repo: Path) -> GateResult:
+    deploy = _newest(repo, AttestationKind.DEPLOYED)
+    if isinstance(deploy, str):
+        return GateResult(Stage.LEARN, "fulfilled", False, deploy)
+    done = _newest(repo, AttestationKind.FULFILLED)
+    if isinstance(done, str):
+        return GateResult(Stage.LEARN, "fulfilled", False, done)
+    if done is None:
+        return GateResult(Stage.LEARN, "fulfilled", False, "no fulfilled attestation")
+    if deploy is not None and done.recorded_at < deploy.recorded_at:
+        return GateResult(Stage.LEARN, "fulfilled", False, "fulfilled predates the last deployment")
+    return GateResult(Stage.LEARN, "fulfilled", True, f"fulfilled {done.digest[:19]}")
+
+
+GATES = [
+    GateSpec(Stage.REVIEW, "verdict", verdict),
+    GateSpec(Stage.INTEGRATE, "receipt", integrated),
+    GateSpec(Stage.RELEASE, "released", released),
+    GateSpec(Stage.DEPLOY, "deployed", deployed),
+    GateSpec(Stage.OBSERVE, "drill", drill),
+    GateSpec(Stage.LEARN, "fulfilled", fulfilled),
+]

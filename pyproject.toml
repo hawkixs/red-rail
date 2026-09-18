@@ -9,6 +9,7 @@ description = "Delivery rail for the ReD ecosystem: one standard, executable gat
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.1",
+    "copier>=9.18",
     "pydantic>=2.0",
     "pyyaml>=6.0",
 ]

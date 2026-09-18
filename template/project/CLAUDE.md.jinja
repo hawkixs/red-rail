@@ -1,0 +1,113 @@
+# {{ project }} — ReD sub-project
+
+## Project
+
+{{ description }}
+
+- **Repo**: `~/hawkixs_infra/git_repo/ReD_v1/projects/{{ project }}/`
+- **GitHub (`origin`)**: `git@github.com:hawkixs/{{ project }}.git` (private, canonical)
+- **GitLab (`gitlab`)**: `ssh://git@gitlab.hawkixs.local:2222/hawkixs_project/red/{{ project }}.git` (private mirror)
+- **Brain MCP project key**: `{{ brain_key }}` (group `red`)
+- **Parent project**: ReD v1 (`~/hawkixs_infra/git_repo/ReD_v1/CLAUDE.md` — roster, cross-project rules)
+- **Rail**: tier `{{ tier }}`, stack `{{ stack }}`, ledger `file` — see `rail.yaml`; `rail check` is the verdict
+
+Published branches are pushed to both remotes and compared SHA by SHA. GitHub and GitLab share
+no atomic transaction: a push to one remote is a deliberate divergence until the second is synced.
+
+## Language
+
+Everything pushed to a remote is written in **English**: commits, branches, PRs, docs, code
+comments, test names. The conversation with the operator stays in French.
+
+## Architecture
+
+Describe the modules as they appear. Durable decisions go to `docs/adr/`.
+
+## Stack
+
+{% if stack == 'python' -%}
+Python 3.12+, uv, pytest, ruff.
+{%- elif stack == 'go' -%}
+Go 1.22+, `go test`, `go vet`, `gofmt`.
+{%- else -%}
+Documentation only (Markdown).
+{%- endif %}
+
+## Commands
+
+```bash
+make ci        # what CI runs: lint, test, check
+make test      # the test suite
+make lint      # lint and format check
+make check     # the rail gates against this repository
+```
+
+## Structure
+
+```
+{{ project }}/
+├── Makefile           # sync, lint, test, check, ci — `make ci` is exactly what CI runs
+├── rail.yaml          # this project's manifest (tier {{ tier }})
+├── docs/specs/        # design specs (dated)
+├── docs/plans/        # implementation plans (dated)
+├── docs/adr/          # architecture decision records (numbered)
+├── docs/receipts/     # the file ledger: append-only evidence, written by `rail attest`, never by hand
+{%- if stack == 'python' %}
+├── src/{{ project | replace('-', '_') }}/
+└── tests/
+{%- elif stack == 'go' %}
+├── go.mod
+└── *_test.go
+{%- else %}
+└── README.md
+{%- endif %}
+```
+
+## Working principles
+
+### Workflow
+- Brainstorm → spec → plan → implement: `rail-design` and `rail-plan` skills for the rail stages,
+  `sdd-brainstorm` / `writing-plans-parallel` / `executing-plans-parallel` for the work itself.
+  Never the built-in plan mode.
+- If it derails mid-way, **stop and re-plan immediately**.
+- TDD: write the failing test first, watch it fail, implement the minimum.
+
+### Quality pipeline before every commit
+```
+implementation done
+  → /tdd-write-tests                    (missing tests)
+  → /reflexion-reflect                  (non-trivial change only)
+  → /code-review-review-local-changes   (multi-agent review)
+  → /git-commit                         (conventional commit, English)
+```
+Skip the review for docs-only commits.
+
+### Verification before "done"
+- Never declare a task done without proof: run the tests, read the summary line, capture the
+  exit code. `rail check` must pass on this repository.
+
+### Self-improvement (brain MCP)
+- After any correction from the operator: `brain_learn(topic, insight, project_key="{{ brain_key }}")`.
+- Before solving a problem: `brain_search(query, project_key="{{ brain_key }}")`.
+
+### Core principles
+- **Build to last**: solid, tested, documented.
+- **No shortcuts**: no quick fixes, no unnecessary dependencies.
+- **Scalable**: think about twenty repositories even while proving one.
+- **From scratch**: prefer building the small thing over adopting the big platform.
+
+## Brain MCP — proactive use
+
+Project key: `{{ brain_key }}`. Use it without being asked.
+
+- **Session start**: `brain_session_start("{{ brain_key }}")`
+- **During work**: `brain_log_decision` for choices, `brain_save_snippet` for reusable code,
+  `brain_create_runbook` for procedures, `brain_learn` only for pure insights.
+- **Session end**: `brain_update_project_focus("{{ brain_key }}", current_focus="summary + next steps")`
+
+## Related projects
+
+| Project | Path | Relation |
+|---|---|---|
+| ReD (root) | `~/hawkixs_infra/git_repo/ReD_v1/` | parent, roster, cross-project rules |
+| red-rail | `projects/red-rail` | the delivery rail: `rail check`, `rail audit`, `rail upgrade` |

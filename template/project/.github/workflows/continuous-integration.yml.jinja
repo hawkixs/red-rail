@@ -1,0 +1,22 @@
+name: continuous-integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: {% raw %}${{ github.workflow }}-${{ github.ref }}{% endraw %}
+  cancel-in-progress: true
+
+jobs:
+  rail:
+    # The reusable rail workflow: the project's `make ci`, then `rail check --ci --json`.
+    uses: hawkixs/red-rail/.github/workflows/rail-ci.yml@main
+    with:
+      stack: {{ stack }}
+    secrets: inherit
