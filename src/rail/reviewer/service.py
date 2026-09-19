@@ -222,6 +222,52 @@ def _review_started(
     else:
         verdict = _merge(replies, mode, truncated)
         title = verdict.verdict
+    # Attest FIRST: GitHub must never show an approval the ledger does not hold (found by the
+    # independent reviewer on PR #3). The check run exists already (in progress), so its id is
+    # part of the attestation; the conclusion and the PR review follow the ledger's answer.
+    outcome = ReviewOutcome(
+        pr.repository, pr.number, pr.head_sha, verdict, check.id, failures=failures
+    )
+    data = verdict.as_attestation_data(
+        sha=pr.head_sha, check_run_id=check.id, repository=pr.repository, pr=pr.number
+    )
+    key = idempotency_key_for(AttestationKind.REVIEW_VERDICT, data)
+    try:
+        record = ledger.attest(
+            project,
+            AttestationKind.REVIEW_VERDICT,
+            data,
+            issuer=REVIEWER_IDENTITY,
+            idempotency_key=key,
+        )
+    except Unattested as exc:
+        replay = f"rail attest review_verdict --from {exc.receipt}"
+        failures.append(f"unattested ({exc.cause}): replay with {replay}")
+        outcome.receipt = exc.receipt
+        note = (
+            f"The judges said {verdict.verdict}, but the verdict could not be attested in the "
+            f"ledger ({exc.cause}). Replay it with `{replay}`, then re-run the review "
+            f"(label {policy.rerun_label})."
+        )
+        github.complete_check(
+            pr.repository,
+            check.id,
+            conclusion="failure",
+            title="verdict not attested",
+            summary=note,
+            text=_render(verdict),
+        )
+        github.review(
+            pr.repository,
+            pr.number,
+            commit_id=pr.head_sha,
+            event="REQUEST_CHANGES",
+            body=note + "\n\n" + _render(verdict),
+        )
+        return outcome
+    outcome.attested = True
+    if repo_path is not None:
+        outcome.receipt = repo_path / RECEIPTS_DIR / receipt_filename(record)
     conclusion = "success" if verdict.verdict == "approve" else "failure"
     github.complete_check(
         pr.repository,
@@ -240,27 +286,7 @@ def _review_started(
     )
     if policy.rerun_label in pr.labels:
         github.remove_label(pr.repository, pr.number, policy.rerun_label)
-    outcome = ReviewOutcome(
-        pr.repository, pr.number, pr.head_sha, verdict, check.id, failures=failures
-    )
-    data = verdict.as_attestation_data(
-        sha=pr.head_sha, check_run_id=check.id, repository=pr.repository, pr=pr.number
-    )
-    key = idempotency_key_for(AttestationKind.REVIEW_VERDICT, data)
-    try:
-        record = ledger.attest(
-            project,
-            AttestationKind.REVIEW_VERDICT,
-            data,
-            issuer=REVIEWER_IDENTITY,
-            idempotency_key=key,
-        )
-    except Unattested as exc:
-        failures.append(
-            f"unattested ({exc.cause}): replay with rail attest review_verdict --from {exc.receipt}"
-        )
-        outcome.receipt = exc.receipt
-        return outcome
+    return outcome
     outcome.attested = True
     if repo_path is not None:
         outcome.receipt = repo_path / RECEIPTS_DIR / receipt_filename(record)

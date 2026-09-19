@@ -49,6 +49,9 @@ class ReviewPolicy(BaseModel):
     # bytes of prompt a provider accepts: agy takes its prompt in argv (headless-agents refuses
     # more than 120000 bytes); codex and claude read stdin
     prompt_limits: dict[str, int] = Field(default_factory=lambda: {"agy": 115_000})
+    # when no trailer names the producer, the ecosystem's default producer is still excluded:
+    # ReD's sessions are Claude Code (found by the independent reviewer on PR #3)
+    unknown_producer_excludes: tuple[Provider, ...] = ("claude",)
     timeout_seconds: float = Field(default=600.0, gt=0)
     check_name: str = "red-rail/review"
     rerun_label: str = "rail-review:rerun"
@@ -63,8 +66,9 @@ class ReviewPolicy(BaseModel):
         return self
 
     def chain_for(self, *, producer: Provider | None) -> tuple[Provider, ...]:
-        """Never the producer's provider."""
-        return tuple(p for p in self.providers if p != producer)
+        """Never the producer's provider; an unknown producer excludes the usual suspects."""
+        excluded = {producer} if producer else set(self.unknown_producer_excludes)
+        return tuple(p for p in self.providers if p not in excluded)
 
     def mode_for(self, pr: PullRequest, *, docs_only: bool) -> Mode:
         if docs_only or pr.changed_lines <= self.light_max_changed_lines:

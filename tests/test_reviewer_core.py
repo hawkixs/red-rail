@@ -69,7 +69,10 @@ def test_producer_provider_is_read_from_the_trailers() -> None:
 def test_chain_for_a_pr_never_includes_the_producer() -> None:
     policy = default_policy()
     assert policy.chain_for(producer="claude") == ("agy", "codex")
-    assert policy.chain_for(producer=None) == ("agy", "codex", "claude")
+    # an unknown producer excludes the ecosystem's default producer (sessions are Claude Code):
+    # found by the independent reviewer (PR #3, third pass)
+    assert policy.chain_for(producer=None) == ("agy", "codex")
+    assert policy.unknown_producer_excludes == ("claude",)
     assert policy.mode_for(PR, docs_only=False) == "light"
     big = replace(PR, additions=500)
     assert policy.mode_for(big, docs_only=False) == "deep"
@@ -244,3 +247,15 @@ def test_agy_credentials_are_the_ones_the_neighbours_symlink() -> None:
         ".gemini/gemini-credentials.json",
         ".gemini/antigravity-cli/antigravity-oauth-token",
     )
+
+
+def test_the_agy_profile_carries_its_credentials(tmp_path: Path) -> None:
+    """Measured on PR #3 (third pass): AgyProvider builds its own ephemeral home from
+    `spec.profile.credentials`, so credentials on the seat alone leave agy unauthenticated."""
+    from rail.reviewer.judges import CREDENTIALS, build_spec
+
+    policy = default_policy()
+    spec = build_spec(PR, "prompt", policy, provider="agy", tier="light", root=tmp_path)
+    assert spec.profile.credentials == CREDENTIALS["agy"] and spec.profile.guard is not None
+    spec = build_spec(PR, "prompt", policy, provider="codex", tier="light", root=tmp_path)
+    assert spec.profile.credentials.paths == ()

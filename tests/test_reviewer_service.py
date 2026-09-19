@@ -184,7 +184,8 @@ def test_deep_review_escalates_on_disagreement_and_the_deep_judge_wins(tmp_path:
         run_judge=run_judge,
         root=tmp_path,
     )
-    assert seen == [("agy", "light"), ("codex", "light"), ("claude", "deep")]
+    # unknown producer → claude excluded; the deep judge falls back to the head of the chain
+    assert seen == [("agy", "light"), ("codex", "light"), ("agy", "deep")]
     assert outcome.verdict.verdict == "request_changes" and outcome.verdict.mode == "deep"
     assert ("complete", 99, "failure", "request_changes") in github.calls
     assert ("review", 7, "REQUEST_CHANGES") in github.calls
@@ -284,7 +285,11 @@ def test_an_unattested_verdict_is_reported_not_fatal(tmp_path: Path) -> None:
         root=tmp_path,
     )
     assert not outcome.attested and "delivery_disabled" in outcome.failures[-1]
-    assert ("complete", 99, "success", "approve") in github.calls
+    # found by the independent reviewer (PR #3, third pass): never an approval GitHub shows
+    # that the ledger does not hold — the check fails and no APPROVE is posted
+    assert ("complete", 99, "failure", "verdict not attested") in github.calls
+    assert ("review", 7, "REQUEST_CHANGES") in github.calls
+    assert ("review", 7, "APPROVE") not in github.calls
 
 
 def test_a_crash_after_the_check_started_completes_it_as_failure(tmp_path: Path) -> None:

@@ -150,7 +150,10 @@ def build_spec(
     name = f"review-{pr.repository.replace('/', '-')}-{pr.number}-{pr.head_sha[:7]}-{provider}"
     home = _seat(root, name, provider)
     profile = (
-        CapabilityProfile(guard=ToolGuard(path=GUARD)) if provider == "agy" else CapabilityProfile()
+        # AgyProvider builds its own ephemeral home from the profile's credentials
+        CapabilityProfile(guard=ToolGuard(path=GUARD), credentials=CREDENTIALS["agy"])
+        if provider == "agy"
+        else CapabilityProfile()
     )
     return RunSpec(
         prompt=prompt,
