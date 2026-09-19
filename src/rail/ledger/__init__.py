@@ -301,12 +301,16 @@ def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
     cfg = load_rail_config(repo)
     if cfg.ledger is LedgerBackend.FILE:
         return FileLedger(repo / RECEIPTS_DIR)
-    try:
-        from rail.brain.client import BrainClient
-        from rail.brain.settings import BrainSettings
-        from rail.ledger.brain import BrainLedger
-    except ImportError as exc:
-        raise LedgerUnavailable("ledger 'brain' needs the extra: uv sync --extra brain") from exc
+    import importlib.util
+
+    # the client imports fastmcp lazily (found by the independent reviewer on PR #3): the
+    # extra is checked here, so a missing dependency is a LedgerUnavailable, not a traceback
+    if importlib.util.find_spec("fastmcp") is None:
+        raise LedgerUnavailable("ledger 'brain' needs the extra: uv sync --extra brain")
+    from rail.brain.client import BrainClient
+    from rail.brain.settings import BrainSettings
+    from rail.ledger.brain import BrainLedger
+
     if client is None:
         from rail.private import PrivateFileError
 

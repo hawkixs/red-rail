@@ -122,7 +122,10 @@ class FileLedger:
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.path_of(record)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
+        tmp.write_text(
+            json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         os.replace(tmp, path)
         return record
 
@@ -170,6 +173,9 @@ class FileLedger:
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / receipt_filename(record)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
+        tmp.write_text(
+            json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         os.replace(tmp, path)
         return record

@@ -12,6 +12,7 @@ from rail.ledger import (
     AttestationKind,
     Ledger,
     LedgerError,
+    LedgerUnavailable,
     RequiredCheck,
     open_ledger,
 )
@@ -213,3 +214,23 @@ def test_contract_and_deliverable_carry_the_brain_fields() -> None:
     assert dumped["deliverables"][0]["no_checks_reason"] is None
     with pytest.raises(ValidationError):
         Contract.model_validate({**dumped, "acceptance_mode": "later"})
+
+
+def test_open_ledger_brain_without_the_extra_is_unavailable_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Found by the independent reviewer (PR #3, fifth pass): the client imports fastmcp
+    lazily, so the ImportError guard around the rail modules never fired."""
+    import importlib.util
+
+    (tmp_path / "rail.yaml").write_text(
+        MANIFEST + "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+    )
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a, **k: None if name == "fastmcp" else real_find_spec(name, *a, **k),
+    )
+    with pytest.raises(LedgerUnavailable, match="uv sync --extra brain"):
+        open_ledger(tmp_path)
