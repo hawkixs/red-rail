@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from rail.gates import Stage
 from rail.gates.hygiene import (
     GATES,
@@ -31,8 +33,10 @@ def test_registry_order_and_scopes() -> None:
         "remotes",
         "roster_entry",
         "receipts",
+        "mirrors",
     ]
     assert {g.code for g in GATES if g.scope == "workstation"} == {"remotes", "roster_entry"}
+    assert {g.code for g in GATES if g.scope == "ledger"} == {"mirrors"}
     assert all(g.stage is Stage.HYGIENE for g in GATES)
 
 
@@ -198,3 +202,53 @@ def test_make_targets_reads_multi_target_lines(tmp_path: Path) -> None:
     (repo / "Makefile").write_text(".PHONY: build ci\nbuild ci: deps\n\t@true\ndeps:\n\t@true\n")
     assert make_targets(repo) == {"build", "ci", "deps"}
     assert task_runner(repo).passed
+
+
+def test_mirrors_is_vacuous_on_the_file_ledger(tmp_path: Path) -> None:
+    from rail.gates.hygiene import mirrors
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    result = mirrors(repo)
+    assert result.passed and "file ledger" in result.details
+
+
+def test_mirrors_reports_a_receipt_absent_from_the_shared_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rail.gates import hygiene
+    from rail.ledger import RECEIPTS_DIR, AttestationKind
+    from rail.ledger.file import FileLedger
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    manifest = (repo / "rail.yaml").read_text()
+    (repo / "rail.yaml").write_text(
+        manifest.replace(
+            "ledger: file\n", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+        )
+    )
+    local = FileLedger(repo / RECEIPTS_DIR)
+    kept = local.attest(
+        "red-alpha", AttestationKind.DEPLOYED, {"sha": "a" * 40}, issuer="op", idempotency_key="d1"
+    )
+    stray = local.attest(
+        "red-alpha", AttestationKind.RELEASED, {"version": "1"}, issuer="op", idempotency_key="r1"
+    )
+
+    class SharedLedger:
+        def list(self, project, *, kind=None, attestation=None):
+            return [kept]
+
+    monkeypatch.setattr(hygiene, "open_ledger", lambda repo: SharedLedger())
+    result = hygiene.mirrors(repo)
+    assert not result.passed
+    assert "mirror without attestation" in result.details and stray.digest[7:19] in result.details
+
+    class DownLedger:
+        def list(self, project, *, kind=None, attestation=None):
+            from rail.ledger import LedgerError
+
+            raise LedgerError("brain unreachable: down")
+
+    monkeypatch.setattr(hygiene, "open_ledger", lambda repo: DownLedger())
+    result = hygiene.mirrors(repo)
+    assert not result.passed and "brain unreachable" in result.details

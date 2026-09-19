@@ -5,8 +5,8 @@
       "exceptions": [],
       "name": "red-alpha",
       "score": {
-        "applicable": 10,
-        "passed": 10
+        "applicable": 11,
+        "passed": 11
       },
       "stages": {
         "build": "n/a",
@@ -29,8 +29,8 @@
       "exceptions": [],
       "name": "red-beta",
       "score": {
-        "applicable": 17,
-        "passed": 17
+        "applicable": 18,
+        "passed": 18
       },
       "stages": {
         "build": "pass",
@@ -53,7 +53,7 @@
       "exceptions": [],
       "name": "red-delta",
       "score": {
-        "applicable": 10,
+        "applicable": 11,
         "passed": 3
       },
       "stages": {
@@ -79,8 +79,8 @@
       ],
       "name": "red-gamma",
       "score": {
-        "applicable": 21,
-        "passed": 17
+        "applicable": 22,
+        "passed": 18
       },
       "stages": {
         "build": "pass",

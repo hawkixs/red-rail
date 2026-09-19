@@ -33,4 +33,4 @@ def contract(repo: Path) -> GateResult:
     )
 
 
-GATES = [GateSpec(Stage.INTENT, "contract", contract)]
+GATES = [GateSpec(Stage.INTENT, "contract", contract, scope="ledger")]

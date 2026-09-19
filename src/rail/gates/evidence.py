@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 from pydantic import ValidationError
 
@@ -33,9 +32,9 @@ def _on_history(
     code: str,
     repo: Path,
     kind: AttestationKind,
-    accept: Callable[[dict[str, Any]], str | None],
+    accept: Callable[[Record], str | None],
 ) -> tuple[GateResult, Record | None]:
-    """Newest `kind` attestation: `accept(data)` returns a rejection reason or None; then its
+    """Newest `kind` attestation: `accept(record)` returns a rejection reason or None; then its
     `sha` must be present and an ancestor of HEAD. Returns the record it judged."""
     records = _attestations(repo, kind)
     if isinstance(records, str):
@@ -45,7 +44,7 @@ def _on_history(
     newest = records[-1]
     data = newest.data
     label = f"{kind.value} {newest.digest[:19]}"
-    rejection = accept(data)
+    rejection = accept(newest)
     if rejection:
         return GateResult(stage, code, False, f"{label}: {rejection}"), newest
     sha = "" if data.get("sha") is None else str(data["sha"])
@@ -60,11 +59,18 @@ def _on_history(
 
 
 def verdict(repo: Path) -> GateResult:
-    def accept(data: dict[str, Any]) -> str | None:
+    from rail.policy import effective
+
+    expected, _ = effective(repo, "review.reviewer_identity")
+
+    def accept(record: Record) -> str | None:
+        data = record.data
         if not data.get("independent"):
             return "pre-review from the producing session, not an independent verdict"
         if data.get("verdict") != "approve":
             return f"verdict is {data.get('verdict')!r}"
+        if record.issuer != expected:
+            return f"issued by {record.issuer!r}, not {expected!r}"
         return None
 
     return _on_history(Stage.REVIEW, "verdict", repo, AttestationKind.REVIEW_VERDICT, accept)[0]
@@ -72,12 +78,13 @@ def verdict(repo: Path) -> GateResult:
 
 def integrated(repo: Path) -> GateResult:
     return _on_history(
-        Stage.INTEGRATE, "receipt", repo, AttestationKind.INTEGRATED, lambda d: None
+        Stage.INTEGRATE, "receipt", repo, AttestationKind.INTEGRATED, lambda r: None
     )[0]
 
 
 def released(repo: Path) -> GateResult:
-    def accept(data: dict[str, Any]) -> str | None:
+    def accept(record: Record) -> str | None:
+        data = record.data
         missing = [k for k in ("version", "digest") if data.get(k) in (None, "")]
         return f"missing {', '.join(missing)}" if missing else None
 
@@ -166,10 +173,10 @@ def fulfilled(repo: Path) -> GateResult:
 
 
 GATES = [
-    GateSpec(Stage.REVIEW, "verdict", verdict),
-    GateSpec(Stage.INTEGRATE, "receipt", integrated),
-    GateSpec(Stage.RELEASE, "released", released),
-    GateSpec(Stage.DEPLOY, "deployed", deployed),
-    GateSpec(Stage.OBSERVE, "drill", drill),
-    GateSpec(Stage.LEARN, "fulfilled", fulfilled),
+    GateSpec(Stage.REVIEW, "verdict", verdict, scope="ledger"),
+    GateSpec(Stage.INTEGRATE, "receipt", integrated, scope="ledger"),
+    GateSpec(Stage.RELEASE, "released", released, scope="ledger"),
+    GateSpec(Stage.DEPLOY, "deployed", deployed, scope="ledger"),
+    GateSpec(Stage.OBSERVE, "drill", drill, scope="ledger"),
+    GateSpec(Stage.LEARN, "fulfilled", fulfilled, scope="ledger"),
 ]
