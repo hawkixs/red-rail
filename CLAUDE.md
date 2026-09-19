@@ -61,8 +61,8 @@ comments, test names. The conversation with the operator stays in French.
   seat, `guard.sh` for agy), `github.py` (minimal App client), `service.py` (one review per head
   SHA, fail-closed, verdict attested), `config.py` (`~/.config/red-rail/reviewer.yaml`).
 - `src/rail/commands/` — one module per command, auto-discovered by `src/rail/cli.py`:
-  `check`, `attest`, `contract`, `ledger`, `audit`, `metrics`, `new`, `upgrade`, `brain`
-  (`ping`), `reviewer` (`once`, `run`). Exit code is the verdict; `--json` is the contract for
+  `check`, `attest`, `bind` (the PR to the contract, at its opening), `contract`, `ledger`,
+  `audit`, `metrics`, `new`, `upgrade`, `brain` (`ping`), `reviewer` (`once`, `run`). Exit code is the verdict; `--json` is the contract for
   machines.
 - `src/rail/audit.py` (repository × stage matrix, golden-tested), `src/rail/metrics.py` (four
   DORA metrics + conformance from the ledger), `src/rail/scaffold.py` (copier: `copier.yml` at
@@ -89,6 +89,7 @@ uv run pytest -q               # tests
 uv run ruff check src/ tests/  # lint
 uv run rail check              # the rail gates against this repository
 uv run rail brain ping         # brain-v42 reachable with the private token, as this project?
+uv run rail bind --pr N        # bind the pull request to the delivery contract, right after `gh pr create`
 uv run rail reviewer once      # one pass of the independent reviewer (host only)
 make audit                     # dated drift snapshot of the sibling projects (docs/audits/)
 make contracts-check           # vendored brain-v42 contracts equal the pinned tag
