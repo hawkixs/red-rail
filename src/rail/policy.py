@@ -68,6 +68,21 @@ GATE_DEFAULTS: dict[str, Any] = {
         "style",
         "revert",
     ),
+    # --- deploy target `vps-traefik` (spec §6 steps 7–8), measured on the border VPS on
+    # 2026-09-19: Traefik v2.11 docker provider, exposedByDefault=false, entrypoint
+    # `websecure`, certresolver `letsencrypt`, external network `pls_project_default`;
+    # stacks under /opt/<name>/releases/<version> with a `current` symlink (red-gift) ---
+    "deploy.ssh_host": "red-vps",
+    "deploy.stack_root": "/opt",
+    "deploy.traefik_network": "pls_project_default",
+    "deploy.cert_resolver": "letsencrypt",
+    "deploy.image_repository": "ghcr.io/hawkixs/{project}",  # decision 8faab5a3
+    "deploy.platform": "linux/amd64",
+    "deploy.healthcheck_timeout_seconds": 120,  # the first deployment waits for its certificate
+    "deploy.compose_path": "deploy/compose.yaml",  # in the project, read at the released commit
+    # --- observe (spec §6 step 8): the red-monitor server and the agent watching the target ---
+    "observe.monitor_url": "http://10.100.0.2:8081",
+    "observe.monitor_agent": "vps",
 }
 
 
@@ -96,3 +111,12 @@ def effective(repo: Path, key: str) -> tuple[Any, str | None]:
     if override is None:
         return default, None
     return override.value, override.reason
+
+
+def parameter(repo: Path, key: str, *, project: str | None = None) -> Any:
+    """`effective()` without the reason; `{project}` is expanded in string values so a
+    default can name the project (`ghcr.io/hawkixs/{project}`)."""
+    value, _ = effective(repo, key)
+    if isinstance(value, str) and project is not None:
+        return value.format(project=project)
+    return value

@@ -14,6 +14,13 @@ Attestation payload conventions read by the gates and by `rail metrics`:
   verdict      "approve" | "request_changes" — review_verdict only
   version      released; digest — released and deployed (artefact digest)
   drill        bool — rolled_back / restored produced by the rollback drill
+  target       deployed / rolled_back / restored / incident_detected — the manifest's deploy target
+  mode         deployed only: "release" (default — a change), "rollback" (the previous artefact
+               put back), "drill" (the roll-forward closing a drill); the newest `deployed`
+               record always names the live digest
+  version, image, domain, previous_digest   deployed — what went live and what it replaced
+  from_digest, to_digest, automatic, reason  rolled_back — the failed artefact names itself
+  recovery_seconds  restored — integer seconds since the incident (drill or real)
 
 Idempotency keys are deterministic per event (`idempotency_key_for`): facts about a commit
 are keyed by the commit, an artefact by its version, a recurring event by target, digest
