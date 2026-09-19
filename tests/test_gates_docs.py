@@ -44,7 +44,11 @@ def test_intent_passes_with_a_contract(tmp_path: Path) -> None:
 
 def test_intent_reports_an_unavailable_backend(tmp_path: Path) -> None:
     repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
-    text = (repo / "rail.yaml").read_text().replace("ledger: file", "ledger: brain")
+    text = (
+        (repo / "rail.yaml")
+        .read_text()
+        .replace("ledger: file", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f")
+    )
     (repo / "rail.yaml").write_text(text)
     result = contract(repo)
     assert not result.passed and "phase 2" in result.details

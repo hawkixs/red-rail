@@ -226,7 +226,9 @@ def test_attest_from_replays_a_receipt(tmp_path: Path) -> None:
 def test_attest_refuses_a_brain_ledger_in_phase_1(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "rail.yaml").write_text(
-        (repo / "rail.yaml").read_text().replace("ledger: file", "ledger: brain")
+        (repo / "rail.yaml")
+        .read_text()
+        .replace("ledger: file", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f")
     )
     out = CliRunner().invoke(main, ["attest", "fulfilled", "--repo", str(repo)])
     assert out.exit_code == 1 and "phase 2" in out.output

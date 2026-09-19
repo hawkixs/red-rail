@@ -134,7 +134,9 @@ def test_required_check_names_its_publisher() -> None:
 
 
 def test_open_ledger_refuses_brain_until_phase_2(tmp_path: Path) -> None:
-    (tmp_path / "rail.yaml").write_text(MANIFEST + "ledger: brain\n")
+    (tmp_path / "rail.yaml").write_text(
+        MANIFEST + "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+    )
     with pytest.raises(LedgerUnavailable, match="phase 2"):
         open_ledger(tmp_path)
 

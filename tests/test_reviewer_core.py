@@ -1,6 +1,7 @@
 """Policy as data, an enum-valued verdict, judges that read the PR as data and fail closed."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -70,7 +71,7 @@ def test_chain_for_a_pr_never_includes_the_producer() -> None:
     assert policy.chain_for(producer="claude") == ("agy", "codex")
     assert policy.chain_for(producer=None) == ("agy", "codex", "claude")
     assert policy.mode_for(PR, docs_only=False) == "light"
-    big = PullRequest(**{**PR.__dict__, "additions": 500})
+    big = replace(PR, additions=500)
     assert policy.mode_for(big, docs_only=False) == "deep"
     assert policy.mode_for(big, docs_only=True) == "light"
 
