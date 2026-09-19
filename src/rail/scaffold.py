@@ -78,7 +78,7 @@ BOOTSTRAP_SPEC = """# {slug} — Bootstrap design
 
 | # | Decision |
 |---|---|
-| 1 | Tier `{tier}`, stack `{stack}`, ledger `file` (`rail.yaml`) |
+| 1 | Tier `{tier}`, stack `{stack}`, ledger `{ledger}` (`rail.yaml`) |
 | 2 | Canonical remote GitHub `hawkixs/{slug}`, mirror GitLab `hawkixs_project/red/{slug}` |
 
 ## 3. Non-goals
@@ -121,6 +121,7 @@ def write_bootstrap_spec(project: NewProject, *, today: date | None = None) -> P
             description=project.description,
             tier=project.tier.value,
             stack=project.stack.value,
+            ledger=project.ledger.value,
         )
     )
     return path
