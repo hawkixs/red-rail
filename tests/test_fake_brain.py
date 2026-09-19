@@ -91,7 +91,7 @@ def _ready(brain: FakeBrain) -> str:
         brain,
         "brain_delivery_contract_set",
         ticket_id=ticket,
-        actor_project="red-probe",
+        actor_project="red",  # the requester sets the contract (brain's rule)
         contract=CONTRACT,
         expected_revision=0,
         idempotency_key="c1",

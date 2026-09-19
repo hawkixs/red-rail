@@ -380,3 +380,27 @@ def test_open_ledger_builds_the_brain_backend_from_the_manifest(
     monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "missing"))
     with pytest.raises(LedgerError, match="token"):
         open_ledger(repo)
+
+
+def test_the_contract_is_set_by_the_requester_never_by_the_executor(tmp_path: Path) -> None:
+    """brain: "only the requester may set a delivery contract" — the canonical ticket is
+    `red → <project>`, so the rail sets the contract as `red` and attests as the project."""
+    ledger, brain, ticket = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    call = next(c for c in brain.calls if c[0] == "brain_delivery_contract_set")
+    assert call[1]["actor"] == "red" and ledger.requester == "red"
+    ledger.attest(
+        "red-probe", AttestationKind.DEPLOYED, {"sha": "b" * 40}, issuer="op", idempotency_key="d1"
+    )
+    assert brain.attestations[-1]["issuer_project"] == "red-probe"
+    executor = BrainLedger(
+        ledger.client,
+        ticket=ticket,
+        project="red-probe",
+        receipts_dir=tmp_path / "other" / RECEIPTS_DIR,
+        requester="red-probe",
+    )
+    with pytest.raises(LedgerError, match="not_allowed"):
+        executor.contract_set("red-probe", CONTRACT, reason="x", issuer="op", idempotency_key="c9")

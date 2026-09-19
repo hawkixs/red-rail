@@ -267,10 +267,12 @@ class FakeBrain:
             idempotency_key: str,
             reason: str,
         ) -> dict[str, Any]:
-            brain.calls.append(("brain_delivery_contract_set", {"ticket_id": ticket_id}))
+            brain.calls.append(
+                ("brain_delivery_contract_set", {"ticket_id": ticket_id, "actor": actor_project})
+            )
             ticket = brain._ticket(ticket_id)
-            if not ticket.participant(actor_project):
-                raise refuse("not_allowed")
+            if actor_project != ticket.from_project:  # brain: "only the requester may set"
+                raise refuse("not_allowed", "only the requester may set a delivery contract")
             for revision in ticket.revisions:
                 if revision["idempotency_key"] == idempotency_key:
                     return revision

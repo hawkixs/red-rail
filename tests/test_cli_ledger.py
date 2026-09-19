@@ -324,3 +324,60 @@ def test_contract_set_accepts_priority_and_acceptance_mode(tmp_path: Path) -> No
     assert out.exit_code == 0, out.output
     contract = json.loads(out.output)["payload"]["contract"]
     assert contract["priority"] == 7 and contract["acceptance_mode"] == "automatic"
+
+
+def test_contract_set_names_required_checks_and_reviewers(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    out = CliRunner().invoke(
+        main,
+        [
+            "contract",
+            "set",
+            "--repo",
+            str(repo),
+            "--objective",
+            "x",
+            "--reason",
+            "r",
+            "--required-check",
+            "check_run:red-rail/review@red-rail-reviewer",
+            "--required-check",
+            "commit_status:ci/build#15368",
+            "--allowed-reviewer",
+            "red-rail-reviewer[bot]",
+            "--required-approvals",
+            "1",
+            "--json",
+        ],
+    )
+    assert out.exit_code == 0, out.output
+    deliverable = json.loads(out.output)["payload"]["contract"]["deliverables"][0]
+    assert deliverable["required_checks"] == [
+        {
+            "kind": "check_run",
+            "name": "red-rail/review",
+            "app_slug": "red-rail-reviewer",
+            "provider_id": None,
+        },
+        {"kind": "commit_status", "name": "ci/build", "app_slug": None, "provider_id": 15368},
+    ]
+    assert deliverable["review"] == {
+        "required_approvals": 1,
+        "allowed_reviewers": ["red-rail-reviewer[bot]"],
+    }
+    bad = CliRunner().invoke(
+        main,
+        [
+            "contract",
+            "set",
+            "--repo",
+            str(repo),
+            "--objective",
+            "x",
+            "--reason",
+            "r",
+            "--required-check",
+            "red-rail/review",
+        ],
+    )
+    assert bad.exit_code == 2 and "KIND:NAME@APP_SLUG" in bad.output

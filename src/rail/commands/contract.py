@@ -12,10 +12,20 @@ from pydantic import ValidationError
 from rail import gitrepo
 from rail.commands._options import json_option, repo_option
 from rail.commands.attest import echo_record
-from rail.ledger import Contract, Deliverable, LedgerError, open_ledger
+from rail.ledger import (
+    Contract,
+    Deliverable,
+    LedgerError,
+    RequiredCheck,
+    ReviewPolicy,
+    open_ledger,
+)
 from rail.model import load_rail_config
 
 _GITHUB_SLUG = re.compile(r"github\.com[:/](?P<slug>[^/\s]+/[^/\s]+?)(?:\.git)?$")
+_CHECK = re.compile(
+    r"^(?P<kind>check_run|commit_status):(?P<name>[^@#]+)(?:@(?P<app>[^#]+)|#(?P<provider>\d+))$"
+)
 
 
 def canonical_slug(repo: Path) -> str | None:
@@ -27,10 +37,34 @@ def canonical_slug(repo: Path) -> str | None:
     return None
 
 
-def parse_deliverable(spec: str) -> Deliverable:
-    """`owner/name[:key]` → Deliverable on `main`."""
+def parse_required_check(spec: str) -> RequiredCheck:
+    """`check_run:NAME@APP_SLUG` or `commit_status:NAME#PROVIDER_ID` (ADR-0001 am. 4)."""
+    match = _CHECK.match(spec)
+    if not match:
+        raise click.BadParameter(f"{spec!r}: expected KIND:NAME@APP_SLUG or KIND:NAME#PROVIDER_ID")
+    return RequiredCheck(
+        kind=match["kind"],
+        name=match["name"],
+        app_slug=match["app"],
+        provider_id=int(match["provider"]) if match["provider"] else None,
+    )
+
+
+def parse_deliverable(
+    spec: str,
+    *,
+    required_checks: list[RequiredCheck] | None = None,
+    review: ReviewPolicy | None = None,
+) -> Deliverable:
+    """`owner/name[:key]` → Deliverable on `main`, with the checks and the review policy every
+    deliverable of this contract shares."""
     repository, _, key = spec.partition(":")
-    return Deliverable(key=key or "main", repository=repository)
+    return Deliverable(
+        key=key or "main",
+        repository=repository,
+        required_checks=list(required_checks or []),
+        review=review or ReviewPolicy(),
+    )
 
 
 @click.group("contract")
@@ -52,6 +86,20 @@ def command() -> None:
 @click.option("--reason", required=True, help="Why this contract (or this amendment) exists.")
 @click.option("--issuer", default="operator", show_default=True)
 @click.option("--key", "idempotency_key", help="Idempotency key (default: contract:<project>:<n>).")
+@click.option(
+    "--required-check",
+    "required_checks",
+    multiple=True,
+    help="KIND:NAME@APP_SLUG or KIND:NAME#PROVIDER_ID (repeatable), e.g. "
+    "check_run:red-rail/review@red-rail-reviewer.",
+)
+@click.option(
+    "--allowed-reviewer",
+    "allowed_reviewers",
+    multiple=True,
+    help="GitHub login whose approval counts (repeatable), e.g. red-rail-reviewer[bot].",
+)
+@click.option("--required-approvals", type=click.IntRange(0, 100), default=1, show_default=True)
 @click.option("--priority", type=click.IntRange(0, 10000), default=0, show_default=True)
 @click.option(
     "--acceptance-mode",
@@ -72,11 +120,18 @@ def set_(
     reason: str,
     issuer: str,
     idempotency_key: str | None,
+    required_checks: tuple[str, ...],
+    allowed_reviewers: tuple[str, ...],
+    required_approvals: int,
     priority: int,
     acceptance_mode: str,
     as_json: bool,
 ) -> None:
     """Create or amend the project's delivery contract in the ledger."""
+    checks = [parse_required_check(spec) for spec in required_checks]
+    review = ReviewPolicy(
+        required_approvals=required_approvals, allowed_reviewers=list(allowed_reviewers)
+    )
     if not deliverables:
         slug = canonical_slug(repo)
         if slug is None:
@@ -89,7 +144,9 @@ def set_(
             objective=objective,
             acceptance_criteria=list(criteria),
             constraints=list(constraints),
-            deliverables=[parse_deliverable(d) for d in deliverables],
+            deliverables=[
+                parse_deliverable(d, required_checks=checks, review=review) for d in deliverables
+            ],
             priority=priority,
             acceptance_mode=acceptance_mode,
         )

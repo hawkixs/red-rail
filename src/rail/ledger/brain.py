@@ -32,6 +32,9 @@ from rail.ledger import (
 from rail.ledger.file import FileLedger
 
 MILESTONE_ISSUER = "brain-v42"
+# The canonical delivery ticket is `red → <project>`: brain lets only the requester set the
+# contract, while attestations and bindings are the executor's (the project's).
+REQUESTER = "red"
 PAGE = 100
 KNOWN_REFUSALS: frozenset[str] = frozenset(
     {
@@ -99,10 +102,12 @@ class BrainLedger:
         receipts_dir: Path,
         clock: Callable[[], datetime] | None = None,
         repository_id: Callable[[str], int] | None = None,
+        requester: str = REQUESTER,
     ) -> None:
         self.client = client
         self.ticket = UUID(str(ticket))
         self.project = project
+        self.requester = requester
         self.mirrors = FileLedger(receipts_dir, clock=clock)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._repository_id = repository_id or _gh_repository_id
@@ -115,11 +120,11 @@ class BrainLedger:
         self._same(project)
         view = self._view(required=False)
         expected = int(view["contract"]["contract_revision"]) if view else 0
-        row = self._call(
+        row = self._call_checked(
             "brain_delivery_contract_set",
             {
                 "ticket_id": str(self.ticket),
-                "actor_project": project,
+                "actor_project": self.requester,
                 "contract": contract.model_dump(mode="json"),
                 "expected_revision": expected,
                 "idempotency_key": idempotency_key,
@@ -148,7 +153,7 @@ class BrainLedger:
         if deliverable is None:
             raise LedgerError(f"{pr.repository} is not a deliverable of the contract")
         repository_id = deliverable.get("repository_id") or self._repository_id(pr.repository)
-        row = self._call(
+        row = self._call_checked(
             "brain_delivery_bind_pr",
             {
                 "ticket_id": str(self.ticket),
@@ -252,6 +257,18 @@ class BrainLedger:
         self, name: str, arguments: dict[str, Any], *, agent: str | None = None
     ) -> dict[str, Any]:
         return self.client.call(name, arguments, agent=agent)
+
+    def _call_checked(
+        self, name: str, arguments: dict[str, Any], *, agent: str | None = None
+    ) -> dict[str, Any]:
+        """A refusal or an unreachable brain is a `LedgerError` for the callers that have
+        nothing to replay (contract, binding); `attest` keeps the codes for `Unattested`."""
+        try:
+            return self._call(name, arguments, agent=agent)
+        except BrainToolError as exc:
+            raise LedgerError(f"{name}: {exc}") from exc
+        except BrainUnreachable as exc:
+            raise LedgerError(f"brain unreachable: {exc}") from exc
 
     def _view(self, *, required: bool) -> dict[str, Any] | None:
         try:
