@@ -74,6 +74,7 @@ def test_run_gates_returns_one_result_per_gate_and_never_raises(
         "integrate.receipt",
         "release.released",
         "deploy.deployed",
+        "observe.visible",
         "observe.drill",
         "learn.fulfilled",
     ]

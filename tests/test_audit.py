@@ -73,7 +73,7 @@ def test_audit_project_scores_against_the_declared_tier(tmp_path: Path) -> None:
     )
     assert [s.status for s in alpha.stages] == ["pass", "pass", "pass"] + ["n/a"] * 8
     gamma = audit_project(projects / "red-gamma")
-    assert (gamma.passed, gamma.applicable) == (18, 22)
+    assert (gamma.passed, gamma.applicable) == (18, 23)
     assert gamma.exceptions == ["review.verdict: reviewer arrives in phase 2"]
     assert {s.stage: s.status for s in gamma.stages}["review"] == "exception"
     delta = audit_project(projects / "red-delta")
