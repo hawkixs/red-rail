@@ -276,3 +276,16 @@ def test_parse_verdict_survives_braces_around_the_json_object() -> None:
     )
     reply = parse_verdict(nested)
     assert reply is not None and reply.findings[0].evidence == "{}"
+
+
+def test_a_crashing_provider_adapter_is_a_failed_judge_not_a_crash(tmp_path: Path) -> None:
+    """Raised by the independent reviewer (PR #3, ninth pass): a provider adapter that raises
+    must not abort the whole reviewer pass — it is one failed judge, the chain walks on."""
+    policy = default_policy()
+
+    def exploding(provider, spec):
+        raise OSError("agy binary vanished")
+
+    reply = judge(PR, DIFF, policy, provider="agy", tier="light", runner=exploding, root=tmp_path)
+    assert reply.verdict is None and reply.failure == "failed"
+    assert "agy binary vanished" in reply.raw

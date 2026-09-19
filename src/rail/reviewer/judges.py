@@ -50,7 +50,8 @@ else, matching exactly:
 A "blocking" finding means the change must not merge as is: reserve it for a defect that is
 visible in the diff itself. A doubt that depends on code you cannot see (a file outside the
 diff, a mechanism that may exist elsewhere) is at most "important", and its evidence states
-the question to check. You may only see the first part of a large diff."""
+the question to check. You may only see the first part of a large diff. A finding whose
+evidence begins with "if", "assuming", "may" or "likely" is never blocking."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,7 +240,10 @@ def judge(
             prompt, truncated = build_prompt(pr, diff, shrunk, criteria=criteria or [])
     base = root or ephemeral_root(os.environ) or Path(tempfile.gettempdir())
     spec = build_spec(pr, prompt, policy, provider=provider, tier=tier, root=base)
-    exit_code, text = runner(provider, spec)
+    try:
+        exit_code, text = runner(provider, spec)
+    except Exception as exc:  # one failed judge, never a crashed pass (the chain walks on)
+        exit_code, text = 1, f"{type(exc).__name__}: {exc}"
     failure: Failure | None = None
     verdict: ReviewVerdict | None = None
     if exit_code == TIMEOUT_EXIT_CODE:
