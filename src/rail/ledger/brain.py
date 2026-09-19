@@ -1,0 +1,379 @@
+"""`BrainLedger`: brain-v42 is the shared, observed authority (ADR-0002); the repository's
+receipts are mirrors linked by digest.
+
+Mapping (decided with brain-v42 on 2026-09-18, decision 4e7c2545): one subject per
+ticket — `project` is the ticket's `to_project` and the `actor_project` of every call;
+`issuer` is the `X-Brain-Agent` label; `recorded_at` is `emitted_at`; `data` is the payload.
+Milestones (`integrated`, `fulfilled`) are receipts brain issues and are read from the
+ticket, never attested from here.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from collections.abc import Callable
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from uuid import UUID
+
+from rail.brain.client import BrainClient, BrainToolError, BrainUnreachable
+from rail.ledger import (
+    BRAIN_MILESTONES,
+    AttestationKind,
+    Contract,
+    LedgerError,
+    PullRequestRef,
+    Record,
+    RecordKind,
+    Unattested,
+    brain_digest,
+)
+from rail.ledger.file import FileLedger
+
+MILESTONE_ISSUER = "brain-v42"
+PAGE = 100
+KNOWN_REFUSALS: frozenset[str] = frozenset(
+    {
+        "contract_not_found",
+        "delivery_disabled",
+        "idempotency_key_reused",
+        "invalid_cursor",
+        "invalid_emitted_at",
+        "invalid_issuer",
+        "invalid_kind",
+        "invalid_payload",
+        "invalid_scope",
+        "invalid_window",
+        "not_allowed",
+        "revision_not_found",
+        "ticket_not_found",
+        "revision_conflict",
+        "repository_not_registered",
+        "invalid_arguments",
+        "invalid_limit",
+        "delivery_unavailable",
+    }
+)
+
+
+def _instant(value: Any) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise LedgerError(f"brain returned a naive instant: {value!r}")
+    return parsed.astimezone(UTC)
+
+
+def record_from_row(project: str, row: dict[str, Any]) -> Record | None:
+    """A brain attestation row as a red-rail record; None for a kind the rail does not
+    know. The digest brain computed is cross-checked against the payload."""
+    try:
+        kind = AttestationKind(str(row["kind"]))
+    except ValueError:
+        return None
+    try:
+        data = dict(row["payload"])
+        if brain_digest(data) != str(row["digest"]):
+            raise LedgerError(
+                f"brain row {row.get('id')}: digest {row['digest']} does not match its payload"
+            )
+        return Record.build(
+            kind=RecordKind.ATTESTATION,
+            project=project,
+            issuer=str(row["issuer_identity"]),
+            idempotency_key=str(row["idempotency_key"]),
+            payload={"kind": kind.value, "data": data},
+            recorded_at=_instant(row["emitted_at"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LedgerError(f"brain row out of shape: {exc}") from exc
+
+
+class BrainLedger:
+    def __init__(
+        self,
+        client: BrainClient,
+        *,
+        ticket: UUID | str,
+        project: str,
+        receipts_dir: Path,
+        clock: Callable[[], datetime] | None = None,
+        repository_id: Callable[[str], int] | None = None,
+    ) -> None:
+        self.client = client
+        self.ticket = UUID(str(ticket))
+        self.project = project
+        self.mirrors = FileLedger(receipts_dir, clock=clock)
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._repository_id = repository_id or _gh_repository_id
+
+    # -- protocol -------------------------------------------------------------------------
+
+    def contract_set(
+        self, project: str, contract: Contract, *, reason: str, issuer: str, idempotency_key: str
+    ) -> Record:
+        self._same(project)
+        view = self._view(required=False)
+        expected = int(view["contract"]["contract_revision"]) if view else 0
+        row = self._call(
+            "brain_delivery_contract_set",
+            {
+                "ticket_id": str(self.ticket),
+                "actor_project": project,
+                "contract": contract.model_dump(mode="json"),
+                "expected_revision": expected,
+                "idempotency_key": idempotency_key,
+                "reason": reason,
+            },
+            agent=issuer,
+        )
+        record = Record.build(
+            kind=RecordKind.CONTRACT,
+            project=project,
+            issuer=issuer,
+            idempotency_key=idempotency_key,
+            payload={"contract": contract.model_dump(mode="json"), "reason": reason},
+            recorded_at=_instant(row["created_at"]),
+        )
+        return self.mirrors.mirror(record)
+
+    def bind(
+        self, project: str, pr: PullRequestRef, *, issuer: str, idempotency_key: str
+    ) -> Record:
+        self._same(project)
+        view = self._view(required=True)
+        deliverable = next(
+            (d for d in view["contract"]["deliverables"] if d["repository"] == pr.repository), None
+        )
+        if deliverable is None:
+            raise LedgerError(f"{pr.repository} is not a deliverable of the contract")
+        repository_id = deliverable.get("repository_id") or self._repository_id(pr.repository)
+        row = self._call(
+            "brain_delivery_bind_pr",
+            {
+                "ticket_id": str(self.ticket),
+                "actor_project": project,
+                "deliverable_key": deliverable["key"],
+                "repository_id": int(repository_id),
+                "pr_number": pr.number,
+                "expected_revision": int(view["contract"]["contract_revision"]),
+                "expected_workflow_version": int(view["assessment"]["assessment_version"]),
+                "idempotency_key": idempotency_key,
+            },
+            agent=issuer,
+        )
+        record = Record.build(
+            kind=RecordKind.BINDING,
+            project=project,
+            issuer=issuer,
+            idempotency_key=idempotency_key,
+            payload={**pr.model_dump(mode="json"), "binding_id": str(row["id"])},
+            recorded_at=self._clock(),
+        )
+        return self.mirrors.mirror(record)
+
+    def attest(
+        self,
+        project: str,
+        kind: AttestationKind,
+        data: dict[str, Any],
+        *,
+        issuer: str,
+        idempotency_key: str,
+        emitted_at: datetime | None = None,
+    ) -> Record:
+        self._same(project)
+        if kind.value in BRAIN_MILESTONES:
+            raise LedgerError(
+                f"{kind.value} is a brain milestone in ledger: brain — it is read from the "
+                "ticket, never attested"
+            )
+        record = self.mirrors.attest(
+            project,
+            kind,
+            data,
+            issuer=issuer,
+            idempotency_key=idempotency_key,
+            emitted_at=emitted_at,
+        )
+        receipt = self.mirrors.path_of(record)
+        try:
+            row = self._call(
+                "brain_delivery_attest",
+                {
+                    "ticket_id": str(self.ticket),
+                    "actor_project": project,
+                    "kind": kind.value,
+                    "payload": data,
+                    "idempotency_key": idempotency_key,
+                    "emitted_at": record.recorded_at.isoformat(),
+                },
+                agent=issuer,
+            )
+        except BrainToolError as exc:
+            raise Unattested(receipt, exc.code) from exc
+        except BrainUnreachable as exc:
+            raise Unattested(receipt, "unreachable") from exc
+        if str(row.get("digest")) != brain_digest(data):
+            raise LedgerError("brain stored a different payload digest than the mirror's")
+        return record
+
+    def list(
+        self,
+        project: str,
+        *,
+        kind: RecordKind | None = None,
+        attestation: AttestationKind | None = None,
+    ) -> list[Record]:
+        self._same(project)
+        records: list[Record] = []
+        view = self._view(required=False)
+        if view is None:
+            return []
+        if kind in (None, RecordKind.CONTRACT) and attestation is None:
+            records.append(self._contract_record(view))
+        if kind in (None, RecordKind.BINDING) and attestation is None:
+            records.extend(self._binding_records(view))
+        if kind in (None, RecordKind.ATTESTATION):
+            records.extend(self._attestation_records(attestation))
+            records.extend(self._milestone_records(view, attestation))
+        return sorted(records, key=lambda r: (r.recorded_at, r.digest))
+
+    def get(self, project: str, digest: str) -> Record | None:
+        return next((r for r in self.list(project) if r.digest == digest), None)
+
+    # -- internals ------------------------------------------------------------------------
+
+    def _same(self, project: str) -> None:
+        if project != self.project:
+            raise LedgerError(f"this ledger is bound to {self.project}, not {project}")
+
+    def _call(
+        self, name: str, arguments: dict[str, Any], *, agent: str | None = None
+    ) -> dict[str, Any]:
+        return self.client.call(name, arguments, agent=agent)
+
+    def _view(self, *, required: bool) -> dict[str, Any] | None:
+        try:
+            return self._call(
+                "brain_delivery_get",
+                {"ticket_id": str(self.ticket), "actor_project": self.project, "history_limit": 1},
+            )
+        except BrainToolError as exc:
+            if exc.code == "contract_not_found" and not required:
+                return None
+            raise LedgerError(f"brain_delivery_get: {exc}") from exc
+        except BrainUnreachable as exc:
+            raise LedgerError(f"brain unreachable: {exc}") from exc
+
+    def _contract_record(self, view: dict[str, Any]) -> Record:
+        contract = view["contract"]
+        fields = {k: contract[k] for k in Contract.model_fields if k in contract}
+        return Record.build(
+            kind=RecordKind.CONTRACT,
+            project=self.project,
+            issuer=str(contract.get("author_project") or self.project),
+            idempotency_key=str(
+                contract.get("idempotency_key")
+                or f"contract:{self.ticket}:{contract['contract_revision']}"
+            ),
+            payload={
+                "contract": Contract.model_validate(fields).model_dump(mode="json"),
+                "reason": str(contract.get("amendment_reason") or ""),
+            },
+            recorded_at=_instant(contract["created_at"]),
+        )
+
+    def _binding_records(self, view: dict[str, Any]) -> list[Record]:
+        records = []
+        for evidence in view.get("bindings", []):
+            binding = evidence["binding"]
+            records.append(
+                Record.build(
+                    kind=RecordKind.BINDING,
+                    project=self.project,
+                    issuer=self.project,
+                    idempotency_key=str(
+                        binding.get("idempotency_key") or f"binding:{binding['id']}"
+                    ),
+                    payload={
+                        "repository": next(
+                            (
+                                d["repository"]
+                                for d in view["contract"]["deliverables"]
+                                if d["key"] == binding["deliverable_key"]
+                            ),
+                            "",
+                        ),
+                        "number": int(binding["pr_number"]),
+                        "head_sha": str(binding.get("head_sha") or "0" * 40),
+                        "binding_id": str(binding["id"]),
+                    },
+                    recorded_at=_instant(view["assessment"]["assessed_at"]),
+                )
+            )
+        return records
+
+    def _attestation_records(self, attestation: AttestationKind | None) -> list[Record]:
+        records: list[Record] = []
+        cursor: str | None = None
+        while True:
+            arguments: dict[str, Any] = {
+                "actor_project": self.project,
+                "issuer_project": self.project,
+                "limit": PAGE,
+                "cursor": cursor,
+            }
+            if attestation is not None:
+                arguments["kind"] = attestation.value
+            try:
+                page = self._call("brain_delivery_attestation_list", arguments)
+            except (BrainToolError, BrainUnreachable) as exc:
+                raise LedgerError(f"brain_delivery_attestation_list: {exc}") from exc
+            for row in page.get("items", []):
+                if str(row.get("ticket_id")) != str(self.ticket):
+                    continue
+                record = record_from_row(self.project, row)
+                if record is not None:
+                    records.append(record)
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return records
+
+    def _milestone_records(
+        self, view: dict[str, Any], attestation: AttestationKind | None
+    ) -> list[Record]:
+        records = []
+        for key, kind in (
+            ("integration_receipt", AttestationKind.INTEGRATED),
+            ("fulfillment_receipt", AttestationKind.FULFILLED),
+        ):
+            receipt = view.get(key)
+            if not receipt or (attestation is not None and attestation is not kind):
+                continue
+            proofs = (receipt.get("proof") or {}).get("artifact_proofs") or []
+            sha = str((proofs[0].get("integration_sha") if proofs else "") or "")
+            records.append(
+                Record.build(
+                    kind=RecordKind.ATTESTATION,
+                    project=self.project,
+                    issuer=MILESTONE_ISSUER,
+                    idempotency_key=f"{kind.value}:{sha or receipt['id']}",
+                    payload={
+                        "kind": kind.value,
+                        "data": {
+                            "sha": sha,
+                            "receipt_id": str(receipt["id"]),
+                            "delivery_digest": str(receipt.get("delivery_digest") or ""),
+                        },
+                    },
+                    recorded_at=_instant(receipt["issued_at"]),
+                )
+            )
+        return records
+
+
+def _gh_repository_id(slug: str) -> int:
+    from rail.remotes import github_repository_id
+
+    return github_repository_id(slug, run=subprocess.run)

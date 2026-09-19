@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from rail.cli import main
@@ -223,15 +224,19 @@ def test_attest_from_replays_a_receipt(tmp_path: Path) -> None:
     assert len(replayed_records) == 1 and replayed_records[0].recorded_at == record.recorded_at
 
 
-def test_attest_refuses_a_brain_ledger_in_phase_1(tmp_path: Path) -> None:
+def test_attest_in_brain_mode_without_a_token_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = _repo(tmp_path)
     (repo / "rail.yaml").write_text(
         (repo / "rail.yaml")
         .read_text()
-        .replace("ledger: file", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f")
+        .replace("ledger: file\n", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n")
     )
-    out = CliRunner().invoke(main, ["attest", "fulfilled", "--repo", str(repo)])
-    assert out.exit_code == 1 and "phase 2" in out.output
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "none"))
+    out = CliRunner().invoke(main, ["attest", "deployed", "--repo", str(repo), "--data", "sha=abc"])
+    assert out.exit_code == 1 and "brain token" in out.output
+    assert not list((repo / RECEIPTS_DIR).glob("*-deployed-*.json"))
 
 
 def test_ledger_list_reads_back(tmp_path: Path) -> None:

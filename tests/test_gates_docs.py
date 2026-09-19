@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from rail.gates import Stage
 from rail.gates.design import spec
 from rail.gates.intent import contract
@@ -42,7 +44,9 @@ def test_intent_passes_with_a_contract(tmp_path: Path) -> None:
     assert result.passed and "ship red-alpha" in result.details
 
 
-def test_intent_reports_an_unavailable_backend(tmp_path: Path) -> None:
+def test_intent_reports_an_unavailable_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
     text = (
         (repo / "rail.yaml")
@@ -50,8 +54,9 @@ def test_intent_reports_an_unavailable_backend(tmp_path: Path) -> None:
         .replace("ledger: file", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f")
     )
     (repo / "rail.yaml").write_text(text)
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "none"))
     result = contract(repo)
-    assert not result.passed and "phase 2" in result.details
+    assert not result.passed and "brain token" in result.details
 
 
 def test_design_wants_a_dated_spec(tmp_path: Path) -> None:

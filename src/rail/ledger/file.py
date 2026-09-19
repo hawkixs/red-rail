@@ -103,6 +103,29 @@ class FileLedger:
             (r for r in self._records() if r.project == project and r.digest == digest), None
         )
 
+    def path_of(self, record: Record) -> Path:
+        return self.root / receipt_filename(record)
+
+    def mirror(self, record: Record) -> Record:
+        """Write an already-built record (a row read from brain) as a receipt; a receipt with
+        the same digest is left alone, the same key with another content is a conflict."""
+        for existing in self._records():
+            if existing.digest == record.digest:
+                return existing
+            if (
+                existing.project == record.project
+                and existing.idempotency_key == record.idempotency_key
+            ):
+                raise IdempotencyConflict(
+                    f"idempotency key {record.idempotency_key!r} already used by {existing.digest}"
+                )
+        self.root.mkdir(parents=True, exist_ok=True)
+        path = self.path_of(record)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+        return record
+
     # -- internals ------------------------------------------------------------------------
 
     def _records(self) -> list[Record]:

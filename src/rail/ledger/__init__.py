@@ -292,14 +292,30 @@ class Ledger(Protocol):
     def get(self, project: str, digest: str) -> Record | None: ...
 
 
-def open_ledger(repo: Path) -> Ledger:
-    """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a bad manifest."""
+def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
+    """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a bad manifest.
+    `ledger: brain` needs the `brain` extra, the operator's token and the ticket."""
     from rail.ledger.file import FileLedger
     from rail.model import LedgerBackend, load_rail_config
 
     cfg = load_rail_config(repo)
     if cfg.ledger is LedgerBackend.FILE:
         return FileLedger(repo / RECEIPTS_DIR)
-    raise LedgerUnavailable(
-        "ledger 'brain' arrives in phase 2 (ADR-0002); declare `ledger: file` for now"
+    try:
+        from rail.brain.client import BrainClient
+        from rail.brain.settings import BrainSettings
+        from rail.ledger.brain import BrainLedger
+    except ImportError as exc:
+        raise LedgerUnavailable("ledger 'brain' needs the extra: uv sync --extra brain") from exc
+    if client is None:
+        from rail.private import PrivateFileError
+
+        try:
+            settings = BrainSettings.from_environment()
+        except PrivateFileError as exc:
+            raise LedgerError(f"brain token: {exc}") from exc
+        client = BrainClient.http(settings.url, token=settings.token, agent="red-rail")
+    assert cfg.ticket is not None  # guaranteed by the manifest validator
+    return BrainLedger(
+        client, ticket=cfg.ticket, project=cfg.project, receipts_dir=repo / RECEIPTS_DIR
     )

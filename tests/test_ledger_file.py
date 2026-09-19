@@ -12,7 +12,6 @@ from rail.ledger import (
     AttestationKind,
     Ledger,
     LedgerError,
-    LedgerUnavailable,
     RequiredCheck,
     open_ledger,
 )
@@ -133,11 +132,9 @@ def test_required_check_names_its_publisher() -> None:
         RequiredCheck(name="anonymous")
 
 
-def test_open_ledger_refuses_brain_until_phase_2(tmp_path: Path) -> None:
-    (tmp_path / "rail.yaml").write_text(
-        MANIFEST + "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
-    )
-    with pytest.raises(LedgerUnavailable, match="phase 2"):
+def test_open_ledger_brain_needs_a_ticket_in_the_manifest(tmp_path: Path) -> None:
+    (tmp_path / "rail.yaml").write_text(MANIFEST + "ledger: brain\n")
+    with pytest.raises(ValidationError, match="ticket"):
         open_ledger(tmp_path)
 
 
