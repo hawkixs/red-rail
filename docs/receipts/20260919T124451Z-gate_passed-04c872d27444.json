@@ -1,0 +1,16 @@
+{
+  "digest": "sha256:04c872d274442bce31675d36649ad12d266a8b0cf800f55abb76f4a8fdd51774",
+  "idempotency_key": "gate_passed:74501b97209bb59d9ee1688659b6a34fba3e08eb:design.spec",
+  "issuer": "operator",
+  "kind": "attestation",
+  "payload": {
+    "data": {
+      "gate": "design.spec",
+      "sha": "74501b97209bb59d9ee1688659b6a34fba3e08eb"
+    },
+    "kind": "gate_passed"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-19T12:44:51.099423Z",
+  "schema_version": 1
+}

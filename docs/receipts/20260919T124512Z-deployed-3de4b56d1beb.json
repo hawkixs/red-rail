@@ -1,0 +1,17 @@
+{
+  "digest": "sha256:3de4b56d1beb9635ddd6ba813b266da1219d677dbabf9b9a1e8c70b9b3fa20cd",
+  "idempotency_key": "deployed:proof:sha256:proof:20260919T124512Z",
+  "issuer": "operator",
+  "kind": "attestation",
+  "payload": {
+    "data": {
+      "digest": "sha256:proof",
+      "sha": "74501b97209bb59d9ee1688659b6a34fba3e08eb",
+      "target": "proof"
+    },
+    "kind": "deployed"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-19T12:45:12.203132Z",
+  "schema_version": 1
+}
