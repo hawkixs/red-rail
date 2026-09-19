@@ -7,7 +7,4 @@ stack: python
 # the receipts under docs/receipts/ are mirrors written before every attestation.
 ledger: brain
 ticket: 3f78854b-1e8d-4d2c-858c-1d8be8fbba91   # red → red-rail, "Deliver red-rail phase 2"
-gates:
-  integrate.receipt:
-    value: false
-    reason: "first brain-observed integration is the merge of the phase-2 PR (spec §8); until then the ticket carries no integration receipt"
+gates: {}
