@@ -2343,7 +2343,7 @@ from rail.model import load_rail_config
 from tests.helpers import commit_all, conforming_tree
 
 DIGEST = "sha256:" + "a" * 64
-ARTEFACT = Artefact(version="0.1.0", sha="c" * 40, digest=DIGEST, image=f"ghcr.io/hawkixs/red-probe@{DIGEST}")
+IMAGE = f"ghcr.io/hawkixs/red-probe@{DIGEST}"
 COMPOSE = "services:\n  app:\n    image: ${IMAGE_REFERENCE:?required}\n"
 
 
@@ -2353,6 +2353,23 @@ def _repo(tmp_path: Path) -> Path:
     (repo / "deploy" / "compose.yaml").write_text(COMPOSE)
     commit_all(repo, "feat: the stack")
     return repo
+
+
+def _artefact(repo: Path, version: str = "0.1.0") -> Artefact:
+    """The artefact under test names the fixture's real HEAD: `compose_at` runs `git show`."""
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return Artefact(version=version, sha=head, digest=DIGEST, image=IMAGE)
+
+
+def _live(artefact: Artefact) -> dict[str, str]:
+    return {
+        "project": "red-probe",
+        "version": artefact.version,
+        "git_sha": artefact.sha,
+        "image_digest": artefact.digest,
+    }
 
 
 class FakeHost:
@@ -2389,9 +2406,6 @@ class FakeWeb:
         return 404, b""
 
 
-LIVE = {"project": "red-probe", "version": "0.1.0", "git_sha": "c" * 40, "image_digest": DIGEST}
-
-
 def _clock():
     now = [0.0]
 
@@ -2406,7 +2420,8 @@ def _clock():
 
 def test_remote_script_is_locked_and_carries_the_files() -> None:
     params = Parameters("red-vps", "/opt", "pls_project_default", "letsencrypt", 120, "deploy/compose.yaml")
-    env = env_file("red-probe", ARTEFACT, "probe.hawkixs.com", params)
+    artefact = Artefact(version="0.1.0", sha="c" * 40, digest=DIGEST, image=IMAGE)  # no git here
+    env = env_file("red-probe", artefact, "probe.hawkixs.com", params)
     script = remote_script("red-probe", "0.1.0", COMPOSE, env, params)
     assert script.startswith("set -euo pipefail\n")
     assert 'exec 9>"$root/.deploy.lock"' in script and f"exit {LOCKED}" in script
@@ -2439,10 +2454,11 @@ def test_domain_comes_from_the_healthcheck() -> None:
 
 def test_apply_runs_the_script_over_ssh_then_verifies_from_outside(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    host, web = FakeHost(), FakeWeb(LIVE, unhealthy_for=2)
+    artefact = _artefact(repo)
+    host, web = FakeHost(), FakeWeb(_live(artefact), unhealthy_for=2)
     clock, sleep = _clock()
     target = VpsTraefik(repo, load_rail_config(repo), run=host, http=web, sleep=sleep, clock=clock)
-    live = target.apply(ARTEFACT)
+    live = target.apply(artefact)
     assert live.version == "0.1.0" and live.image_digest == DIGEST
     assert host.argv[-1][:2] == ["ssh", "-o"] and host.argv[-1][-3:] == ["red-vps", "bash", "-s"]
     assert "BatchMode=yes" in host.argv[-1]
@@ -2454,38 +2470,40 @@ def test_apply_runs_the_script_over_ssh_then_verifies_from_outside(tmp_path: Pat
 def test_apply_reports_the_lock_and_a_failed_script(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     cfg = load_rail_config(repo)
+    artefact = _artefact(repo)
+    web = FakeWeb(_live(artefact))
     with pytest.raises(Locked):
-        VpsTraefik(repo, cfg, run=FakeHost(exit_code=LOCKED), http=FakeWeb(LIVE)).apply(ARTEFACT)
+        VpsTraefik(repo, cfg, run=FakeHost(exit_code=LOCKED), http=web).apply(artefact)
     with pytest.raises(DeployError, match="exit 1"):
-        VpsTraefik(repo, cfg, run=FakeHost(exit_code=1), http=FakeWeb(LIVE)).apply(ARTEFACT)
+        VpsTraefik(repo, cfg, run=FakeHost(exit_code=1), http=web).apply(artefact)
 
 
 def test_verify_refuses_a_live_service_that_is_not_the_artefact(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     cfg = load_rail_config(repo)
+    artefact = _artefact(repo)
     clock, sleep = _clock()
-    other = {**LIVE, "image_digest": "sha256:" + "b" * 64}
+    other = {**_live(artefact), "image_digest": "sha256:" + "b" * 64}
     target = VpsTraefik(repo, cfg, run=FakeHost(), http=FakeWeb(other), sleep=sleep, clock=clock)
     with pytest.raises(DeployError, match="image_digest"):
-        target.verify(ARTEFACT)
+        target.verify(artefact)
 
     def down(url: str, timeout: float) -> tuple[int, bytes]:
         raise HttpError("refused")
 
     target = VpsTraefik(repo, cfg, run=FakeHost(), http=down, sleep=sleep, clock=clock)
     with pytest.raises(DeployError, match="not healthy within 120s"):
-        target.verify(ARTEFACT)
+        target.verify(artefact)
     assert clock() >= 120
 
 
 def test_compose_is_read_at_the_released_commit_and_steps_are_printable(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     cfg = load_rail_config(repo)
-    target = VpsTraefik(repo, cfg, run=FakeHost(), http=FakeWeb(LIVE))
-    released = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    artefact = _artefact(repo)  # names the commit that carries COMPOSE
+    target = VpsTraefik(repo, cfg, run=FakeHost(), http=FakeWeb(_live(artefact)))
     (repo / "deploy" / "compose.yaml").write_text("services: {}\n")
     commit_all(repo, "feat: a later change")
-    artefact = Artefact("0.1.0", released, DIGEST, ARTEFACT.image)
     steps = target.steps(artefact)
     assert COMPOSE in (steps[0].stdin or "")
     assert steps[0].argv[0] == "ssh" and steps[1].title.startswith("GET https://red-probe.example.invalid/healthz")
