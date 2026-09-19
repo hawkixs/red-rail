@@ -18,8 +18,10 @@ def _ledger(repo: Path) -> FileLedger:
     return FileLedger(repo / RECEIPTS_DIR, clock=lambda: ticks.pop(0))
 
 
-def _attest(ledger: FileLedger, kind: AttestationKind, key: str, **data: object) -> None:
-    ledger.attest("red-beta", kind, dict(data), issuer="op", idempotency_key=key)
+def _attest(
+    ledger: FileLedger, kind: AttestationKind, key: str, *, issuer: str = "op", **data: object
+) -> None:
+    ledger.attest("red-beta", kind, dict(data), issuer=issuer, idempotency_key=key)
 
 
 def test_registry_covers_stages_5_to_10() -> None:
@@ -59,7 +61,13 @@ def test_verdict_must_be_independent_and_approving_on_history(tmp_path: Path) ->
     )
     assert not verdict(repo).passed
     _attest(
-        ledger, AttestationKind.REVIEW_VERDICT, "v3", sha=head, independent=True, verdict="approve"
+        ledger,
+        AttestationKind.REVIEW_VERDICT,
+        "v3",
+        sha=head,
+        independent=True,
+        verdict="approve",
+        issuer="red-rail-reviewer",
     )
     result = verdict(repo)
     assert result.passed and "distance 0" in result.details
@@ -72,6 +80,7 @@ def test_verdict_must_be_independent_and_approving_on_history(tmp_path: Path) ->
         sha="0" * 40,
         independent=True,
         verdict="approve",
+        issuer="red-rail-reviewer",
     )
     assert "not on HEAD's history" in verdict(repo).details
 
@@ -142,3 +151,47 @@ def test_deployed_requires_digests_on_both_sides(tmp_path: Path) -> None:
     _attest(ledger, AttestationKind.DEPLOYED, "d1", sha=head)
     result = deployed(repo)
     assert not result.passed and "digest" in result.details
+
+
+def test_verdict_must_come_from_the_reviewer_identity(tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    head = gitrepo.head_sha(repo)
+    ledger = _ledger(repo)
+    ledger.attest(
+        "red-beta",
+        AttestationKind.REVIEW_VERDICT,
+        {"sha": head, "independent": True, "verdict": "approve"},
+        issuer="operator",
+        idempotency_key="v1",
+    )
+    result = verdict(repo)
+    assert not result.passed and "issued by 'operator', not 'red-rail-reviewer'" in result.details
+    ledger.attest(
+        "red-beta",
+        AttestationKind.REVIEW_VERDICT,
+        {"sha": head, "independent": True, "verdict": "approve"},
+        issuer="red-rail-reviewer",
+        idempotency_key="v2",
+    )
+    assert verdict(repo).passed
+
+
+def test_reviewer_identity_is_a_declared_exception_like_any_default(tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    head = gitrepo.head_sha(repo)
+    manifest = (repo / "rail.yaml").read_text()
+    (repo / "rail.yaml").write_text(
+        manifest + "gates:\n  review.reviewer_identity:\n    value: other-bot\n    reason: pilot\n"
+    )
+    _ledger(repo).attest(
+        "red-beta",
+        AttestationKind.REVIEW_VERDICT,
+        {"sha": head, "independent": True, "verdict": "approve"},
+        issuer="other-bot",
+        idempotency_key="v1",
+    )
+    assert verdict(repo).passed
+
+
+def test_every_evidence_gate_is_ledger_scoped() -> None:
+    assert {g.scope for g in GATES} == {"ledger"}

@@ -9,6 +9,7 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
+from uuid import UUID
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -67,6 +68,7 @@ class RailConfig(BaseModel):
     tier: Tier
     stack: Stack
     ledger: LedgerBackend = LedgerBackend.FILE
+    ticket: UUID | None = None  # the delivery ticket (`red → <project>`), brain ledger only
     deploy: DeployConfig | None = None
     gates: dict[str, GateOverride] = Field(default_factory=dict)
 
@@ -74,6 +76,14 @@ class RailConfig(BaseModel):
     def _prod_requires_deploy(self) -> RailConfig:
         if self.tier is Tier.PROD and self.deploy is None:
             raise ValueError("tier 'prod' requires a 'deploy' target")
+        return self
+
+    @model_validator(mode="after")
+    def _ticket_follows_the_ledger(self) -> RailConfig:
+        if self.ledger is LedgerBackend.BRAIN and self.ticket is None:
+            raise ValueError("ledger 'brain' requires 'ticket' (the delivery ticket UUID)")
+        if self.ledger is LedgerBackend.FILE and self.ticket is not None:
+            raise ValueError("'ticket' is only meaningful with ledger 'brain'")
         return self
 
 

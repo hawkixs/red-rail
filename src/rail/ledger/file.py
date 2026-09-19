@@ -22,6 +22,7 @@ from rail.ledger import (
     PullRequestRef,
     Record,
     RecordKind,
+    brain_digest,
 )
 
 
@@ -66,9 +67,21 @@ class FileLedger:
         *,
         issuer: str,
         idempotency_key: str,
+        emitted_at: datetime | None = None,
     ) -> Record:
+        try:
+            brain_digest(data)
+        except ValueError as exc:
+            raise LedgerError(str(exc)) from exc
         payload = {"kind": kind.value, "data": data}
-        return self._append(RecordKind.ATTESTATION, project, payload, issuer, idempotency_key)
+        return self._append(
+            RecordKind.ATTESTATION,
+            project,
+            payload,
+            issuer,
+            idempotency_key,
+            recorded_at=emitted_at,
+        )
 
     def list(
         self,
@@ -89,6 +102,32 @@ class FileLedger:
         return next(
             (r for r in self._records() if r.project == project and r.digest == digest), None
         )
+
+    def path_of(self, record: Record) -> Path:
+        return self.root / receipt_filename(record)
+
+    def mirror(self, record: Record) -> Record:
+        """Write an already-built record (a row read from brain) as a receipt; a receipt with
+        the same digest is left alone, the same key with another content is a conflict."""
+        for existing in self._records():
+            if existing.digest == record.digest:
+                return existing
+            if (
+                existing.project == record.project
+                and existing.idempotency_key == record.idempotency_key
+            ):
+                raise IdempotencyConflict(
+                    f"idempotency key {record.idempotency_key!r} already used by {existing.digest}"
+                )
+        self.root.mkdir(parents=True, exist_ok=True)
+        path = self.path_of(record)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(
+            json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+        return record
 
     # -- internals ------------------------------------------------------------------------
 
@@ -114,6 +153,7 @@ class FileLedger:
         payload: dict[str, Any],
         issuer: str,
         idempotency_key: str,
+        recorded_at: datetime | None = None,
     ) -> Record:
         for existing in self._records():
             if existing.project == project and existing.idempotency_key == idempotency_key:
@@ -128,11 +168,14 @@ class FileLedger:
             issuer=issuer,
             idempotency_key=idempotency_key,
             payload=payload,
-            recorded_at=self._clock(),
+            recorded_at=recorded_at or self._clock(),
         )
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / receipt_filename(record)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
+        tmp.write_text(
+            json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         os.replace(tmp, path)
         return record

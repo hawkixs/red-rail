@@ -130,3 +130,41 @@ class LedgerContract:
         ledger = self.make_ledger(tmp_path)
         ledger.attest("red-probe", AttestationKind.DEPLOYED, {}, issuer="op", idempotency_key="d1")
         assert ledger.list("red-other") == []
+
+    def test_emitted_at_fixes_the_record_time(self, tmp_path: Path) -> None:
+        from datetime import UTC, datetime
+
+        ledger = self.make_ledger(tmp_path)
+        when = datetime(2026, 9, 18, 10, 0, 0, 123456, tzinfo=UTC)
+        record = ledger.attest(
+            "red-probe",
+            AttestationKind.DEPLOYED,
+            {"sha": "b" * 40},
+            issuer="op",
+            idempotency_key="d1",
+            emitted_at=when,
+        )
+        assert record.recorded_at == when
+        again = ledger.attest(
+            "red-probe",
+            AttestationKind.DEPLOYED,
+            {"sha": "b" * 40},
+            issuer="op",
+            idempotency_key="d1",
+            emitted_at=when,
+        )
+        assert again == record
+
+    def test_a_float_in_the_data_is_refused_before_any_write(self, tmp_path: Path) -> None:
+        from rail.ledger import LedgerError
+
+        ledger = self.make_ledger(tmp_path)
+        with pytest.raises(LedgerError, match="float"):
+            ledger.attest(
+                "red-probe",
+                AttestationKind.DEPLOYED,
+                {"ratio": 1.5},
+                issuer="op",
+                idempotency_key="d1",
+            )
+        assert ledger.list("red-probe") == []

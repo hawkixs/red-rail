@@ -56,7 +56,7 @@ def _dev_repo(tmp_path: Path) -> Path:
         "red-beta",
         AttestationKind.REVIEW_VERDICT,
         {"sha": head, "independent": True, "verdict": "approve"},
-        issuer="reviewer",
+        issuer="red-rail-reviewer",
         idempotency_key="v1",
     )
     ledger.attest(

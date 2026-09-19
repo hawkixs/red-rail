@@ -173,7 +173,7 @@ def with_evidence(repo: Path, *, through: str, clock: Callable[[], datetime] | N
         name,
         AttestationKind.REVIEW_VERDICT,
         {"sha": head, "independent": True, "verdict": "approve"},
-        issuer="reviewer",
+        issuer="red-rail-reviewer",
         idempotency_key="v1",
     )
     ledger.attest(

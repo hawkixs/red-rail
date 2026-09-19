@@ -62,6 +62,7 @@ def test_run_gates_returns_one_result_per_gate_and_never_raises(
         "hygiene.remotes",
         "hygiene.roster_entry",
         "hygiene.receipts",
+        "hygiene.mirrors",
         "intent.contract",
         "design.spec",
         "plan.plan",
@@ -77,7 +78,9 @@ def test_run_gates_returns_one_result_per_gate_and_never_raises(
         "learn.fulfilled",
     ]
     by_id = {r.gate_id: r for r in results}
-    # vacuous pass on an empty tree: no receipts to check, no roster in scope
+    # vacuous pass on an empty tree: no receipts to check, no roster in scope.
+    # hygiene.mirrors needs rail.yaml to know the ledger backend, so on a manifest-less
+    # tree it fails "rail.yaml unreadable" like every other ledger-scoped gate here.
     vacuous = ("hygiene.receipts", "hygiene.roster_entry")
     assert all(by_id[gate_id].passed for gate_id in vacuous)
     assert all(not r.passed for r in results if r.gate_id not in vacuous)
@@ -102,3 +105,29 @@ def test_run_gates_all_pass_on_conforming_repo(tmp_path: Path) -> None:
     )
     results = run_gates(repo, stages=[Stage.HYGIENE, Stage.INTENT, Stage.DESIGN])
     assert all(r.passed for r in results), [r for r in results if not r.passed]
+
+
+def test_ledger_gates_are_skipped_in_ci_only_with_the_brain_ledger(tmp_path: Path) -> None:
+    from rail.gates import GateResult, GateSpec, Stage, run_gate
+    from tests.helpers import conforming_tree
+
+    spec = GateSpec(
+        Stage.REVIEW,
+        "probe",
+        lambda repo: GateResult(Stage.REVIEW, "probe", True, "ran"),
+        scope="ledger",
+    )
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    assert (
+        run_gate(spec, repo, ci=True).details == "ran"
+    )  # file ledger: receipts are in the checkout
+    manifest = (repo / "rail.yaml").read_text()
+    (repo / "rail.yaml").write_text(
+        manifest.replace(
+            "ledger: file\n", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+        )
+    )
+    skipped = run_gate(spec, repo, ci=True)
+    assert skipped.passed and skipped.skipped == "ledger"
+    assert "unreachable from CI" in skipped.details
+    assert run_gate(spec, repo, ci=False).details == "ran"

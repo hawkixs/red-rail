@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +13,15 @@ import click
 from pydantic import ValidationError
 
 from rail.commands._options import json_option, repo_option
-from rail.ledger import AttestationKind, LedgerError, Record, RecordKind, open_ledger
+from rail.ledger import (
+    AttestationKind,
+    LedgerError,
+    Record,
+    RecordKind,
+    Unattested,
+    idempotency_key_for,
+    open_ledger,
+)
 from rail.ledger.file import load_receipt, receipt_filename
 from rail.model import load_rail_config
 
@@ -65,7 +73,10 @@ def echo_record(record: Record, repo: Path, as_json: bool) -> None:
 @click.option("--data-json", help="JSON object merged before --data pairs.")
 @click.option("--issuer", default="operator", show_default=True)
 @click.option(
-    "--key", "idempotency_key", help="Idempotency key (default: KIND:<sha> or KIND:<uuid>)."
+    "--key",
+    "idempotency_key",
+    help="Idempotency key (default: <kind>:<subject>[:<occurrence>], "
+    "see rail.ledger.idempotency_key_for).",
 )
 @click.option(
     "--from",
@@ -99,13 +110,23 @@ def command(
                 source.data,
                 issuer=source.issuer,
                 idempotency_key=source.idempotency_key,
+                emitted_at=source.recorded_at,
             )
         else:
             data = parse_data(pairs, data_json)
-            key = idempotency_key or (
-                f"{kind}:{data['sha']}" if data.get("sha") else f"{kind}:{uuid.uuid4()}"
+            emitted_at = datetime.now(UTC)
+            key = idempotency_key or idempotency_key_for(attestation, data, emitted_at=emitted_at)
+            record = ledger.attest(
+                project,
+                attestation,
+                data,
+                issuer=issuer,
+                idempotency_key=key,
+                emitted_at=emitted_at,
             )
-            record = ledger.attest(project, attestation, data, issuer=issuer, idempotency_key=key)
+    except Unattested as exc:
+        click.echo(f"error: {exc}", err=True)
+        raise SystemExit(2) from exc
     except (FileNotFoundError, ValidationError, LedgerError, ValueError) as exc:
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc

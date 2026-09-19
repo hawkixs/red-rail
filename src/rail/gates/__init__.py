@@ -31,7 +31,8 @@ class Stage(StrEnum):
     LEARN = "learn"
 
 
-Scope = Literal["repo", "workstation"]
+Scope = Literal["repo", "workstation", "ledger"]
+# "ledger": reads the ledger — skipped under --ci when the ledger is brain (CI holds no credential)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +80,13 @@ def registry() -> list[GateSpec]:
     ]
 
 
+def _ledger_is_brain(repo: Path) -> bool:
+    from rail.model import LedgerBackend, try_load_rail_config
+
+    cfg = try_load_rail_config(repo)
+    return cfg is not None and cfg.ledger is LedgerBackend.BRAIN
+
+
 def run_gate(spec: GateSpec, repo: Path, *, ci: bool = False) -> GateResult:
     from rail.policy import effective
 
@@ -89,6 +97,14 @@ def run_gate(spec: GateSpec, repo: Path, *, ci: bool = False) -> GateResult:
             True,
             "not evaluated: workstation-only gate under --ci",
             skipped="workstation",
+        )
+    if ci and spec.scope == "ledger" and _ledger_is_brain(repo):
+        return GateResult(
+            spec.stage,
+            spec.code,
+            True,
+            "not evaluated: ledger brain is unreachable from CI (spec §5 rule 3)",
+            skipped="ledger",
         )
     value, reason = effective(repo, spec.gate_id)
     if value is False:

@@ -33,36 +33,65 @@ comments, test names. The conversation with the operator stays in French.
   and `effective(repo, key)`: a `gates:` override in `rail.yaml` is a declared exception,
   reported by `rail check` and `rail audit`, never hidden.
 - `src/rail/gates/` — `hygiene`, `intent`, `design`, `plan`, `build`, `evidence` (stages 5–10
-  read the ledger). Workstation-only gates (`hygiene.remotes`, `hygiene.roster_entry`) are
-  skipped explicitly under `rail check --ci`.
-- `src/rail/ledger/` — the `Ledger` protocol and `FileLedger` (`docs/receipts/*.json`,
-  append-only, digest + idempotency key, fails closed on a tampered receipt). `BrainLedger`
-  is phase 2. `ledger:` in `rail.yaml` selects the authority: `file` (default, no network) or
-  `brain` (brain-v42, shared and observed; receipts become mirrors) — ADR-0002.
+  read the ledger). Three scopes: `repo`; `workstation` (`hygiene.remotes`,
+  `hygiene.roster_entry`, skipped under `--ci`); `ledger` (`intent.contract`, `hygiene.mirrors`,
+  every evidence gate — skipped under `--ci` when `ledger: brain`, because CI never holds a
+  ledger credential). `hygiene.mirrors` reports a receipt whose digest is absent from the shared
+  ledger (drift). `review.verdict` accepts only an independent, approving verdict issued by
+  `review.reviewer_identity` (default `red-rail-reviewer`).
+- `src/rail/ledger/` — the `Ledger` protocol, `FileLedger` (`docs/receipts/*.json`, append-only,
+  digest + idempotency key, fails closed on a tampered receipt) and `BrainLedger`
+  (`ledger/brain.py`: brain-v42 is the authority, the receipts are mirrors written BEFORE the
+  call; a refusal raises `Unattested` and `rail attest` exits 2 with the replay command;
+  `integrated`/`fulfilled` are brain milestones read from the ticket; the contract is set as the
+  requester `red`, attestations as the project). `ledger:` in `rail.yaml` selects the
+  authority (`file` default, `brain` needs `ticket:`) — ADR-0002. `idempotency_key_for`
+  derives deterministic keys (`<kind>:<subject>[:<occurrence>]`); `brain_digest` recomputes
+  brain's payload digest.
+- `src/rail/brain/` — `client.py` (one synchronous MCP call, stable refusal codes, the
+  `X-Brain-Agent` label sent per call = the record's issuer) and `settings.py` (loopback URL;
+  the bearer is read from a private file only — `RAIL_BRAIN_TOKEN_FILE`, default
+  `~/.config/red-rail/brain-token` — never from an environment variable holding the value).
+- `src/rail/contracts/` — brain-v42's published contracts vendored as data at the tag in
+  `pins.py` (`delivery-attestations-v1.0`: 43 finding codes, the attestation API v1.0), frozen
+  by `tests/test_boundary.py` (digests in CI, parity with the sibling checkout on the host).
+- `src/rail/reviewer/` — the independent reviewer (ADR-0003): `policy.py` (data: provider chain,
+  models per tier, light/deep thresholds, producer read from `Co-Authored-By` trailers),
+  `verdict.py` (enum-valued `ReviewVerdict`), `judges.py` (one headless run per judge, isolated
+  seat, `guard.sh` for agy), `github.py` (minimal App client), `service.py` (one review per head
+  SHA, fail-closed, verdict attested), `config.py` (`~/.config/red-rail/reviewer.yaml`).
 - `src/rail/commands/` — one module per command, auto-discovered by `src/rail/cli.py`:
-  `check`, `attest`, `contract`, `ledger`, `audit`, `metrics`, `new`, `upgrade`. Exit code is
-  the verdict; `--json` is the contract for machines.
+  `check`, `attest`, `contract`, `ledger`, `audit`, `metrics`, `new`, `upgrade`, `brain`
+  (`ping`), `reviewer` (`once`, `run`). Exit code is the verdict; `--json` is the contract for
+  machines.
 - `src/rail/audit.py` (repository × stage matrix, golden-tested), `src/rail/metrics.py` (four
   DORA metrics + conformance from the ledger), `src/rail/scaffold.py` (copier: `copier.yml` at
   the root, files under `template/project/`), `src/rail/remotes.py` (`gh` + `glab`, no token).
-- Phase 2: `ledger/brain.py`, `reviewer/`, `workflows/pre-review.js`. Phase 3: `deploy/`.
+- `workflows/pre-review.js` — a tiered Workflow (wf-scan → red-reviewer on sonnet → wf-judge)
+  launched by the `rail-review` skill from the producing session: a pre-review, never the gate.
+  Phase 3: `deploy/`.
 
 Boundary rules with brain-v42, both testable: brain never learns a new gate; red-rail stores
 no durable fact outside the ledger.
 
 ## Stack
 
-Python 3.12+, uv, Click, Pydantic 2, PyYAML. copier for the template. pytest + ruff.
+Python 3.12+, uv, Click, Pydantic 2, PyYAML. copier for the template. pytest + ruff. Extras:
+`brain` (fastmcp 3.x, the MCP client and the in-memory fake brain of the tests), `reviewer`
+(httpx, PyJWT[crypto], `headless-agents` pinned to the brain-v42 tag `headless-agents-v0.2.0`).
 
 ## Commands
 
 ```bash
-uv sync --extra dev            # install
+uv sync --all-extras           # install (core + dev + brain + reviewer)
 make ci                        # what CI runs: lint, test, check
 uv run pytest -q               # tests
 uv run ruff check src/ tests/  # lint
 uv run rail check              # the rail gates against this repository
+uv run rail brain ping         # brain-v42 reachable with the private token, as this project?
+uv run rail reviewer once      # one pass of the independent reviewer (host only)
 make audit                     # dated drift snapshot of the sibling projects (docs/audits/)
+make contracts-check           # vendored brain-v42 contracts equal the pinned tag
 make skills-install            # symlink the facade skills into ~/.claude/skills
 ```
 
@@ -70,10 +99,10 @@ make skills-install            # symlink the facade skills into ~/.claude/skills
 
 ```
 red-rail/
-├── Makefile               # sync, lint, test, check, ci, audit, skills-install — `make ci` is CI
-├── rail.yaml              # this project's manifest (tier dev, ledger file, one declared exception)
+├── Makefile               # sync, lint, test, check, ci, audit, contracts-check, skills-install
+├── rail.yaml              # this project's manifest (tier dev, ledger brain + ticket, declared exceptions)
 ├── copier.yml             # the project template's questions; files live in template/project/
-├── src/rail/              # package `rail`: gates/, ledger/, commands/, audit, metrics, scaffold
+├── src/rail/              # package `rail`: gates/, ledger/, brain/, contracts/, reviewer/, commands/
 ├── tests/                 # incl. tests/golden/audit-matrix.json and the deterministic fixtures
 ├── docs/specs/            # design specs (dated)
 ├── docs/plans/            # implementation plans (dated)
@@ -82,8 +111,8 @@ red-rail/
 ├── docs/audits/           # dated snapshots of `rail audit ..` (the drift table, versioned)
 ├── template/project/      # copier template (CLAUDE.md, rail.yaml, Makefile, CI, docs, skeletons)
 ├── .github/workflows/     # continuous-integration.yml + rail-ci.yml (reusable, called by projects)
-├── workflows/             # pre-review.js (phase 2)
-└── skills/                # Claude Code facades, no rules inside
+├── workflows/             # pre-review.js (tiered pre-review, passes the tiering gate)
+└── skills/                # Claude Code facades, no rules inside (rail-design … rail-reviewer)
 ```
 
 ## Key technical decisions
@@ -95,6 +124,11 @@ red-rail/
 - Design spec: `docs/specs/2026-09-14-red-rail-design.md` (ten stages, three tiers,
   `rail.yaml`, end-to-end flow, failure modes, phasing).
 - Attestations come only from the server host; the runner VM never reaches brain or the VPS.
+- Secrets (the brain bearer, the App key) live in `~/.config/red-rail/` in 0600 files, never in
+  a tree, never in an environment variable holding the value, never on a command line.
+- The brain API is v1.0 (frozen 2026-09-18, decision `4e7c2545`; tag `delivery-attestations-v1.0`
+  vendored under `src/rail/contracts/`); one subject per ticket — `actor_project` is the
+  project for every attestation, the requester `red` for the contract.
 - No `# rail: ignore`. The only bypass is a `gates:` override in `rail.yaml` with a mandatory reason.
 
 ## Working principles

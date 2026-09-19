@@ -15,9 +15,9 @@ from pydantic import ValidationError
 
 from rail import gitrepo, markdown
 from rail.gates import GateResult, GateSpec, Stage
-from rail.ledger import RECEIPTS_DIR, LedgerError
-from rail.ledger.file import load_receipt, receipt_filename
-from rail.model import MANIFEST_NAME, load_rail_config, try_load_rail_config
+from rail.ledger import BRAIN_MILESTONES, RECEIPTS_DIR, LedgerError, RecordKind, open_ledger
+from rail.ledger.file import FileLedger, load_receipt, receipt_filename
+from rail.model import MANIFEST_NAME, LedgerBackend, load_rail_config, try_load_rail_config
 from rail.policy import effective
 
 DOCS_DIRS = ("docs/specs", "docs/plans", "docs/adr")
@@ -226,6 +226,41 @@ def receipts(repo: Path) -> GateResult:
     return GateResult(Stage.HYGIENE, "receipts", True, f"{len(files)} well-formed receipt(s)")
 
 
+def mirrors(repo: Path) -> GateResult:
+    """`ledger: brain`: every attestation receipt in the checkout is a mirror of a row in
+    the shared ledger — matched by record digest (same fields, same digest). A mirror
+    without its attestation is drift (ADR-0002), the phase-2 proof line. Milestone receipts
+    (`integrated`, `fulfilled`) are brain's own receipts, never attested by the rail: the ones
+    kept from a file-ledger past are history, not drift."""
+    cfg = try_load_rail_config(repo)
+    if cfg is None:
+        return GateResult(Stage.HYGIENE, "mirrors", False, f"{MANIFEST_NAME} unreadable")
+    if cfg.ledger is LedgerBackend.FILE:
+        return GateResult(
+            Stage.HYGIENE, "mirrors", True, "file ledger: the receipts are the ledger"
+        )
+    local = FileLedger(repo / RECEIPTS_DIR)
+    try:
+        kept = local.list(cfg.project, kind=RecordKind.ATTESTATION)
+        shared = {
+            r.digest for r in open_ledger(repo).list(cfg.project, kind=RecordKind.ATTESTATION)
+        }
+    except LedgerError as exc:
+        return GateResult(Stage.HYGIENE, "mirrors", False, str(exc))
+    milestones = [r for r in kept if r.payload.get("kind") in BRAIN_MILESTONES]
+    mirrors_ = [r for r in kept if r.payload.get("kind") not in BRAIN_MILESTONES]
+    missing = [receipt_filename(r) for r in mirrors_ if r.digest not in shared]
+    if missing:
+        shown = ", ".join(missing[:3]) + (
+            f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
+        )
+        return GateResult(Stage.HYGIENE, "mirrors", False, f"mirror without attestation: {shown}")
+    history = f", {len(milestones)} milestone receipt(s) kept as history" if milestones else ""
+    return GateResult(
+        Stage.HYGIENE, "mirrors", True, f"{len(mirrors_)} mirror(s) attested in brain{history}"
+    )
+
+
 GATES = [
     GateSpec(Stage.HYGIENE, "rail_config", rail_config),
     GateSpec(Stage.HYGIENE, "docs_layout", docs_layout),
@@ -235,4 +270,5 @@ GATES = [
     GateSpec(Stage.HYGIENE, "remotes", remotes, scope="workstation"),
     GateSpec(Stage.HYGIENE, "roster_entry", roster_entry, scope="workstation"),
     GateSpec(Stage.HYGIENE, "receipts", receipts),
+    GateSpec(Stage.HYGIENE, "mirrors", mirrors, scope="ledger"),
 ]

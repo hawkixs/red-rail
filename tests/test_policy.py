@@ -86,6 +86,12 @@ def test_run_gate_reports_a_crash_as_a_failed_gate(tmp_path: Path) -> None:
     assert "RuntimeError" in result.details
 
 
+def test_review_reviewer_identity_default() -> None:
+    from rail.policy import GATE_DEFAULTS
+
+    assert GATE_DEFAULTS["review.reviewer_identity"] == "red-rail-reviewer"
+
+
 def test_run_gates_filters_by_stage(tmp_path: Path) -> None:
     assert [r.gate_id for r in run_gates(tmp_path, stages=[Stage.DESIGN])] == ["design.spec"]
     assert [r.code for r in run_gates(tmp_path, stages=[Stage.HYGIENE])] == [
@@ -97,4 +103,5 @@ def test_run_gates_filters_by_stage(tmp_path: Path) -> None:
         "remotes",
         "roster_entry",
         "receipts",
+        "mirrors",
     ]

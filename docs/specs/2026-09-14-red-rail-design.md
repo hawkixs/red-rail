@@ -199,6 +199,14 @@ red-rail/
 > `rail check --ci` reports the workstation-only gates (`hygiene.remotes`,
 > `hygiene.roster_entry`) as skipped, explicitly, because a CI checkout has one remote and no
 > ReD root.
+>
+> Implementation note (phase 2, 2026-09-19): gates that read the ledger are `ledger`-scoped
+> and skipped under `--ci` when `ledger: brain` (rule 3 below: CI holds no credential);
+> `rail.yaml` names the delivery ticket (`ticket:`) in brain mode; the contract is set as the
+> ticket's requester (`red`), attestations as the project; `integrated` and `fulfilled` are
+> brain milestones read from the ticket; `hygiene.mirrors` reports a receipt whose digest is
+> absent from the shared ledger. The brain API is pinned at the tag `delivery-attestations-v1.0`
+> (ADR-0002 amendment).
 
 Four mechanisms carry everything:
 

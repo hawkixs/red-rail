@@ -1,0 +1,48 @@
+{
+  "digest": "sha256:624361deefd7e7780cada90ff071a2fd089236995d9692eb48c6f492a85abb1c",
+  "idempotency_key": "contract:3f78854b-1e8d-4d2c-858c-1d8be8fbba91:2",
+  "issuer": "red",
+  "kind": "contract",
+  "payload": {
+    "contract": {
+      "acceptance_criteria": [
+        "BrainLedger passes the shared contract suite against the fake brain and attests idempotently on brain",
+        "the boundary tests freeze brain-v42's published contracts (43 finding codes, attestation API v1.0)",
+        "a mirror without attestation is reported by rail check (hygiene.mirrors) and repaired by a replay",
+        "one PR is reviewed end to end by the independent reviewer with its check required"
+      ],
+      "acceptance_mode": "explicit",
+      "constraints": [],
+      "deliverables": [
+        {
+          "key": "main",
+          "no_checks_reason": null,
+          "repository": "hawkixs/red-rail",
+          "repository_id": 1369727198,
+          "required_checks": [
+            {
+              "app_slug": "red-rail-reviewer",
+              "kind": "check_run",
+              "name": "red-rail/review",
+              "provider_id": null
+            }
+          ],
+          "review": {
+            "allowed_reviewers": [
+              "red-rail-reviewer[bot]"
+            ],
+            "required_approvals": 1
+          },
+          "target_branch": "main"
+        }
+      ],
+      "objective": "One delivery standard for the ReD ecosystem: executable gates, measured drift, evidence in a shared ledger",
+      "priority": 0,
+      "schema_version": 1
+    },
+    "reason": "phase 2 \u2014 the shared ledger and the reviewer (spec \u00a78)"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-19T12:40:23.805902Z",
+  "schema_version": 1
+}

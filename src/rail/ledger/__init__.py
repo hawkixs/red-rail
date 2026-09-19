@@ -14,12 +14,17 @@ Attestation payload conventions read by the gates and by `rail metrics`:
   verdict      "approve" | "request_changes" — review_verdict only
   version      released; digest — released and deployed (artefact digest)
   drill        bool — rolled_back / restored produced by the rollback drill
+
+Idempotency keys are deterministic per event (`idempotency_key_for`): facts about a commit
+are keyed by the commit, an artefact by its version, a recurring event by target, digest
+and emission time — a replay reuses the key written in the mirror.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -61,6 +66,77 @@ class IdempotencyConflict(LedgerError):
     """An idempotency key was reused with different content."""
 
 
+BRAIN_DIGEST_PREFIX = b"brain-delivery-attestation:v1\n"
+BRAIN_MILESTONES = frozenset({"integrated", "fulfilled"})
+
+
+class Unattested(LedgerError):
+    """The mirror is written, the shared ledger refused or was unreachable. Replay it."""
+
+    def __init__(self, receipt: Path, cause: str) -> None:
+        self.receipt = receipt
+        self.cause = cause
+        parts = receipt.stem.split("-")
+        label = parts[1] if len(parts) > 1 else parts[0]
+        super().__init__(
+            f"attestation not recorded ({cause}); the receipt {receipt.name} is written — "
+            f"replay with: rail attest {label} --from {receipt}"
+        )
+
+
+def _reject_floats(value: Any, path: str = "$") -> None:
+    if isinstance(value, bool):
+        return
+    if isinstance(value, float):
+        raise ValueError(f"float at {path}: brain refuses floats (use integers or strings)")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"non-string keys at {path}: brain refuses them")
+            _reject_floats(item, f"{path}.{key}")
+    elif isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            _reject_floats(item, f"{path}[{index}]")
+
+
+def brain_digest(data: dict[str, Any]) -> str:
+    """brain-v42's payload digest (contract v1): sha256 over a domain prefix and the
+    canonical JSON of the payload, rendered as bare lowercase hex."""
+    if not isinstance(data, dict):
+        raise ValueError("the payload is a JSON object")
+    _reject_floats(data)
+    canonical = json.dumps(
+        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(BRAIN_DIGEST_PREFIX + canonical).hexdigest()
+
+
+def idempotency_key_for(
+    kind: AttestationKind, data: dict[str, Any], *, emitted_at: datetime | None = None
+) -> str:
+    """`<kind>:<subject>[:<occurrence>]` — deterministic per event, random only when the data
+    names no subject at all (the mirror then carries the key for any replay)."""
+    sha = str(data.get("sha") or "")
+    if kind is AttestationKind.GATE_PASSED and sha and data.get("gate"):
+        return f"gate_passed:{sha}:{data['gate']}"
+    if kind is AttestationKind.REVIEW_VERDICT and sha and data.get("check_run_id") is not None:
+        return f"review_verdict:{sha}:{data['check_run_id']}"
+    if kind in (AttestationKind.INTEGRATED, AttestationKind.FULFILLED) and sha:
+        return f"{kind.value}:{sha}"
+    if kind is AttestationKind.RELEASED and (data.get("version") or sha):
+        return f"released:{data.get('version') or sha}"
+    if kind in (
+        AttestationKind.DEPLOYED,
+        AttestationKind.ROLLED_BACK,
+        AttestationKind.RESTORED,
+        AttestationKind.INCIDENT_DETECTED,
+    ):
+        stamp = (emitted_at or datetime.now(UTC)).astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+        subject = str(data.get("digest") or sha or "-")
+        return f"{kind.value}:{data.get('target') or '-'}:{subject}:{stamp}"
+    return f"{kind.value}:{uuid.uuid4()}"
+
+
 class RequiredCheck(BaseModel):
     """A trusted check selector as brain-v42's evaluator compares it: kind + name + the App
     that publishes it (`app_slug` or numeric `provider_id`) — no App identity is ever wired
@@ -93,7 +169,9 @@ class Deliverable(BaseModel):
     key: str = Field(min_length=1, max_length=64)
     repository: str = Field(min_length=3, max_length=201)  # owner/name, as brain-v42 expects
     target_branch: str = "main"
+    repository_id: int | None = Field(default=None, gt=0)  # GitHub numeric id, brain binds by it
     required_checks: list[RequiredCheck] = Field(default_factory=list, max_length=100)
+    no_checks_reason: str | None = Field(default=None, min_length=1, max_length=2000)
     review: ReviewPolicy = Field(default_factory=ReviewPolicy)
 
 
@@ -106,6 +184,8 @@ class Contract(BaseModel):
     objective: str = Field(min_length=1, max_length=8000)
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=200)
     constraints: list[str] = Field(default_factory=list, max_length=200)
+    priority: int = Field(default=0, ge=0, le=10000)
+    acceptance_mode: Literal["automatic", "explicit"] = "explicit"  # `fulfilled` is explicit
     deliverables: list[Deliverable] = Field(min_length=1, max_length=20)
 
 
@@ -198,6 +278,7 @@ class Ledger(Protocol):
         *,
         issuer: str,
         idempotency_key: str,
+        emitted_at: datetime | None = None,
     ) -> Record: ...
 
     def list(
@@ -211,14 +292,34 @@ class Ledger(Protocol):
     def get(self, project: str, digest: str) -> Record | None: ...
 
 
-def open_ledger(repo: Path) -> Ledger:
-    """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a bad manifest."""
+def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
+    """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a bad manifest.
+    `ledger: brain` needs the `brain` extra, the operator's token and the ticket."""
     from rail.ledger.file import FileLedger
     from rail.model import LedgerBackend, load_rail_config
 
     cfg = load_rail_config(repo)
     if cfg.ledger is LedgerBackend.FILE:
         return FileLedger(repo / RECEIPTS_DIR)
-    raise LedgerUnavailable(
-        "ledger 'brain' arrives in phase 2 (ADR-0002); declare `ledger: file` for now"
+    import importlib.util
+
+    # the client imports fastmcp lazily (found by the independent reviewer on PR #3): the
+    # extra is checked here, so a missing dependency is a LedgerUnavailable, not a traceback
+    if importlib.util.find_spec("fastmcp") is None:
+        raise LedgerUnavailable("ledger 'brain' needs the extra: uv sync --extra brain")
+    from rail.brain.client import BrainClient
+    from rail.brain.settings import BrainSettings
+    from rail.ledger.brain import BrainLedger
+
+    if client is None:
+        from rail.private import PrivateFileError
+
+        try:
+            settings = BrainSettings.from_environment()
+        except PrivateFileError as exc:
+            raise LedgerError(f"brain token: {exc}") from exc
+        client = BrainClient.http(settings.url, token=settings.token, agent="red-rail")
+    assert cfg.ticket is not None  # guaranteed by the manifest validator
+    return BrainLedger(
+        client, ticket=cfg.ticket, project=cfg.project, receipts_dir=repo / RECEIPTS_DIR
     )

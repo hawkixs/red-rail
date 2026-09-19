@@ -138,6 +138,15 @@ def parity(repo: Path, *, run: Runner) -> bool:
     return heads[0] != "" and heads[0] == heads[1]
 
 
+def github_repository_id(slug: str, *, run: Runner = subprocess.run) -> int:
+    """The numeric id brain binds by (`gh api repos/<slug> --jq .id`)."""
+    out = _ok(["gh", "api", f"repos/{slug}", "--jq", ".id"], run=run, what="gh api repos")
+    try:
+        return int(out.strip())
+    except ValueError as exc:
+        raise RemoteError(f"gh api repos/{slug}: not an id: {out!r}") from exc
+
+
 def publish(repo: Path, slug: str, description: str, *, run: Runner = subprocess.run) -> None:
     """Kickstart runbook `a050e6ec`, steps 2 and 8–12, as one call."""
     ensure_absent(slug, run=run)

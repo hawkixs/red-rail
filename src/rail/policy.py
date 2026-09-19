@@ -52,6 +52,8 @@ REQUIRED_SPEC_SECTIONS: dict[str, tuple[str, ...]] = {
 GATE_DEFAULTS: dict[str, Any] = {
     "hygiene.canonical_host": "github.com",
     "hygiene.mirror_host": "gitlab.hawkixs.local",
+    # the App identity the verdict gate trusts (issuer of the review_verdict attestation)
+    "review.reviewer_identity": "red-rail-reviewer",
     "build.commit_window": 20,
     "build.conventional_types": (
         "feat",

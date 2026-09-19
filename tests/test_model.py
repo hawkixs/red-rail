@@ -82,10 +82,42 @@ def test_ledger_defaults_to_file_so_rail_works_without_brain() -> None:
 
 
 def test_ledger_accepts_brain_as_the_shared_backend() -> None:
-    cfg = RailConfig.model_validate({**MINIMAL, "ledger": "brain"})
+    cfg = RailConfig.model_validate(
+        {**MINIMAL, "ledger": "brain", "ticket": "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"}
+    )
     assert cfg.ledger is LedgerBackend.BRAIN
 
 
 def test_ledger_rejects_unknown_backends() -> None:
     with pytest.raises(ValidationError, match="ledger"):
         RailConfig.model_validate({**MINIMAL, "ledger": "sqlite"})
+
+
+def test_brain_ledger_requires_a_ticket(tmp_path: Path) -> None:
+    (tmp_path / "rail.yaml").write_text(
+        "rail: 1\nproject: red-probe\nbrain_key: red-probe\ntier: dev\nstack: python\n"
+        "ledger: brain\n"
+    )
+    with pytest.raises(ValidationError, match="ticket"):
+        load_rail_config(tmp_path)
+
+
+def test_ticket_is_a_uuid_and_only_with_the_brain_ledger(tmp_path: Path) -> None:
+    (tmp_path / "rail.yaml").write_text(
+        "rail: 1\nproject: red-probe\nbrain_key: red-probe\ntier: dev\nstack: python\n"
+        "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+    )
+    cfg = load_rail_config(tmp_path)
+    assert str(cfg.ticket) == "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"
+    (tmp_path / "rail.yaml").write_text(
+        "rail: 1\nproject: red-probe\nbrain_key: red-probe\ntier: dev\nstack: python\n"
+        "ledger: file\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+    )
+    with pytest.raises(ValidationError, match="ticket"):
+        load_rail_config(tmp_path)
+    (tmp_path / "rail.yaml").write_text(
+        "rail: 1\nproject: red-probe\nbrain_key: red-probe\ntier: dev\nstack: python\n"
+        "ledger: brain\nticket: not-a-uuid\n"
+    )
+    with pytest.raises(ValidationError):
+        load_rail_config(tmp_path)
