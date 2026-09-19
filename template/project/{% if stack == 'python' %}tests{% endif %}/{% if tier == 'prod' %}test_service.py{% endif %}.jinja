@@ -1,0 +1,56 @@
+"""The three routes answer, `/version` reflects the build environment, anything else is 404."""
+
+import json
+import threading
+import urllib.error
+import urllib.request
+from collections.abc import Iterator
+
+import pytest
+
+from {{ project | replace('-', '_') }}.service import Service
+
+
+@pytest.fixture
+def base_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setenv("APP_VERSION", "1.2.3")
+    monkeypatch.setenv("APP_GIT_SHA", "abc123")
+    monkeypatch.setenv("APP_IMAGE_DIGEST", "sha256:" + "f" * 64)
+    server = Service(("127.0.0.1", 0))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+
+
+def _get(url: str) -> tuple[int, bytes]:
+    try:
+        with urllib.request.urlopen(url, timeout=2) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def test_healthz(base_url: str) -> None:
+    assert _get(f"{base_url}/healthz") == (200, b'{"status": "ok"}')
+
+
+def test_version_reflects_the_build(base_url: str) -> None:
+    status, body = _get(f"{base_url}/version")
+    assert status == 200
+    assert json.loads(body) == {
+        "project": "{{ project }}",
+        "version": "1.2.3",
+        "git_sha": "abc123",
+        "image_digest": "sha256:" + "f" * 64,
+    }
+
+
+def test_metrics_and_not_found(base_url: str) -> None:
+    assert _get(f"{base_url}/nope")[0] == 404
+    status, body = _get(f"{base_url}/metrics")
+    assert status == 200
+    text = body.decode()
+    assert "{{ project | replace('-', '_') }}_up 1" in text
+    assert '{{ project | replace('-', '_') }}_build_info{project="{{ project }}"' in text
+    assert "{{ project | replace('-', '_') }}_requests_total 2" in text

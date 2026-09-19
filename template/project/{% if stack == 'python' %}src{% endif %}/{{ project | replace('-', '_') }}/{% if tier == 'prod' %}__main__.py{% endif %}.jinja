@@ -1,0 +1,7 @@
+"""`python -m {{ project | replace('-', '_') }}`: serve on APP_HOST:APP_PORT (0.0.0.0:8080)."""
+
+import os
+
+from {{ project | replace('-', '_') }}.service import serve
+
+serve(os.environ.get("APP_HOST", "0.0.0.0"), int(os.environ.get("APP_PORT", "8080")))

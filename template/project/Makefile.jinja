@@ -1,6 +1,6 @@
 # {{ project }} task runner. Every target is what CI runs, nothing more.
 
-.PHONY: sync lint test check ci
+.PHONY: sync lint test check ci serve image
 
 RAIL_FLAGS ?=
 
@@ -17,6 +17,15 @@ lint:
 ## Run the test suite
 test:
 	uv run pytest -q
+{% if tier == 'prod' %}
+## Serve locally on 127.0.0.1:8080
+serve:
+	APP_HOST=127.0.0.1 uv run python -m {{ project | replace('-', '_') }}
+
+## Build the image locally (the release builds and pushes it: `rail release`)
+image:
+	docker build --build-arg VERSION=dev --build-arg GIT_SHA=$$(git rev-parse HEAD) -t {{ project }}:dev .
+{% endif -%}
 {% elif stack == 'go' -%}
 ## Download the modules
 sync:

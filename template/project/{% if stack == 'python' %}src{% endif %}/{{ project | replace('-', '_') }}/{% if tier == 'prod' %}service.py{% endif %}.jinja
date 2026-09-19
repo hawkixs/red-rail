@@ -1,0 +1,92 @@
+"""{{ project }} — the HTTP service: `/healthz`, `/version`, `/metrics`. Standard library only.
+
+`/version` is what lets the rail measure the drift between git and what is deployed: the
+version and the commit are baked into the image at build time, the image digest arrives
+from the deployment (an image cannot know its own manifest digest)."""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+PROJECT = "{{ project }}"
+METRIC = "{{ project | replace('-', '_') }}"
+
+
+def build_info() -> dict[str, str]:
+    return {
+        "project": PROJECT,
+        "version": os.environ.get("APP_VERSION", "0.0.0"),
+        "git_sha": os.environ.get("APP_GIT_SHA", "unknown"),
+        "image_digest": os.environ.get("APP_IMAGE_DIGEST", ""),
+    }
+
+
+class Counter:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.value = 0
+
+    def increment(self) -> int:
+        with self._lock:
+            self.value += 1
+            return self.value
+
+
+class Service(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, address: tuple[str, int]) -> None:
+        super().__init__(address, Handler)
+        self.requests = Counter()
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = f"{PROJECT}/1"
+    server: Service
+
+    def do_GET(self) -> None:  # noqa: N802 — http.server's name
+        self.server.requests.increment()
+        path = self.path.split("?", 1)[0]
+        if path == "/healthz":
+            self._json(HTTPStatus.OK, {"status": "ok"})
+        elif path == "/version":
+            self._json(HTTPStatus.OK, build_info())
+        elif path == "/metrics":
+            self._text(HTTPStatus.OK, self._metrics())
+        else:
+            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def _metrics(self) -> str:
+        info = build_info()
+        labels = ",".join(f'{k}="{v}"' for k, v in info.items())
+        return (
+            f"# TYPE {METRIC}_build_info gauge\n{METRIC}_build_info{% raw %}{{{labels}}}{% endraw %} 1\n"
+            f"# TYPE {METRIC}_requests_total counter\n"
+            f"{METRIC}_requests_total {self.server.requests.value}\n"
+            f"# TYPE {METRIC}_up gauge\n{METRIC}_up 1\n"
+        )
+
+    def _json(self, status: HTTPStatus, body: dict[str, str]) -> None:
+        self._send(status, json.dumps(body).encode(), "application/json")
+
+    def _text(self, status: HTTPStatus, body: str) -> None:
+        self._send(status, body.encode(), "text/plain; version=0.0.4; charset=utf-8")
+
+    def _send(self, status: HTTPStatus, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 — the base signature
+        return  # Traefik's access log is the log; the container stays quiet
+
+
+def serve(host: str = "0.0.0.0", port: int = 8080) -> None:
+    Service((host, port)).serve_forever()

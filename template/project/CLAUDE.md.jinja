@@ -23,6 +23,18 @@ comments, test names. The conversation with the operator stays in French.
 
 Describe the modules as they appear. Durable decisions go to `docs/adr/`.
 
+{% if tier == 'prod' and stack == 'python' -%}
+## Service
+
+`src/{{ project | replace('-', '_') }}/service.py` — standard-library HTTP server on `APP_PORT` (8080):
+`/healthz` (liveness), `/version` (`project`, `version`, `git_sha` baked at build time,
+`image_digest` from the deployment — the drift between git and what runs is measured here),
+`/metrics` (Prometheus text). Non-root image (`Dockerfile`, base pinned by digest), stack in
+`deploy/compose.yaml` behind Traefik at `{{ healthcheck | replace('/healthz', '') }}`, no port published.
+Release and deployment go through the rail: `rail release --version X.Y.Z`, `rail deploy`,
+`rail drill`; never `docker compose` by hand on the VPS.
+
+{% endif -%}
 ## Stack
 
 {% if stack == 'python' -%}
@@ -53,6 +65,10 @@ make check     # the rail gates against this repository
 ├── docs/adr/          # architecture decision records (numbered)
 ├── docs/receipts/     # the file ledger: append-only evidence, written by `rail attest`, never by hand
 {%- if stack == 'python' %}
+{%- if tier == 'prod' %}
+├── Dockerfile
+├── deploy/compose.yaml
+{%- endif %}
 ├── src/{{ project | replace('-', '_') }}/
 └── tests/
 {%- elif stack == 'go' %}
