@@ -55,12 +55,10 @@
 ## Operator gestures (outside any task; Batch 4 needs them all)
 
 1. **brain-v42 release** — DONE 2026-09-18: `delivery-attestations-v1.0` on `9bdb3812…`, in production; `pins.py` names that tag and the two file digests (Task 1.2). `make contracts-check` must stay green after any re-vendoring.
-2. **MCP token file**: create the rail's own private token file from the operator's env file (the value only, no `KEY=`, no trailing newline):
-   `umask 077 && mkdir -p ~/.config/red-rail && grep '^MCP_HTTP_TOKEN=' ~/.config/brain-v42/mcp-token.env | cut -d= -f2- | tr -d '"\n' > ~/.config/red-rail/brain-token && chmod 600 ~/.config/red-rail/brain-token`.
-   Verify: `uv run rail brain ping` (Task 3.1) answers `brain-v42 reachable … as red-rail`.
-3. **GitHub App `red-rail-reviewer`**: create it on the `hawkixs` account (Settings → Developer settings → GitHub Apps → New): permissions `Checks: Read and write`, `Pull requests: Read and write`, `Contents: Read-only`, `Metadata: Read-only`; no webhook (pull mode); generate a private key, save it as `~/.config/red-rail/reviewer-app.pem` with `chmod 600`; install the App on `hawkixs/red-rail`; note the **App ID** and the **Installation ID** (`https://github.com/settings/installations/<id>`). Write `~/.config/red-rail/reviewer.yaml` (0600) as documented in Task 3.3.
-4. **Delivery ticket for red-rail**: from a brain session, `brain_ticket_create(from_project="red", to_project="red-rail", kind="request", title="Deliver red-rail phase 2 — shared ledger and independent reviewer", body="…")` → keep the UUID for `rail.yaml` (Task 4.1). Self-tickets are valid in brain (confirmed 2026-09-18) but no canary proved a self-ticket contract yet — Task 4.1 is that canary.
-5. **Observer registration**: register `hawkixs/red-rail` for project `red-rail` in brain-v42's observer settings (`~/.config/brain-v42/delivery-observer.env`, brain-v42 runbook) so `brain_delivery_bind_pr` accepts the PR and the `integration` receipt appears after the merge.
+2. **MCP token file** — DONE 2026-09-19: `~/.config/red-rail/brain-token` (0600, one line of printable ASCII, extracted from the operator's env file with `umask 077`), proven against the live brain (`brain_delivery_list` as `red-rail` answers). `uv run rail brain ping` (Task 3.1) must answer `brain-v42 reachable … as red-rail`.
+3. **GitHub App `red-rail-reviewer`** — DONE 2026-09-19 (runbook `98e9e625`): App id **4996084**, permissions `checks: write`, `pull_requests: write`, `contents: read`, `metadata: read`, no webhook; key at `~/.config/red-rail/reviewer-app.pem` (0600, `RSA key ok`); installed on the whole `hawkixs` account, installation id **162883835** (the reviewer only acts on the repositories listed in its config); `~/.config/red-rail/reviewer.yaml` written (0600) with `hawkixs/red-rail` → its checkout.
+4. **Delivery ticket for red-rail** — DONE 2026-09-19: ticket **`3f78854b-1e8d-4d2c-858c-1d8be8fbba91`** (`red → red-rail`, kind request) — the value of `ticket:` in `rail.yaml` (Task 4.1). The repository's numeric id is **1369727198**. No canary proved a `red → red-rail` contract yet — Task 4.1 is that canary.
+5. **Observer registration** — REQUESTED 2026-09-19 (message to the brain-v42 session): register `hawkixs/red-rail` (1369727198) for project `red-rail` in the observer's registry (regeneration + two restarts, brain-v42 runbook 2026-09-11) so `brain_delivery_bind_pr` accepts the PR and the `integration` receipt appears after the merge. Wait for brain-v42's confirmation before Task 4.1 step 3.
 6. **Required check**: once the App has published `red-rail/review` at least once, add it to the `protect-main` ruleset as a required status check (`gh api -X PUT repos/hawkixs/red-rail/rulesets/23288226 …` or the UI). Before that, the contract already names it (`required_checks`), which is enough for brain's evaluator.
 
 ---
@@ -5553,7 +5551,7 @@ uv run rail brain ping
 ```
 Expected: `brain-v42 reachable at http://127.0.0.1:8765/mcp as red-rail: 0 delivery view(s) for red-rail`.
 
-Edit `rail.yaml`: `ledger: brain` and `ticket: <UUID of the red → red-rail ticket>` (keep the `review.verdict` exception for now). Then the phase-2 contract (revision 1 of the ticket's delivery workflow):
+Edit `rail.yaml`: `ledger: brain` and `ticket: 3f78854b-1e8d-4d2c-858c-1d8be8fbba91` (keep the `review.verdict` exception for now). Then the phase-2 contract (revision 1 of the ticket's delivery workflow):
 ```bash
 uv run rail contract set \
   --objective "One delivery standard for the ReD ecosystem: executable gates, measured drift, evidence in a shared ledger" \
@@ -5618,10 +5616,10 @@ Expected: the same receipt (same key, same digest), `PASS  hygiene.mirrors  2 mi
 
 - [ ] **Step 5: Proof — one PR reviewed end to end (needs gestures 3 and 6)**
 
-`~/.config/red-rail/reviewer.yaml` (0600):
+`~/.config/red-rail/reviewer.yaml` (0600) — already written on 2026-09-19:
 ```yaml
-app_id: <App ID>
-installation_id: <Installation ID>
+app_id: 4996084
+installation_id: 162883835
 private_key_file: ~/.config/red-rail/reviewer-app.pem
 repositories:
   - slug: hawkixs/red-rail
