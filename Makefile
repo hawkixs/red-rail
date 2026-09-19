@@ -1,6 +1,6 @@
 # red-rail task runner. Every target is what CI runs, nothing more.
 
-.PHONY: sync lint test check ci audit skills-install
+.PHONY: sync lint test check ci audit skills-install contracts-check
 
 RAIL_FLAGS ?=
 DATE ?= $(shell date +%F)
@@ -36,3 +36,7 @@ audit:
 skills-install:
 	mkdir -p $(HOME)/.claude/skills
 	for d in skills/*/; do ln -sfn "$(CURDIR)/$$d" "$(HOME)/.claude/skills/$$(basename $$d)"; done
+
+## Compare the vendored brain-v42 contracts with the pinned ref of the sibling checkout
+contracts-check:
+	uv run pytest -q tests/test_boundary.py -k vendored_files_equal_the_pinned_ref -rs

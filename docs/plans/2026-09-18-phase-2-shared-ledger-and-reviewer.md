@@ -442,7 +442,8 @@ def test_the_tool_error_codes_are_the_published_closed_list() -> None:
         "ticket_not_found",
     }
     assert set(codes["transport"]) == {"invalid_arguments", "delivery_unavailable"}
-    assert not set(codes["tool"]) & FINDING_CODES, "tool codes are not finding codes"
+    # the two vocabularies overlap on exactly one word, with one meaning: the feature is off
+    assert set(codes["tool"]) & FINDING_CODES == {"delivery_disabled"}
 
 
 @pytest.mark.skipif(not (BRAIN_CHECKOUT / ".git").exists(), reason="no brain-v42 checkout")
