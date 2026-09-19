@@ -52,6 +52,7 @@ def command(repo: Path, window: int, ci: bool, as_json: bool) -> None:
     )
     click.echo(f"change failure rate         {_fmt(metrics.change_failure_rate, '')}")
     click.echo(f"recovery time               {_fmt(metrics.recovery_time_hours, 'h')}")
+    click.echo(f"drill recovery time         {_fmt(metrics.drill_recovery_time_minutes, 'min')}")
     click.echo(
         f"conformance                 {c.passed}/{c.applicable} "
         f"({c.exceptions} declared exception(s))"
