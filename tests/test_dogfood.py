@@ -1,6 +1,6 @@
 """red-rail passes its own rail at tier dev on the shared ledger (phase 2): brain-v42 is the
-authority, two declared exceptions remain until the independent reviewer has judged a PR and
-brain has observed its merge (ADR-0003, spec §8)."""
+authority; one declared exception remains until brain has observed the merge of the phase-2
+PR (spec §8). The review gate is live: the independent reviewer approved that PR."""
 
 import shutil
 from pathlib import Path
@@ -19,9 +19,10 @@ def test_manifest_declares_dev_on_the_brain_ledger_with_declared_exceptions() ->
     cfg = load_rail_config(ROOT)
     assert cfg.tier is Tier.DEV and cfg.ledger is LedgerBackend.BRAIN
     assert str(cfg.ticket) == TICKET
-    assert set(cfg.gates) == {"review.verdict", "integrate.receipt"}
-    assert all(override.value is False for override in cfg.gates.values())
-    assert "ADR-0003" in cfg.gates["review.verdict"].reason
+    # the review gate is live since the independent reviewer approved PR #3 (2026-09-19);
+    # the integration receipt arrives with brain's observation of that PR's merge
+    assert set(cfg.gates) == {"integrate.receipt"}
+    assert cfg.gates["integrate.receipt"].value is False
     assert "phase-2 PR" in cfg.gates["integrate.receipt"].reason
 
 
