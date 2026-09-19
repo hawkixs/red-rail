@@ -103,7 +103,9 @@ class BrainClient:
                 result = await client.call_tool(name, arguments, timeout=self.timeout)
             except ToolError as exc:
                 text = str(exc)
-                if text.startswith(("Unknown tool", "Tool not found")) or "not found" in text:
+                # fastmcp 3.4: `Unknown tool: '<name>'`; a refusal is `<code>: <message>` and its
+                # message may well say "not found" (ticket_not_found, contract_not_found)
+                if text.startswith(("Unknown tool", "Tool not found")):
                     raise BrainUnreachable(text) from exc
                 code, message = parse_tool_error(text)
                 raise BrainToolError(code, message) from exc

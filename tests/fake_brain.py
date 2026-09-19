@@ -158,7 +158,7 @@ class FakeBrain:
         except (ValueError, TypeError) as exc:
             raise refuse("invalid_arguments", "ticket_id") from exc
         if ticket_id not in self.tickets:
-            raise refuse("ticket_not_found")
+            raise refuse("ticket_not_found", "ticket was not found")  # brain's exact wording
         return self.tickets[ticket_id]
 
     def _identity(self) -> str:
@@ -169,7 +169,7 @@ class FakeBrain:
 
     def _view(self, ticket: Ticket, history_limit: int) -> dict[str, Any]:
         if not ticket.revisions:
-            raise refuse("contract_not_found")
+            raise refuse("contract_not_found", "delivery contract was not found")  # brain's text
         rows = sorted(
             (a for a in self.attestations if a["ticket_id"] == ticket.id),
             key=lambda a: (a["emitted_at"], a["id"]),
@@ -281,8 +281,14 @@ class FakeBrain:
             for required in ("objective", "deliverables", "acceptance_mode"):
                 if required not in contract:
                     raise refuse("invalid_arguments", f"contract.{required}")
+            stored = json.loads(json.dumps(contract))
+            for deliverable in stored.get("deliverables", []):  # brain fills the numeric id
+                if deliverable.get("repository_id") is None:
+                    for (project, repository_id), slug in brain.repositories.items():
+                        if slug == deliverable.get("repository") and project == ticket.to_project:
+                            deliverable["repository_id"] = repository_id
             revision = {
-                **contract,
+                **stored,
                 "ticket_id": ticket.id,
                 "contract_revision": len(ticket.revisions) + 1,
                 "content_digest": digest_of(contract),

@@ -92,3 +92,20 @@ def test_settings_fail_closed_without_a_private_token_file(
     monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(loose))
     with pytest.raises(PrivateFileError, match="mode 644"):
         BrainSettings.from_environment(os.environ)
+
+
+def test_a_refusal_whose_message_says_not_found_is_still_a_refusal() -> None:
+    """Measured on the live brain (2026-09-19): `contract_not_found: delivery contract was not
+    found` was classified as unreachable because the message contains "not found"."""
+    brain = FakeBrain(agent="red-rail")
+    ticket = brain.add_ticket("red", "red-probe")
+    client = BrainClient.in_memory(brain, agent="red-rail")
+    with pytest.raises(BrainToolError) as exc:
+        client.call("brain_delivery_get", {"ticket_id": ticket, "actor_project": "red-probe"})
+    assert exc.value.code == "contract_not_found"
+    with pytest.raises(BrainToolError) as exc:
+        client.call(
+            "brain_delivery_get",
+            {"ticket_id": "00000000-0000-0000-0000-000000000000", "actor_project": "x"},
+        )
+    assert exc.value.code == "ticket_not_found"

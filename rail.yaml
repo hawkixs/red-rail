@@ -3,10 +3,14 @@ project: red-rail
 brain_key: red-rail
 tier: dev
 stack: python
-# Standalone first (ADR-0002): the receipts under docs/receipts/ are the ledger in phase 1;
-# `ledger: brain` returns with BrainLedger in phase 2.
-ledger: file
+# Phase 2 (ADR-0002 amendment): brain-v42 is the shared, observed ledger of red-rail itself;
+# the receipts under docs/receipts/ are mirrors written before every attestation.
+ledger: brain
+ticket: 3f78854b-1e8d-4d2c-858c-1d8be8fbba91   # red → red-rail, "Deliver red-rail phase 2"
 gates:
   review.verdict:
     value: false
     reason: "independent reviewer arrives in phase 2 (ADR-0003); until then no verdict can be independent"
+  integrate.receipt:
+    value: false
+    reason: "first brain-observed integration is the merge of the phase-2 PR (spec §8); until then the ticket carries no integration receipt"

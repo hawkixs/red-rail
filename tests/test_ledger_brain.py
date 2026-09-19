@@ -402,5 +402,52 @@ def test_the_contract_is_set_by_the_requester_never_by_the_executor(tmp_path: Pa
         receipts_dir=tmp_path / "other" / RECEIPTS_DIR,
         requester="red-probe",
     )
+    amended = CONTRACT.model_copy(update={"objective": "an amendment the executor may not set"})
     with pytest.raises(LedgerError, match="not_allowed"):
-        executor.contract_set("red-probe", CONTRACT, reason="x", issuer="op", idempotency_key="c9")
+        executor.contract_set("red-probe", amended, reason="x", issuer="op", idempotency_key="c9")
+
+
+def test_contract_set_is_idempotent_on_content_and_mirrors_by_ticket_and_revision(
+    tmp_path: Path,
+) -> None:
+    """Measured on the live brain (2026-09-19): revision 1 landed, then the mirror collided with
+    the phase-1 file-ledger key `contract:<project>:1`. The mirror is keyed by ticket and
+    revision, carries the requester as issuer (what brain records), and a re-run with the same
+    content creates no new revision."""
+    ledger, brain, ticket = _ledger(tmp_path)
+    first = ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    again = ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c1"
+    )
+    assert again == first
+    assert first.idempotency_key == f"contract:{ticket}:1" and first.issuer == "red"
+    assert len(brain.tickets[ticket].revisions) == 1
+    assert len(list((tmp_path / RECEIPTS_DIR).glob("*-contract-*.json"))) == 1
+    listed = ledger.list("red-probe", kind=RecordKind.CONTRACT)
+    assert listed == [first], "the row read back from brain rebuilds the mirror, same digest"
+    amended = CONTRACT.model_copy(update={"objective": "ship the probe with metrics"})
+    second = ledger.contract_set(
+        "red-probe", amended, reason="metrics", issuer="op", idempotency_key="c2"
+    )
+    assert second.idempotency_key == f"contract:{ticket}:2"
+    assert len(brain.tickets[ticket].revisions) == 2
+
+
+def test_server_enriched_fields_do_not_defeat_content_idempotency(tmp_path: Path) -> None:
+    """Measured on the live brain (2026-09-19): brain fills `repository_id` from its registry,
+    so a re-run comparing our `None` with its id created a duplicate revision 2."""
+    ledger, brain, ticket = _ledger(tmp_path)
+    bare = Contract(
+        objective="ship the probe",
+        deliverables=[Deliverable(key="probe", repository="hawkixs/red-probe")],
+    )
+    first = ledger.contract_set(
+        "red-probe", bare, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    assert brain.tickets[ticket].revisions[-1]["deliverables"][0]["repository_id"] == 4242
+    again = ledger.contract_set(
+        "red-probe", bare, reason="bootstrap", issuer="op", idempotency_key="c1"
+    )
+    assert again == first and len(brain.tickets[ticket].revisions) == 1

@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from rail import gitrepo, markdown
 from rail.gates import GateResult, GateSpec, Stage
-from rail.ledger import RECEIPTS_DIR, LedgerError, RecordKind, open_ledger
+from rail.ledger import BRAIN_MILESTONES, RECEIPTS_DIR, LedgerError, RecordKind, open_ledger
 from rail.ledger.file import FileLedger, load_receipt, receipt_filename
 from rail.model import MANIFEST_NAME, LedgerBackend, load_rail_config, try_load_rail_config
 from rail.policy import effective
@@ -229,7 +229,9 @@ def receipts(repo: Path) -> GateResult:
 def mirrors(repo: Path) -> GateResult:
     """`ledger: brain`: every attestation receipt in the checkout is a mirror of a row in
     the shared ledger — matched by record digest (same fields, same digest). A mirror
-    without its attestation is drift (ADR-0002), the phase-2 proof line."""
+    without its attestation is drift (ADR-0002), the phase-2 proof line. Milestone receipts
+    (`integrated`, `fulfilled`) are brain's own receipts, never attested by the rail: the ones
+    kept from a file-ledger past are history, not drift."""
     cfg = try_load_rail_config(repo)
     if cfg is None:
         return GateResult(Stage.HYGIENE, "mirrors", False, f"{MANIFEST_NAME} unreadable")
@@ -245,13 +247,18 @@ def mirrors(repo: Path) -> GateResult:
         }
     except LedgerError as exc:
         return GateResult(Stage.HYGIENE, "mirrors", False, str(exc))
-    missing = [receipt_filename(r) for r in kept if r.digest not in shared]
+    milestones = [r for r in kept if r.payload.get("kind") in BRAIN_MILESTONES]
+    mirrors_ = [r for r in kept if r.payload.get("kind") not in BRAIN_MILESTONES]
+    missing = [receipt_filename(r) for r in mirrors_ if r.digest not in shared]
     if missing:
         shown = ", ".join(missing[:3]) + (
             f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
         )
         return GateResult(Stage.HYGIENE, "mirrors", False, f"mirror without attestation: {shown}")
-    return GateResult(Stage.HYGIENE, "mirrors", True, f"{len(kept)} mirror(s) attested in brain")
+    history = f", {len(milestones)} milestone receipt(s) kept as history" if milestones else ""
+    return GateResult(
+        Stage.HYGIENE, "mirrors", True, f"{len(mirrors_)} mirror(s) attested in brain{history}"
+    )
 
 
 GATES = [

@@ -381,3 +381,33 @@ def test_contract_set_names_required_checks_and_reviewers(tmp_path: Path) -> Non
         ],
     )
     assert bad.exit_code == 2 and "KIND:NAME@APP_SLUG" in bad.output
+
+
+def test_contract_key_names_the_ticket_and_the_next_revision_in_brain_mode(tmp_path: Path) -> None:
+    from rail.brain.client import BrainClient
+    from rail.ledger import Contract, Deliverable, open_ledger
+    from tests.fake_brain import FakeBrain
+
+    repo = _repo(tmp_path)
+    (repo / "rail.yaml").write_text(
+        (repo / "rail.yaml")
+        .read_text()
+        .replace("ledger: file\n", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n")
+    )
+    brain = FakeBrain(agent="operator")
+    brain.add_ticket("red", "red-alpha", "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f")
+    ledger = open_ledger(repo, client=BrainClient.in_memory(brain, agent="operator"))
+    first = Contract(
+        objective="v1", deliverables=[Deliverable(key="main", repository="hawkixs/red-alpha")]
+    )
+    record = ledger.contract_set("red-alpha", first, reason="r", issuer="op", idempotency_key="k1")
+    assert record.idempotency_key == "contract:04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f:1"
+    from rail.commands.contract import next_contract_key
+
+    assert next_contract_key(ledger, "red-alpha", "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f") == (
+        "contract:04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f:2"
+    )
+    assert (
+        next_contract_key(FileLedger(tmp_path / "empty"), "red-alpha", None)
+        == "contract:red-alpha:1"
+    )

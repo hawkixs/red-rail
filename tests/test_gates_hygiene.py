@@ -252,3 +252,41 @@ def test_mirrors_reports_a_receipt_absent_from_the_shared_ledger(
     monkeypatch.setattr(hygiene, "open_ledger", lambda repo: DownLedger())
     result = hygiene.mirrors(repo)
     assert not result.passed and "brain unreachable" in result.details
+
+
+def test_mirrors_ignores_milestone_receipts_kept_from_the_file_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured on red-rail (2026-09-19): the phase-1 `integrated` receipts have no row in
+    brain because milestones are brain's receipts, never attested by the rail — they are
+    history, not drift."""
+    from rail.gates import hygiene
+    from rail.ledger import RECEIPTS_DIR, AttestationKind
+    from rail.ledger.file import FileLedger
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    manifest = (repo / "rail.yaml").read_text()
+    (repo / "rail.yaml").write_text(
+        manifest.replace(
+            "ledger: file\n", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+        )
+    )
+    local = FileLedger(repo / RECEIPTS_DIR)
+    local.attest(
+        "red-alpha",
+        AttestationKind.INTEGRATED,
+        {"sha": "a" * 40},
+        issuer="op",
+        idempotency_key="i1",
+    )
+    local.attest(
+        "red-alpha", AttestationKind.FULFILLED, {"sha": "a" * 40}, issuer="op", idempotency_key="f1"
+    )
+
+    class EmptySharedLedger:
+        def list(self, project, *, kind=None, attestation=None):
+            return []
+
+    monkeypatch.setattr(hygiene, "open_ledger", lambda repo: EmptySharedLedger())
+    result = hygiene.mirrors(repo)
+    assert result.passed and "2 milestone receipt(s)" in result.details

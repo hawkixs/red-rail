@@ -117,30 +117,31 @@ class BrainLedger:
     def contract_set(
         self, project: str, contract: Contract, *, reason: str, issuer: str, idempotency_key: str
     ) -> Record:
+        """Set as the requester (brain: "only the requester may set a delivery contract").
+        Idempotent on content: the same contract as the current revision creates no revision.
+        The mirror is keyed `contract:<ticket>:<revision>` and carries what brain records — the
+        requester as issuer, the revision's `created_at` — so the row read back rebuilds it."""
         self._same(project)
         view = self._view(required=False)
-        expected = int(view["contract"]["contract_revision"]) if view else 0
-        row = self._call_checked(
-            "brain_delivery_contract_set",
-            {
-                "ticket_id": str(self.ticket),
-                "actor_project": self.requester,
-                "contract": contract.model_dump(mode="json"),
-                "expected_revision": expected,
-                "idempotency_key": idempotency_key,
-                "reason": reason,
-            },
-            agent=issuer,
-        )
-        record = Record.build(
-            kind=RecordKind.CONTRACT,
-            project=project,
-            issuer=issuer,
-            idempotency_key=idempotency_key,
-            payload={"contract": contract.model_dump(mode="json"), "reason": reason},
-            recorded_at=_instant(row["created_at"]),
-        )
-        return self.mirrors.mirror(record)
+        current = view["contract"] if view else None
+        if current is not None and self._contract_fields(current) == self._as_stored(
+            contract, current
+        ):
+            row = current
+        else:
+            row = self._call_checked(
+                "brain_delivery_contract_set",
+                {
+                    "ticket_id": str(self.ticket),
+                    "actor_project": self.requester,
+                    "contract": contract.model_dump(mode="json"),
+                    "expected_revision": int(current["contract_revision"]) if current else 0,
+                    "idempotency_key": idempotency_key,
+                    "reason": reason,
+                },
+                agent=issuer,
+            )
+        return self.mirrors.mirror(self._contract_record(row))
 
     def bind(
         self, project: str, pr: PullRequestRef, *, issuer: str, idempotency_key: str
@@ -236,7 +237,7 @@ class BrainLedger:
         if view is None:
             return []
         if kind in (None, RecordKind.CONTRACT) and attestation is None:
-            records.append(self._contract_record(view))
+            records.append(self._contract_record(view["contract"]))
         if kind in (None, RecordKind.BINDING) and attestation is None:
             records.extend(self._binding_records(view))
         if kind in (None, RecordKind.ATTESTATION):
@@ -283,22 +284,36 @@ class BrainLedger:
         except BrainUnreachable as exc:
             raise LedgerError(f"brain unreachable: {exc}") from exc
 
-    def _contract_record(self, view: dict[str, Any]) -> Record:
-        contract = view["contract"]
-        fields = {k: contract[k] for k in Contract.model_fields if k in contract}
+    @staticmethod
+    def _as_stored(contract: Contract, current: dict[str, Any]) -> dict[str, Any]:
+        """Our contract as brain would store it: brain fills a deliverable's `repository_id`
+        from its registry, so a `None` on our side compares equal to its enrichment."""
+        mine = contract.model_dump(mode="json")
+        theirs = {
+            d.get("repository"): d.get("repository_id") for d in current.get("deliverables", [])
+        }
+        for deliverable in mine["deliverables"]:
+            if deliverable.get("repository_id") is None:
+                deliverable["repository_id"] = theirs.get(deliverable["repository"])
+        return mine
+
+    @staticmethod
+    def _contract_fields(row: dict[str, Any]) -> dict[str, Any]:
+        """The contract as red-rail models it, out of a brain revision row."""
+        fields = {k: row[k] for k in Contract.model_fields if k in row}
+        return Contract.model_validate(fields).model_dump(mode="json")
+
+    def _contract_record(self, row: dict[str, Any]) -> Record:
         return Record.build(
             kind=RecordKind.CONTRACT,
             project=self.project,
-            issuer=str(contract.get("author_project") or self.project),
-            idempotency_key=str(
-                contract.get("idempotency_key")
-                or f"contract:{self.ticket}:{contract['contract_revision']}"
-            ),
+            issuer=str(row.get("author_project") or self.requester),
+            idempotency_key=f"contract:{self.ticket}:{int(row['contract_revision'])}",
             payload={
-                "contract": Contract.model_validate(fields).model_dump(mode="json"),
-                "reason": str(contract.get("amendment_reason") or ""),
+                "contract": self._contract_fields(row),
+                "reason": str(row.get("amendment_reason") or ""),
             },
-            recorded_at=_instant(contract["created_at"]),
+            recorded_at=_instant(row["created_at"]),
         )
 
     def _binding_records(self, view: dict[str, Any]) -> list[Record]:

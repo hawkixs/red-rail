@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 import click
 from pydantic import ValidationError
@@ -65,6 +67,20 @@ def parse_deliverable(
         required_checks=list(required_checks or []),
         review=review or ReviewPolicy(),
     )
+
+
+def next_contract_key(ledger: Any, project: str, ticket: UUID | str | None) -> str:
+    """`contract:<ticket or project>:<n>` — n follows the highest revision the ledger lists,
+    so an amendment never reuses a key (brain answers a reused key with the stored revision)."""
+    from rail.ledger import RecordKind
+
+    subject = str(ticket) if ticket else project
+    numbers = []
+    for record in ledger.list(project, kind=RecordKind.CONTRACT):
+        _, _, tail = record.idempotency_key.rpartition(":")
+        if record.idempotency_key.startswith("contract:") and tail.isdigit():
+            numbers.append(int(tail))
+    return f"contract:{subject}:{max(numbers, default=0) + 1}"
 
 
 @click.group("contract")
@@ -150,10 +166,7 @@ def set_(
             priority=priority,
             acceptance_mode=acceptance_mode,
         )
-        from rail.ledger import RecordKind
-
-        existing = len(ledger.list(cfg.project, kind=RecordKind.CONTRACT))
-        key = idempotency_key or f"contract:{cfg.project}:{existing + 1}"
+        key = idempotency_key or next_contract_key(ledger, cfg.project, cfg.ticket)
         record = ledger.contract_set(
             cfg.project, contract, reason=reason, issuer=issuer, idempotency_key=key
         )
