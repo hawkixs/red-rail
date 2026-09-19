@@ -2710,6 +2710,7 @@ Expected: `5 passed` (this test needs no red-rail code; it pins the dependency i
 """Policy as data, an enum-valued verdict, judges that read the PR as data and fail closed."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -2779,7 +2780,7 @@ def test_chain_for_a_pr_never_includes_the_producer() -> None:
     assert policy.chain_for(producer="claude") == ("agy", "codex")
     assert policy.chain_for(producer=None) == ("agy", "codex", "claude")
     assert policy.mode_for(PR, docs_only=False) == "light"
-    big = PullRequest(**{**PR.__dict__, "additions": 500})
+    big = replace(PR, additions=500)
     assert policy.mode_for(big, docs_only=False) == "deep"
     assert policy.mode_for(big, docs_only=True) == "light"
 
@@ -3285,6 +3286,7 @@ Expected: all pass (`build_toolless_home` needs a readable real HOME; the tests 
 - Create: `tests/test_cli_brain.py`
 - Modify: `tests/test_ledger_file.py` (replace `test_open_ledger_refuses_brain_until_phase_2`)
 - Modify: `tests/test_cli_ledger.py` (replace `test_attest_refuses_a_brain_ledger_in_phase_1`)
+- Modify: `tests/test_gates_docs.py` (`test_intent_reports_an_unavailable_backend`: with the brain ledger and no token file the gate now reports the token error — assert `not result.passed and "brain token" in result.details` under `monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(tmp_path / "none"))` instead of `"phase 2"`)
 
 - [ ] **Step 1: Run the shared contract suite against the fake brain, plus the brain-specific tests**
 
@@ -4130,7 +4132,7 @@ def test_ping_refuses_a_remote_url(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 - [ ] **Step 7: Retire the phase-1 refusals**
 
-In `tests/test_ledger_file.py` replace `test_open_ledger_refuses_brain_until_phase_2` by:
+(Since the Batch 2 checkpoint, the three phase-1 fixtures already carry a ticket; only their expectations change.) In `tests/test_gates_docs.py`, `test_intent_reports_an_unavailable_backend` gains a `monkeypatch: pytest.MonkeyPatch` parameter, sets `RAIL_BRAIN_TOKEN_FILE` to a missing path, and asserts `not result.passed and "brain token" in result.details`. In `tests/test_ledger_file.py` replace `test_open_ledger_refuses_brain_until_phase_2` by:
 ```python
 def test_open_ledger_brain_needs_a_ticket_in_the_manifest(tmp_path: Path) -> None:
     (tmp_path / "rail.yaml").write_text(MANIFEST + "ledger: brain\n")
@@ -4159,7 +4161,7 @@ def test_attest_in_brain_mode_without_a_token_fails_closed(
 
 ```bash
 uv run pytest tests/test_ledger_brain.py tests/test_cli_brain.py tests/test_ledger_file.py tests/test_cli_ledger.py -q && make lint test
-git add src/rail/ledger src/rail/remotes.py src/rail/commands/brain.py tests/test_ledger_brain.py tests/test_cli_brain.py tests/test_ledger_file.py tests/test_cli_ledger.py
+git add src/rail/ledger src/rail/remotes.py src/rail/commands/brain.py tests/test_ledger_brain.py tests/test_cli_brain.py tests/test_ledger_file.py tests/test_cli_ledger.py tests/test_gates_docs.py
 git commit -m "feat(ledger): BrainLedger — mirrors first, replay from the mirror, milestones read from the ticket, digests cross-checked; open_ledger builds it; rail brain ping"
 ```
 Expected: all pass (the shared suite runs twice: file and brain), exit 0, commit created.
@@ -4440,7 +4442,7 @@ Expected: all pass; `rail check` on red-rail prints `PASS  hygiene.mirrors  file
 `review_verdict` attested through the project's own ledger. Fail-closed on every gap."""
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
@@ -4554,9 +4556,9 @@ def test_needs_review_once_per_head_sha_unless_relabelled() -> None:
     assert needs_review(PR, github=github, policy=policy)
     github.existing_checks = [CheckRun(id=1, status="completed", conclusion="success")]
     assert not needs_review(PR, github=github, policy=policy)
-    relabelled = PullRequest(**{**PR.__dict__, "labels": ("rail-review:rerun",)})
+    relabelled = replace(PR, labels=("rail-review:rerun",))
     assert needs_review(relabelled, github=github, policy=policy)
-    draft = PullRequest(**{**PR.__dict__, "draft": True})
+    draft = replace(PR, draft=True)
     github.existing_checks = []
     assert not needs_review(draft, github=github, policy=policy)
 
@@ -4603,7 +4605,7 @@ def test_light_review_approves_publishes_and_attests(tmp_path: Path) -> None:
 
 def test_deep_review_escalates_on_disagreement_and_the_deep_judge_wins(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
-    big = PullRequest(**{**PR.__dict__, "additions": 900})
+    big = replace(PR, additions=900)
     github = FakeGitHub(messages=["chore: plain"])
     seen = []
 
@@ -4678,7 +4680,7 @@ def test_no_verdict_at_all_fails_closed(tmp_path: Path) -> None:
 
 def test_the_rerun_label_is_removed_after_the_review(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
-    relabelled = PullRequest(**{**PR.__dict__, "labels": ("rail-review:rerun",)})
+    relabelled = replace(PR, labels=("rail-review:rerun",))
     github = FakeGitHub(messages=["chore: plain"])
     review_pull(
         relabelled,
