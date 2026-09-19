@@ -5,9 +5,9 @@
 RAIL_FLAGS ?=
 DATE ?= $(shell date +%F)
 
-## Install the project and its dev extras
+## Install the project with every extra (dev, brain, reviewer)
 sync:
-	uv sync --extra dev
+	uv sync --all-extras
 
 ## Lint and format check
 lint:

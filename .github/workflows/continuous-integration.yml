@@ -51,7 +51,7 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Install project dependencies
-        run: uv sync --locked --extra dev
+        run: uv sync --locked --all-extras
 
       - name: Install gitleaks (pinned, checksum verified)
         env:
