@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from rail import monitor
 from rail.cli import main
 from rail.gates import build as build_gates
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
@@ -20,6 +21,16 @@ T0 = datetime(2026, 9, 15, 8, 0, tzinfo=UTC)  # == the fixture commit timestamp
 @pytest.fixture(autouse=True)
 def _no_real_gitleaks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(build_gates, "run_gitleaks", lambda repo: (0, "no leaks found"))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_monitor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The conformance score runs the prod gates; `observe.visible` must never reach the mesh."""
+
+    def unreachable(base_url: str, agent: str, **kwargs: object) -> monitor.AgentView:
+        raise monitor.MonitorError("no red-monitor in the tests")
+
+    monkeypatch.setattr(monitor, "read_agent", unreachable)
 
 
 def _ledger_at(repo: Path, when: datetime) -> FileLedger:
@@ -100,7 +111,7 @@ def test_metrics_from_the_history(tmp_path: Path) -> None:
     assert m.lead_time_contract_to_deploy_hours == 60.0
     assert m.change_failure_rate == 0.5  # the drill does not count
     assert m.recovery_time_hours == 2.0
-    assert (m.conformance.passed, m.conformance.applicable, m.conformance.exceptions) == (16, 22, 0)
+    assert (m.conformance.passed, m.conformance.applicable, m.conformance.exceptions) == (16, 23, 0)
 
 
 def test_metrics_window_excludes_old_deployments(tmp_path: Path) -> None:
