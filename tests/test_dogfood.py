@@ -1,6 +1,6 @@
 """red-rail passes its own rail at tier dev on the shared ledger (phase 2): brain-v42 is the
-authority; one declared exception remains until brain has observed the merge of the phase-2
-PR (spec §8). The review gate is live: the independent reviewer approved that PR."""
+authority, the independent reviewer approved PR #3 and brain observed its merge (integration
+receipt b26a9b5e, 2026-09-19) — no declared exception remains (spec §8, phase-2 proof)."""
 
 import shutil
 from pathlib import Path
@@ -15,15 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TICKET = "3f78854b-1e8d-4d2c-858c-1d8be8fbba91"  # red → red-rail, "Deliver red-rail phase 2"
 
 
-def test_manifest_declares_dev_on_the_brain_ledger_with_declared_exceptions() -> None:
+def test_manifest_declares_dev_on_the_brain_ledger_without_exceptions() -> None:
     cfg = load_rail_config(ROOT)
     assert cfg.tier is Tier.DEV and cfg.ledger is LedgerBackend.BRAIN
     assert str(cfg.ticket) == TICKET
-    # the review gate is live since the independent reviewer approved PR #3 (2026-09-19);
-    # the integration receipt arrives with brain's observation of that PR's merge
-    assert set(cfg.gates) == {"integrate.receipt"}
-    assert cfg.gates["integrate.receipt"].value is False
-    assert "phase-2 PR" in cfg.gates["integrate.receipt"].reason
+    assert cfg.gates == {}  # phase 2 closed: every gate of tier dev runs for real
 
 
 @pytest.mark.skipif(shutil.which("gitleaks") is None, reason="gitleaks not installed")
