@@ -451,3 +451,19 @@ def test_server_enriched_fields_do_not_defeat_content_idempotency(tmp_path: Path
         "red-probe", bare, reason="bootstrap", issuer="op", idempotency_key="c1"
     )
     assert again == first and len(brain.tickets[ticket].revisions) == 1
+
+
+def test_attestations_are_listed_in_the_ticket_scope(tmp_path: Path) -> None:
+    """Minor finding of the independent reviewer (PR #3, eighth pass): let the server restrict
+    the list to the ticket instead of filtering rows client-side."""
+    ledger, brain, ticket = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    ledger.attest(
+        "red-probe", AttestationKind.DEPLOYED, {"sha": "b" * 40}, issuer="op", idempotency_key="d1"
+    )
+    brain.calls.clear()
+    assert len(ledger.list("red-probe", attestation=AttestationKind.DEPLOYED)) == 1
+    listing = [c for c in brain.calls if c[0] == "brain_delivery_attestation_list"]
+    assert listing and listing[0][1].get("ticket_id") == ticket

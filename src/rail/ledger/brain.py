@@ -352,6 +352,7 @@ class BrainLedger:
         while True:
             arguments: dict[str, Any] = {
                 "actor_project": self.project,
+                "ticket_id": str(self.ticket),  # the ticket scope: the server restricts
                 "issuer_project": self.project,
                 "limit": PAGE,
                 "cursor": cursor,

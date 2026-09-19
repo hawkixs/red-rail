@@ -73,6 +73,16 @@ def needs_review(pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy) -
     return not github.check_runs(pr.repository, pr.head_sha, name=policy.check_name)
 
 
+def pending_reviews(github: Any, repository: str, policy: ReviewPolicy) -> list[PullRequest]:
+    """The open pull requests that need a review, loaded in full: the list endpoint carries
+    no additions/deletions, and the mode (light/deep) depends on them."""
+    return [
+        github.pull(repository, summary.number)
+        for summary in github.open_pulls(repository)
+        if needs_review(summary, github=github, policy=policy)
+    ]
+
+
 def docs_only(diff: str, policy: ReviewPolicy) -> bool:
     paths = _DIFF_HEADER.findall(diff)
     return bool(paths) and all(any(fnmatch.fnmatch(p, g) for g in policy.docs_globs) for p in paths)

@@ -419,7 +419,9 @@ class FakeBrain:
             limit: int = 20,
             cursor: str | None = None,
         ) -> dict[str, Any]:
-            brain.calls.append(("brain_delivery_attestation_list", {"kind": kind}))
+            brain.calls.append(
+                ("brain_delivery_attestation_list", {"kind": kind, "ticket_id": ticket_id})
+            )
             if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
                 raise refuse("invalid_limit")
             if kind is not None and not KIND.match(kind):

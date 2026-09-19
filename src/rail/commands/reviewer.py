@@ -25,7 +25,7 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
     from rail.ledger import LedgerError, open_ledger
     from rail.model import load_rail_config
     from rail.reviewer.github import GitHubApp, GitHubError
-    from rail.reviewer.service import needs_review, review_pull
+    from rail.reviewer.service import pending_reviews, review_pull
 
     github = GitHubApp(
         app_id=config.app_id,
@@ -39,10 +39,12 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
                 continue
             cfg = load_rail_config(repository.path)
             ledger = open_ledger(repository.path)
-            pulls = [github.pull(repository.slug, pr)] if pr else github.open_pulls(repository.slug)
+            pulls = (
+                [github.pull(repository.slug, pr)]
+                if pr
+                else pending_reviews(github, repository.slug, config.policy)
+            )
             for pull in pulls:
-                if pr is None and not needs_review(pull, github=github, policy=config.policy):
-                    continue
                 outcome = review_pull(
                     pull,
                     github=github,

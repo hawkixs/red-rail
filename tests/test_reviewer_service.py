@@ -326,3 +326,26 @@ def test_a_review_in_progress_is_not_started_again() -> None:
     assert not needs_review(PR, github=github, policy=policy)
     relabelled = replace(PR, labels=("rail-review:rerun",))
     assert needs_review(relabelled, github=github, policy=policy)
+
+
+def test_pending_reviews_are_loaded_in_full_before_judging() -> None:
+    """Measured on PR #3 (eighth pass): GitHub's list endpoint carries no additions/deletions,
+    so a 12k-line PR reached the judges as a 0-line one and got a light review."""
+    from rail.reviewer.service import pending_reviews
+
+    policy = default_policy()
+    summary = replace(PR, additions=0, deletions=0, changed_files=0)
+    full = replace(PR, additions=900)
+
+    class ListingGitHub(FakeGitHub):
+        def open_pulls(self, repository):
+            return [summary, replace(summary, number=8, draft=True)]
+
+        def pull(self, repository, number):
+            assert number == 7
+            return full
+
+    github = ListingGitHub()
+    loaded = pending_reviews(github, "hawkixs/red-alpha", policy)
+    assert loaded == [full]
+    assert policy.mode_for(loaded[0], docs_only=False) == "deep"
