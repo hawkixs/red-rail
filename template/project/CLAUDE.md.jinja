@@ -9,7 +9,7 @@
 - **GitLab (`gitlab`)**: `ssh://git@gitlab.hawkixs.local:2222/hawkixs_project/red/{{ project }}.git` (private mirror)
 - **Brain MCP project key**: `{{ brain_key }}` (group `red`)
 - **Parent project**: ReD v1 (`~/hawkixs_infra/git_repo/ReD_v1/CLAUDE.md` — roster, cross-project rules)
-- **Rail**: tier `{{ tier }}`, stack `{{ stack }}`, ledger `file` — see `rail.yaml`; `rail check` is the verdict
+- **Rail**: tier `{{ tier }}`, stack `{{ stack }}`, ledger `{{ ledger }}` — see `rail.yaml`; `rail check` is the verdict
 
 Published branches are pushed to both remotes and compared SHA by SHA. GitHub and GitLab share
 no atomic transaction: a push to one remote is a deliberate divergence until the second is synced.

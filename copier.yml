@@ -37,3 +37,17 @@ healthcheck:
   type: str
   default: "https://{{ project[4:] }}.hawkixs.com/healthz"
   when: "{{ tier == 'prod' }}"
+ledger:
+  type: str
+  choices: [file, brain]
+  default: file
+  help: Where evidence is authoritative — the repository's receipts, or brain-v42 (shared, observed)
+ticket:
+  type: str
+  default: ""
+  help: brain-v42 delivery ticket UUID (red → project), created by the requester beforehand
+  when: "{{ ledger == 'brain' }}"
+  validator: >-
+    {% if not (ticket | regex_search('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')) %}
+    ticket must be a UUID
+    {% endif %}

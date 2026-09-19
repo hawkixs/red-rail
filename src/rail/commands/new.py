@@ -7,7 +7,8 @@ from pathlib import Path
 
 import click
 
-from rail.model import DeployTarget, Stack, Tier
+from rail.model import DeployTarget, LedgerBackend, Stack, Tier
+from rail.policy import stages_for
 from rail.remotes import RemoteError
 from rail.scaffold import TEMPLATE_SOURCE, NewProject, ScaffoldError, new_project
 
@@ -56,6 +57,18 @@ def _slug(ctx: click.Context, param: click.Parameter, value: str) -> str:
     show_default=True,
     help="Create and push GitHub + GitLab with gh/glab.",
 )
+@click.option(
+    "--ledger",
+    type=click.Choice(["file", "brain"]),
+    default="file",
+    show_default=True,
+    help="Evidence authority: the repository's receipts, or brain-v42 (shared, observed).",
+)
+@click.option(
+    "--ticket",
+    default=None,
+    help="brain-v42 delivery ticket UUID — required with --ledger brain.",
+)
 def command(
     slug: str,
     description: str,
@@ -68,8 +81,14 @@ def command(
     template: str,
     template_ref: str | None,
     publish: bool,
+    ledger: str,
+    ticket: str | None,
 ) -> None:
     """Scaffold a ReD project: tree, contract, bootstrap spec, first commit, gates, remotes."""
+    if ledger == "brain" and not ticket:
+        raise click.UsageError("--ledger brain needs --ticket <uuid>")
+    if ledger == "file" and ticket:
+        raise click.UsageError("--ticket is only meaningful with --ledger brain")
     project = NewProject(
         slug=slug,
         description=description,
@@ -81,6 +100,8 @@ def command(
         template_ref=template_ref,
         deploy_target=deploy_target,
         healthcheck=healthcheck,
+        ledger=LedgerBackend(ledger),
+        ticket=ticket,
     )
     try:
         results = new_project(project, publish=publish)
@@ -93,6 +114,9 @@ def command(
     click.echo(f"created {project.dest}")
     for r in results:
         click.echo(f"PASS  {r.gate_id:<22} {r.details}")
+    if Tier(tier) is not Tier.BOOTSTRAP:
+        remaining = [s.value for s in stages_for(Tier(tier)) if s not in stages_for(Tier.BOOTSTRAP)]
+        click.echo(f"remaining stages of tier {tier}: {', '.join(remaining)}")
     click.echo("")
     click.echo(
         "Add this row to the ReD root roster (CLAUDE.md, operator's gesture — the root is "

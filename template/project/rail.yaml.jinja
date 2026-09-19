@@ -3,7 +3,10 @@ project: {{ project }}
 brain_key: {{ brain_key }}
 tier: {{ tier }}
 stack: {{ stack }}
-ledger: file
+ledger: {{ ledger }}
+{%- if ledger == 'brain' %}
+ticket: {{ ticket }}
+{%- endif %}
 {%- if tier == 'prod' %}
 deploy:
   target: {{ deploy_target }}
