@@ -43,7 +43,7 @@ def test_default_policy_is_the_measured_data() -> None:
         "claude": "claude-opus-5",
     }
     assert policy.light_max_changed_lines == 200
-    assert policy.max_diff_chars == 120_000
+    assert policy.max_diff_chars == 200_000
     assert policy.check_name == "red-rail/review"
     assert policy.rerun_label == "rail-review:rerun"
 
@@ -172,3 +172,36 @@ def test_the_agy_guard_denies_machine_tools_and_allows_mcp() -> None:
     from rail.reviewer.judges import GUARD
 
     assert GUARD.is_file() and guard_denies_machine_tools(GUARD)
+
+
+def test_the_diff_is_judged_code_first_and_generated_files_are_dropped() -> None:
+    """Measured on PR #3 (2026-09-19): 792k chars, alphabetical — docs and uv.lock would have
+    filled the budget before any line of src/. Code first, tests next, docs last, lockfiles out."""
+    from rail.reviewer.judges import prioritise_diff
+
+    policy = default_policy()
+    diff = (
+        "diff --git a/docs/plans/x.md b/docs/plans/x.md\n+plan\n"
+        "diff --git a/uv.lock b/uv.lock\n+lock\n"
+        "diff --git a/tests/test_x.py b/tests/test_x.py\n+test\n"
+        "diff --git a/src/rail/x.py b/src/rail/x.py\n+code\n"
+        "diff --git a/workflows/pre-review.js b/workflows/pre-review.js\n+js\n"
+        "diff --git a/README.md b/README.md\n+readme\n"
+    )
+    ordered = prioritise_diff(diff, policy)
+    paths = [
+        line.split(" b/")[0].removeprefix("diff --git a/")
+        for line in ordered.splitlines()
+        if line.startswith("diff --git")
+    ]
+    assert paths == [
+        "src/rail/x.py",
+        "tests/test_x.py",
+        "workflows/pre-review.js",
+        "docs/plans/x.md",
+        "README.md",
+    ]
+    assert "uv.lock" not in ordered
+    prompt, truncated = build_prompt(PR, diff, policy, criteria=[])
+    assert prompt.index("+code") < prompt.index("+test") < prompt.index("+plan") and not truncated
+    assert policy.max_diff_chars == 200_000

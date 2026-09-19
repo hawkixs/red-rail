@@ -52,9 +52,42 @@ class JudgeReply:
     raw: str
 
 
+_HUNK = re.compile(r"(?=^diff --git )", re.MULTILINE)
+_HUNK_PATH = re.compile(r"^diff --git a/(?P<path>\S+) b/")
+
+
+def prioritise_diff(diff: str, policy: ReviewPolicy) -> str:
+    """The same hunks, code first (`policy.diff_priority` order), docs last, generated
+    lockfiles dropped — so a truncation cuts what matters least."""
+    import fnmatch
+
+    hunks = [h for h in _HUNK.split(diff) if h.startswith("diff --git")]
+    if not hunks:
+        return diff
+
+    def rank(hunk: str) -> tuple[int, int]:
+        match = _HUNK_PATH.match(hunk)
+        path = match["path"] if match else ""
+        for index, prefix in enumerate(policy.diff_priority):
+            if path.startswith(prefix):
+                return (0, index)
+        if any(fnmatch.fnmatch(path, g) for g in policy.docs_globs):
+            return (2, 0)
+        return (1, 0)
+
+    def ignored(hunk: str) -> bool:
+        match = _HUNK_PATH.match(hunk)
+        path = match["path"] if match else ""
+        return any(fnmatch.fnmatch(path, g) for g in policy.ignored_globs)
+
+    kept = [h for h in hunks if not ignored(h)]
+    return "".join(sorted(kept, key=rank))
+
+
 def build_prompt(
     pr: PullRequest, diff: str, policy: ReviewPolicy, *, criteria: list[str]
 ) -> tuple[str, bool]:
+    diff = prioritise_diff(diff, policy)
     truncated = len(diff) > policy.max_diff_chars
     body = diff[: policy.max_diff_chars] + (
         "\n[diff truncated by the reviewer]\n" if truncated else ""

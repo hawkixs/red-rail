@@ -41,7 +41,11 @@ class ReviewPolicy(BaseModel):
         default_factory=lambda: {tier: dict(models) for tier, models in DEFAULT_MODELS.items()}
     )
     light_max_changed_lines: int = Field(default=200, ge=0)
-    max_diff_chars: int = Field(default=120_000, ge=1000)
+    max_diff_chars: int = Field(default=200_000, ge=1000)
+    # the order in which a diff is judged when it exceeds the budget: code, then tests, then
+    # the rest; docs come last and generated lockfiles are never judged
+    diff_priority: tuple[str, ...] = ("src/", "tests/", "workflows/", "skills/", "template/")
+    ignored_globs: tuple[str, ...] = ("uv.lock", "*.lock", "package-lock.json")
     timeout_seconds: float = Field(default=600.0, gt=0)
     check_name: str = "red-rail/review"
     rerun_label: str = "rail-review:rerun"
