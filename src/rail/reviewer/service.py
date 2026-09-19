@@ -154,6 +154,42 @@ def review_pull(
     root: Path | None = None,
 ) -> ReviewOutcome:
     check = github.start_check(pr.repository, pr.head_sha, name=policy.check_name)
+    try:
+        return _review_started(
+            pr,
+            check,
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            run_judge=run_judge,
+            root=root,
+        )
+    except Exception as exc:  # never leave a check in progress: fail it, then surface the crash
+        github.complete_check(
+            pr.repository,
+            check.id,
+            conclusion="failure",
+            title="reviewer error",
+            summary=f"{type(exc).__name__}: {exc}"[:65535],
+            text="The reviewer crashed before a verdict; re-run it (label rail-review:rerun).",
+        )
+        raise
+
+
+def _review_started(
+    pr: PullRequest,
+    check: Any,
+    *,
+    github: GitHubLike,
+    policy: ReviewPolicy,
+    ledger: Ledger,
+    project: str,
+    repo_path: Path | None,
+    run_judge: RunJudge,
+    root: Path | None,
+) -> ReviewOutcome:
     failures: list[str] = []
     diff = github.diff(pr.repository, pr.number)
     truncated = len(diff) > policy.max_diff_chars

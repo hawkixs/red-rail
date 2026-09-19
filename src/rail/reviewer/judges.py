@@ -38,7 +38,10 @@ else, matching exactly:
 {"verdict": "approve" | "request_changes", "summary": "<one paragraph>",
  "findings": [{"severity": "blocking" | "important" | "minor", "file": "<path>",
                "line": <int or null>, "title": "<short>", "evidence": "<what you saw>"}]}
-A "blocking" finding means the change must not merge as is."""
+A "blocking" finding means the change must not merge as is: reserve it for a defect that is
+visible in the diff itself. A doubt that depends on code you cannot see (a file outside the
+diff, a mechanism that may exist elsewhere) is at most "important", and its evidence states
+the question to check. You may only see the first part of a large diff."""
 _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 
 
@@ -197,6 +200,16 @@ def judge(
     criteria: list[str] | None = None,
 ) -> JudgeReply:
     prompt, truncated = build_prompt(pr, diff, policy, criteria=criteria or [])
+    limit = policy.prompt_limits.get(provider)
+    if limit is not None and len(prompt.encode("utf-8")) > limit:
+        # the provider takes its prompt in argv: shrink the diff until the prompt fits
+        overhead = len(prompt.encode("utf-8")) - len(diff.encode("utf-8"))
+        budget = max(1000, limit - overhead - 200)
+        shrunk = policy.model_copy(update={"max_diff_chars": min(policy.max_diff_chars, budget)})
+        prompt, truncated = build_prompt(pr, diff, shrunk, criteria=criteria or [])
+        while len(prompt.encode("utf-8")) > limit and shrunk.max_diff_chars > 1000:
+            shrunk = shrunk.model_copy(update={"max_diff_chars": shrunk.max_diff_chars * 9 // 10})
+            prompt, truncated = build_prompt(pr, diff, shrunk, criteria=criteria or [])
     base = root or ephemeral_root(os.environ) or Path(tempfile.gettempdir())
     spec = build_spec(pr, prompt, policy, provider=provider, tier=tier, root=base)
     exit_code, text = runner(provider, spec)

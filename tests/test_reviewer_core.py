@@ -205,3 +205,28 @@ def test_the_diff_is_judged_code_first_and_generated_files_are_dropped() -> None
     prompt, truncated = build_prompt(PR, diff, policy, criteria=[])
     assert prompt.index("+code") < prompt.index("+test") < prompt.index("+plan") and not truncated
     assert policy.max_diff_chars == 200_000
+
+
+def test_the_prompt_fits_the_provider_argv_limit(tmp_path: Path) -> None:
+    """Measured on PR #3 (2026-09-19): agy takes its prompt in argv and headless-agents refuses
+    more than 120000 bytes (`prompt too long for argv`); the judge shrinks the diff for it."""
+    policy = default_policy()
+    assert policy.prompt_limits["agy"] == 115_000
+    seen = {}
+
+    def runner(provider, spec):
+        seen["prompt"] = spec.prompt
+        return 0, json.dumps({"verdict": "approve", "summary": "ok", "findings": []})
+
+    big_diff = "diff --git a/src/x.py b/src/x.py\n" + ("+x\n" * 70_000)
+    judge(PR, big_diff, policy, provider="agy", tier="light", runner=runner, root=tmp_path)
+    assert len(seen["prompt"].encode("utf-8")) <= 115_000
+    assert "[diff truncated by the reviewer]" in seen["prompt"]
+    judge(PR, big_diff, policy, provider="codex", tier="light", runner=runner, root=tmp_path)
+    assert len(seen["prompt"].encode("utf-8")) > 115_000  # codex reads stdin, full budget
+
+
+def test_the_rubric_reserves_blocking_for_defects_visible_in_the_diff() -> None:
+    from rail.reviewer.judges import RUBRIC
+
+    assert "visible in the diff" in RUBRIC and "important" in RUBRIC

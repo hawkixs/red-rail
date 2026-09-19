@@ -285,3 +285,28 @@ def test_an_unattested_verdict_is_reported_not_fatal(tmp_path: Path) -> None:
     )
     assert not outcome.attested and "delivery_disabled" in outcome.failures[-1]
     assert ("complete", 99, "success", "approve") in github.calls
+
+
+def test_a_crash_after_the_check_started_completes_it_as_failure(tmp_path: Path) -> None:
+    """Found by the independent reviewer on its first run (PR #3, codex judge): an exception
+    after `start_check` left the check in progress forever."""
+    import pytest
+
+    repo, ledger = _repo(tmp_path)
+    github = FakeGitHub(messages=["chore: plain"])
+
+    def exploding_judge(pr, diff, policy, *, provider, tier, criteria, root=None):
+        raise RuntimeError("judge exploded")
+
+    with pytest.raises(RuntimeError, match="judge exploded"):
+        review_pull(
+            PR,
+            github=github,
+            policy=default_policy(),
+            ledger=ledger,
+            project="red-alpha",
+            repo_path=repo,
+            run_judge=exploding_judge,
+            root=tmp_path,
+        )
+    assert ("complete", 99, "failure", "reviewer error") in github.calls

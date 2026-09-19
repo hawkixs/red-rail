@@ -46,6 +46,9 @@ class ReviewPolicy(BaseModel):
     # the rest; docs come last and generated lockfiles are never judged
     diff_priority: tuple[str, ...] = ("src/", "tests/", "workflows/", "skills/", "template/")
     ignored_globs: tuple[str, ...] = ("uv.lock", "*.lock", "package-lock.json")
+    # bytes of prompt a provider accepts: agy takes its prompt in argv (headless-agents refuses
+    # more than 120000 bytes); codex and claude read stdin
+    prompt_limits: dict[str, int] = Field(default_factory=lambda: {"agy": 115_000})
     timeout_seconds: float = Field(default=600.0, gt=0)
     check_name: str = "red-rail/review"
     rerun_label: str = "rail-review:rerun"
