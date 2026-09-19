@@ -62,3 +62,17 @@ def test_owner_must_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(os, "getuid", lambda: os.stat(path).st_uid + 1)
     with pytest.raises(PrivateFileError, match="owned by"):
         read_private_file(path)
+
+
+def test_refuses_a_symlinked_parent_directory(tmp_path: Path) -> None:
+    """Found by the independent reviewer (PR #3, codex judge): only the last component was
+    protected; a symlinked parent redirected the read. Every component is opened without
+    following links now, as brain-v42's observer does."""
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    secret = _private(real_dir / "token", "abc\n")
+    link_dir = tmp_path / "link"
+    link_dir.symlink_to(real_dir, target_is_directory=True)
+    with pytest.raises(PrivateFileError, match="symlink"):
+        read_private_file(link_dir / "token")
+    assert read_private_file(secret) == b"abc\n"

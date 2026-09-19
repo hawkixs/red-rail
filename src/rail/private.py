@@ -8,6 +8,7 @@ carries its own copy rather than importing brain_v42 (ADR-0003).
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from pathlib import Path
@@ -18,17 +19,30 @@ class PrivateFileError(Exception):
 
 
 def read_private_file(path: Path) -> bytes:
+    """Open every directory component without following links, then the file itself with
+    O_NOFOLLOW: a symlink anywhere on the path is refused, not just on the last name."""
     if not path.is_absolute():
         raise PrivateFileError(f"{path}: an absolute path is required")
+    parts = path.parts  # ("/", "home", "user", ..., "name")
+    flags_dir = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    directory = -1
+    fd = -1
     try:
-        if path.is_symlink():
-            raise PrivateFileError(f"{path}: refusing a symlink")
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    except FileNotFoundError as exc:
-        raise PrivateFileError(f"{path}: not found") from exc
-    except OSError as exc:
-        raise PrivateFileError(f"{path}: {exc.strerror}") from exc
-    try:
+        try:
+            directory = os.open(parts[0], flags_dir)
+            for component in parts[1:-1]:
+                following = os.open(component, flags_dir, dir_fd=directory)
+                os.close(directory)
+                directory = following
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+        except FileNotFoundError as exc:
+            raise PrivateFileError(f"{path}: not found") from exc
+        except NotADirectoryError as exc:
+            raise PrivateFileError(f"{path}: a parent is not a directory") from exc
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise PrivateFileError(f"{path}: refusing a symlink on the path") from exc
+            raise PrivateFileError(f"{path}: {exc.strerror}") from exc
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise PrivateFileError(f"{path}: not a regular file")
@@ -42,6 +56,8 @@ def read_private_file(path: Path) -> bytes:
             fd = -1
             return handle.read()
     finally:
+        if directory >= 0:
+            os.close(directory)
         if fd >= 0:
             os.close(fd)
 

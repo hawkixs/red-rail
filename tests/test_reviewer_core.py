@@ -230,3 +230,17 @@ def test_the_rubric_reserves_blocking_for_defects_visible_in_the_diff() -> None:
     from rail.reviewer.judges import RUBRIC
 
     assert "visible in the diff" in RUBRIC and "important" in RUBRIC
+
+
+def test_agy_credentials_are_the_ones_the_neighbours_symlink() -> None:
+    """Measured on PR #3 (2026-09-19): the seat had no agy credential and the CLI waited for
+    an OAuth login. brain-v42's Dream rail symlinks these four files (`agents/sandbox.py`)."""
+    from rail.reviewer.judges import CREDENTIALS
+
+    assert CREDENTIALS["agy"].mode == "symlink"
+    assert CREDENTIALS["agy"].paths == (
+        ".gemini/oauth_creds.json",
+        ".gemini/google_accounts.json",
+        ".gemini/gemini-credentials.json",
+        ".gemini/antigravity-cli/antigravity-oauth-token",
+    )
