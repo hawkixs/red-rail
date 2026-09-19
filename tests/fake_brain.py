@@ -461,3 +461,34 @@ class FakeBrain:
                 "next_cursor": brain._cursor(scope, page[-1]) if rest and page else None,
                 "omitted_count": len(rest),
             }
+
+        @self.server.tool
+        def brain_delivery_accept(
+            ticket_id: str,
+            actor_project: str,
+            rationale: str,
+            expected_revision: int,
+            expected_attempt: int,
+            expected_delivery_digest: str,
+        ) -> dict[str, Any]:
+            brain.calls.append(("brain_delivery_accept", {"ticket_id": ticket_id}))
+            brain._identity()
+            ticket = brain._ticket(ticket_id)
+            if actor_project != ticket.from_project:
+                raise refuse("not_allowed", "only the requester accepts a delivery")
+            if not ticket.revisions:
+                raise refuse("contract_not_found")
+            receipt = ticket.integration_receipt
+            if receipt is None:
+                raise refuse("revision_conflict", "no integration evidence to accept")
+            expected = (receipt["contract_revision"], receipt["attempt"], "b" * 64)
+            if (expected_revision, expected_attempt, expected_delivery_digest) != expected:
+                raise refuse("revision_conflict", "the evidence moved: read the view again")
+            if ticket.fulfillment_receipt is None:
+                brain.fulfil(ticket_id, issued_at=datetime.now(UTC))
+                ticket.fulfillment_receipt["acceptance_basis"] = "explicit"
+                ticket.fulfillment_receipt["explicit_acceptance"] = {
+                    "requester_project": actor_project,
+                    "rationale": rationale,
+                }
+            return ticket.fulfillment_receipt

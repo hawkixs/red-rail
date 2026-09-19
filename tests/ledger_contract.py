@@ -25,8 +25,13 @@ PR = PullRequestRef(repository="hawkixs/red-probe", number=7, head_sha="a" * 40)
 class LedgerContract:
     """Subclass, implement `make_ledger`, inherit every test."""
 
+    project = "red-probe"
+
     def make_ledger(self, tmp_path: Path) -> Ledger:
         raise NotImplementedError
+
+    def integrate(self, ledger: Ledger, tmp_path: Path) -> None:
+        """Whatever the backend needs before an acceptance: nothing for the file ledger."""
 
     def test_attest_returns_a_verified_record(self, tmp_path: Path) -> None:
         ledger = self.make_ledger(tmp_path)
@@ -168,3 +173,13 @@ class LedgerContract:
                 idempotency_key="d1",
             )
         assert ledger.list("red-probe") == []
+
+    def test_accept_records_a_fulfilled_attestation(self, tmp_path: Path) -> None:
+        ledger = self.make_ledger(tmp_path)
+        self.integrate(ledger, tmp_path)  # the shared hook: file = nothing, brain = a receipt
+        record = ledger.accept(
+            self.project, rationale="the probe answers on its domain", issuer="op", sha="a" * 40
+        )
+        assert record.attestation is AttestationKind.FULFILLED
+        listed = ledger.list(self.project, attestation=AttestationKind.FULFILLED)
+        assert [r.digest for r in listed] == [record.digest]

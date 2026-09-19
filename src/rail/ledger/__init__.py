@@ -288,6 +288,12 @@ class Ledger(Protocol):
         emitted_at: datetime | None = None,
     ) -> Record: ...
 
+    def accept(
+        self, project: str, *, rationale: str, issuer: str, sha: str | None = None
+    ) -> Record:
+        """Stage 10: the requester accepts the integrated delivery (`fulfilled`)."""
+        ...
+
     def list(
         self,
         project: str,
