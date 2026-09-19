@@ -137,3 +137,80 @@ def test_open_ledger_refuses_brain_until_phase_2(tmp_path: Path) -> None:
     (tmp_path / "rail.yaml").write_text(MANIFEST + "ledger: brain\n")
     with pytest.raises(LedgerUnavailable, match="phase 2"):
         open_ledger(tmp_path)
+
+
+def test_brain_digest_reproduces_every_published_vector() -> None:
+    from rail.contracts import ATTESTATION_CONTRACT
+    from rail.ledger import brain_digest
+
+    for vector in ATTESTATION_CONTRACT["digest"]["vectors"]:
+        assert brain_digest(vector["payload"]) == vector["digest"], vector
+    negative = ATTESTATION_CONTRACT["digest"]["negative_example"]
+    with pytest.raises(ValueError, match="float"):
+        brain_digest(negative["payload"])
+
+
+def test_brain_digest_refuses_nested_floats_and_non_string_keys() -> None:
+    from rail.ledger import brain_digest
+
+    with pytest.raises(ValueError, match="float"):
+        brain_digest({"nested": [{"x": 2.0}]})
+    with pytest.raises(ValueError, match="string keys"):
+        brain_digest({1: "one"})  # type: ignore[dict-item]
+
+
+def test_idempotency_keys_are_deterministic_per_event() -> None:
+    from rail.ledger import idempotency_key_for
+
+    when = datetime(2026, 9, 18, 10, 0, 5, tzinfo=UTC)
+    sha = "b" * 40
+    assert (
+        idempotency_key_for(AttestationKind.GATE_PASSED, {"sha": sha, "gate": "design.spec"})
+        == f"gate_passed:{sha}:design.spec"
+    )
+    assert (
+        idempotency_key_for(
+            AttestationKind.REVIEW_VERDICT, {"sha": sha, "check_run_id": 42}, emitted_at=when
+        )
+        == f"review_verdict:{sha}:42"
+    )
+    assert idempotency_key_for(AttestationKind.INTEGRATED, {"sha": sha}) == f"integrated:{sha}"
+    assert (
+        idempotency_key_for(AttestationKind.RELEASED, {"sha": sha, "version": "0.3.0"})
+        == "released:0.3.0"
+    )
+    assert (
+        idempotency_key_for(
+            AttestationKind.DEPLOYED,
+            {"target": "vps-traefik", "digest": "sha256:abc", "sha": sha},
+            emitted_at=when,
+        )
+        == "deployed:vps-traefik:sha256:abc:20260918T100005Z"
+    )
+    assert (
+        idempotency_key_for(AttestationKind.INCIDENT_DETECTED, {}, emitted_at=when)
+        == "incident_detected:-:-:20260918T100005Z"
+    )
+    random_key = idempotency_key_for(AttestationKind.GATE_PASSED, {})
+    assert random_key.startswith("gate_passed:") and len(random_key) > len("gate_passed:") + 30
+
+
+def test_unattested_carries_the_receipt_and_the_cause(tmp_path: Path) -> None:
+    from rail.ledger import Unattested
+
+    error = Unattested(tmp_path / "r.json", "delivery_disabled")
+    assert isinstance(error, LedgerError)
+    assert error.receipt == tmp_path / "r.json" and error.cause == "delivery_disabled"
+    assert "rail attest" in str(error) and "--from" in str(error)
+
+
+def test_contract_and_deliverable_carry_the_brain_fields() -> None:
+    from rail.ledger import Contract, Deliverable
+
+    contract = Contract(objective="x", deliverables=[Deliverable(key="k", repository="a/b")])
+    dumped = contract.model_dump(mode="json")
+    assert dumped["priority"] == 0 and dumped["acceptance_mode"] == "explicit"
+    assert dumped["deliverables"][0]["repository_id"] is None
+    assert dumped["deliverables"][0]["no_checks_reason"] is None
+    with pytest.raises(ValidationError):
+        Contract.model_validate({**dumped, "acceptance_mode": "later"})

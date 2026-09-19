@@ -22,6 +22,7 @@ from rail.ledger import (
     PullRequestRef,
     Record,
     RecordKind,
+    brain_digest,
 )
 
 
@@ -66,9 +67,21 @@ class FileLedger:
         *,
         issuer: str,
         idempotency_key: str,
+        emitted_at: datetime | None = None,
     ) -> Record:
+        try:
+            brain_digest(data)
+        except ValueError as exc:
+            raise LedgerError(str(exc)) from exc
         payload = {"kind": kind.value, "data": data}
-        return self._append(RecordKind.ATTESTATION, project, payload, issuer, idempotency_key)
+        return self._append(
+            RecordKind.ATTESTATION,
+            project,
+            payload,
+            issuer,
+            idempotency_key,
+            recorded_at=emitted_at,
+        )
 
     def list(
         self,
@@ -114,6 +127,7 @@ class FileLedger:
         payload: dict[str, Any],
         issuer: str,
         idempotency_key: str,
+        recorded_at: datetime | None = None,
     ) -> Record:
         for existing in self._records():
             if existing.project == project and existing.idempotency_key == idempotency_key:
@@ -128,7 +142,7 @@ class FileLedger:
             issuer=issuer,
             idempotency_key=idempotency_key,
             payload=payload,
-            recorded_at=self._clock(),
+            recorded_at=recorded_at or self._clock(),
         )
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / receipt_filename(record)

@@ -52,6 +52,16 @@ def command() -> None:
 @click.option("--reason", required=True, help="Why this contract (or this amendment) exists.")
 @click.option("--issuer", default="operator", show_default=True)
 @click.option("--key", "idempotency_key", help="Idempotency key (default: contract:<project>:<n>).")
+@click.option("--priority", type=click.IntRange(0, 10000), default=0, show_default=True)
+@click.option(
+    "--acceptance-mode",
+    type=click.Choice(["automatic", "explicit"]),
+    default="explicit",
+    show_default=True,
+    help=(
+        "How `fulfilled` is reached: an explicit brain_delivery_accept (default) or automatically."
+    ),
+)
 @json_option
 def set_(
     repo: Path,
@@ -62,6 +72,8 @@ def set_(
     reason: str,
     issuer: str,
     idempotency_key: str | None,
+    priority: int,
+    acceptance_mode: str,
     as_json: bool,
 ) -> None:
     """Create or amend the project's delivery contract in the ledger."""
@@ -78,6 +90,8 @@ def set_(
             acceptance_criteria=list(criteria),
             constraints=list(constraints),
             deliverables=[parse_deliverable(d) for d in deliverables],
+            priority=priority,
+            acceptance_mode=acceptance_mode,
         )
         from rail.ledger import RecordKind
 
