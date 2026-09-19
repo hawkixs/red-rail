@@ -315,3 +315,14 @@ def test_a_crash_after_the_check_started_completes_it_as_failure(tmp_path: Path)
             root=tmp_path,
         )
     assert ("complete", 99, "failure", "reviewer error") in github.calls
+
+
+def test_a_review_in_progress_is_not_started_again() -> None:
+    """Found by the independent reviewer (PR #3, sixth pass): only completed checks counted, so
+    a second reviewer process (or a crashed one) could start the same review twice."""
+    policy = default_policy()
+    github = FakeGitHub()
+    github.existing_checks = [CheckRun(id=1, status="in_progress", conclusion=None)]
+    assert not needs_review(PR, github=github, policy=policy)
+    relabelled = replace(PR, labels=("rail-review:rerun",))
+    assert needs_review(relabelled, github=github, policy=policy)

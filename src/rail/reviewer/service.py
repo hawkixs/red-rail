@@ -68,12 +68,9 @@ def needs_review(pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy) -
         return False
     if policy.rerun_label in pr.labels:
         return True
-    done = [
-        c
-        for c in github.check_runs(pr.repository, pr.head_sha, name=policy.check_name)
-        if c.status == "completed"
-    ]
-    return not done
+    # any check of ours on this head — completed or still running — means the review exists
+    # (found by the independent reviewer on PR #3: a second process could start it twice)
+    return not github.check_runs(pr.repository, pr.head_sha, name=policy.check_name)
 
 
 def docs_only(diff: str, policy: ReviewPolicy) -> bool:

@@ -259,3 +259,20 @@ def test_the_agy_profile_carries_its_credentials(tmp_path: Path) -> None:
     assert spec.profile.credentials == CREDENTIALS["agy"] and spec.profile.guard is not None
     spec = build_spec(PR, "prompt", policy, provider="codex", tier="light", root=tmp_path)
     assert spec.profile.credentials.paths == ()
+
+
+def test_parse_verdict_survives_braces_around_the_json_object() -> None:
+    """Found by the independent reviewer (PR #3, sixth pass): a greedy `\\{.*\\}` swallowed
+    conversational braces after the object."""
+    text = (
+        'Here is the verdict: {"verdict": "approve", "summary": "ok", "findings": []} '
+        "Hope this helps! {smile} {and another}"
+    )
+    reply = parse_verdict(text)
+    assert reply is not None and reply.verdict == "approve"
+    nested = (
+        '{"verdict": "approve", "summary": "s", "findings": [{"severity": "minor", '
+        '"file": "a", "line": null, "title": "t", "evidence": "{}"}]} trailing {'
+    )
+    reply = parse_verdict(nested)
+    assert reply is not None and reply.findings[0].evidence == "{}"

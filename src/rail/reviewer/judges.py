@@ -51,7 +51,6 @@ A "blocking" finding means the change must not merge as is: reserve it for a def
 visible in the diff itself. A doubt that depends on code you cannot see (a file outside the
 diff, a mechanism that may exist elsewhere) is at most "important", and its evidence states
 the question to check. You may only see the first part of a large diff."""
-_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,12 +113,28 @@ def build_prompt(
     return prompt, truncated
 
 
+def _first_json_object(text: str) -> dict | None:
+    """The first JSON object that parses, from any `{` — never a greedy match across
+    conversational braces (found by the independent reviewer on PR #3)."""
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            value, _ = decoder.raw_decode(text, start)
+        except ValueError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(value, dict):
+            return value
+        start = text.find("{", start + 1)
+    return None
+
+
 def parse_verdict(text: str) -> ReviewVerdict | None:
-    match = _JSON_OBJECT.search(text)
-    if not match:
+    data = _first_json_object(text)
+    if data is None:
         return None
     try:
-        data = json.loads(match.group(0))
         verdict = ReviewVerdict.model_validate(
             {k: v for k, v in data.items() if k in ("verdict", "summary", "findings")}
         )
