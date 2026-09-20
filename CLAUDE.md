@@ -82,7 +82,7 @@ comments, test names. The conversation with the operator stays in French.
 - `src/rail/audit.py` (repository × stage matrix, golden-tested), `src/rail/metrics.py` (four
   DORA metrics + conformance from the ledger), `src/rail/scaffold.py` (copier: `copier.yml` at
   the root, files under `template/project/`), `src/rail/remotes.py` (`gh` + `glab`, no token).
-- `workflows/pre-review.js` — a tiered Workflow (wf-scan → red-reviewer on sonnet → wf-judge)
+- `workflows/pre-review.js` — a tiered Workflow (wf-scan → Explore on sonnet, read-only → wf-judge)
   launched by the `rail-review` skill from the producing session: a pre-review, never the gate.
 
 Boundary rules with brain-v42, both testable: brain never learns a new gate; red-rail stores
