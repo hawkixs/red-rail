@@ -6,8 +6,16 @@ rule 3). The vocabulary the flows write is documented in `rail.ledger`."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
+
+_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_SHA = re.compile(r"[0-9a-f]{7,64}")
+_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_IMAGE = re.compile(
+    r"[a-z0-9]([a-z0-9._-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*@sha256:[0-9a-f]{64}"
+)
 
 
 class DeployError(Exception):
@@ -24,6 +32,19 @@ class Artefact:
     sha: str
     digest: str  # sha256:… — the manifest digest the registry gave at the push
     image: str  # <repository>@<digest>
+
+    def __post_init__(self) -> None:
+        # the fields reach a bash script and an .env file on the target: only the characters
+        # a version, a commit, a digest and an image reference are made of (pre-review of PR #6)
+        for name, pattern in (
+            ("version", _VERSION),
+            ("sha", _SHA),
+            ("digest", _DIGEST),
+            ("image", _IMAGE),
+        ):
+            value = getattr(self, name)
+            if not pattern.fullmatch(value):
+                raise DeployError(f"artefact {name} {value!r} is not safe for the target")
 
     @classmethod
     def from_release(cls, data: dict[str, object]) -> Artefact:

@@ -25,6 +25,11 @@ def build_info() -> dict[str, str]:
     }
 
 
+def _label(value: str) -> str:
+    """A Prometheus label value: backslash, double quote and newline escaped."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
 class Counter:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -63,7 +68,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _metrics(self) -> str:
         info = build_info()
-        labels = ",".join(f'{k}="{v}"' for k, v in info.items())
+        labels = ",".join(f'{k}="{_label(v)}"' for k, v in info.items())
         return (
             f"# TYPE {METRIC}_build_info gauge\n{METRIC}_build_info{% raw %}{{{labels}}}{% endraw %} 1\n"
             f"# TYPE {METRIC}_requests_total counter\n"

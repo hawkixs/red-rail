@@ -14,6 +14,7 @@ from rail.model import load_rail_config
 from tests.helpers import commit_all, conforming_tree
 
 DIGEST = "sha256:" + "a" * 64
+IMAGE = f"ghcr.io/hawkixs/red-probe@{DIGEST}"
 COMPOSE = "services:\n  app:\n    image: ${IMAGE_REFERENCE:?required}\n"
 
 
@@ -200,3 +201,23 @@ def test_compose_is_read_at_the_released_commit_and_steps_are_printable(tmp_path
     )
     with pytest.raises(DeployError, match="not committed"):
         target.compose_at("0" * 40)
+
+
+def test_an_artefact_carries_only_characters_the_target_script_is_safe_with() -> None:
+    """The version and the image reference land in a bash script and an .env file."""
+    Artefact(version="0.1.0-rc.1", sha="c" * 40, digest=DIGEST, image=IMAGE)
+    for field, value in (
+        ("version", "0.1.0; rm -rf /"),
+        ("sha", "not a sha"),
+        ("digest", "sha256:short"),
+        ("image", "ghcr.io/hawkixs/red-probe:latest"),
+    ):
+        kwargs = {
+            "version": "0.1.0",
+            "sha": "c" * 40,
+            "digest": DIGEST,
+            "image": IMAGE,
+            field: value,
+        }
+        with pytest.raises(DeployError, match=f"artefact {field}"):
+            Artefact(**kwargs)
