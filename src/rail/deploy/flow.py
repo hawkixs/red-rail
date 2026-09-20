@@ -288,6 +288,7 @@ def rollback(
             None,
             tuple(attester.records),
             tuple(attester.unattested),
+            ledger_failures=tuple(attester.failures),
             failed=f"rollback to {previous.version} failed: {exc} — run `rail check observe`",
         )
     attester.attest(
@@ -402,6 +403,7 @@ def drill(
             None,
             tuple(attester.records),
             tuple(attester.unattested),
+            ledger_failures=tuple(attester.failures),
             failed=f"roll-forward to {live.version} failed: {exc}",
             recovery_seconds=seconds,
         )
