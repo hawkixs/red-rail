@@ -15,12 +15,13 @@ from rail.ledger import (
     RECEIPTS_DIR,
     AttestationKind,
     Ledger,
+    Record,
     RecordKind,
     Unattested,
     idempotency_key_for,
 )
 from rail.ledger.file import receipt_filename
-from rail.reviewer.github import PullRequest
+from rail.reviewer.github import GitHubError, PullRequest
 from rail.reviewer.judges import JudgeReply, judge
 from rail.reviewer.policy import ReviewPolicy, producer_provider
 from rail.reviewer.verdict import Finding, ReviewVerdict
@@ -32,6 +33,8 @@ RunJudge = Callable[..., JudgeReply]
 
 class GitHubLike(Protocol):
     def diff(self, repository: str, number: int) -> str: ...
+    def compare_diff(self, repository: str, base_sha: str, head_sha: str) -> str: ...
+    def check_run_text(self, repository: str, check_id: int) -> str: ...
     def commit_messages(self, repository: str, number: int) -> list[str]: ...
     def check_runs(self, repository: str, sha: str, *, name: str) -> list[Any]: ...
     def start_check(self, repository: str, head_sha: str, *, name: str) -> Any: ...
@@ -95,6 +98,54 @@ def _criteria(ledger: Ledger, project: str) -> list[str]:
     return [str(c) for c in contracts[-1].data.get("contract", {}).get("acceptance_criteria", [])]
 
 
+def previous_verdicts(ledger: Ledger, project: str, pr: PullRequest) -> list[Record]:
+    """This pull request's earlier verdicts, oldest first — the ledger is the pass counter."""
+    return [
+        r
+        for r in ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
+        if r.data.get("repository") == pr.repository and r.data.get("pr") == pr.number
+    ]
+
+
+def changed_lines(diff: str) -> int:
+    return sum(
+        1
+        for line in diff.splitlines()
+        if (line.startswith("+") or line.startswith("-")) and not line.startswith(("+++", "---"))
+    )
+
+
+def _delta(
+    pr: PullRequest, previous: Record | None, *, github: GitHubLike, policy: ReviewPolicy
+) -> str | None:
+    """The diff since the last verdict's head, or None when the whole PR must be judged
+    again: no earlier verdict, incremental off, the rerun label, the same head, a base
+    GitHub no longer knows (rebase / force-push)."""
+    if previous is None or not policy.incremental or policy.rerun_label in pr.labels:
+        return None
+    base = str(previous.data.get("sha") or "")
+    if not base or base == pr.head_sha:
+        return None
+    try:
+        delta = github.compare_diff(pr.repository, base, pr.head_sha)
+    except GitHubError:
+        return None
+    return delta if delta.strip() else None
+
+
+def _notes(pr: PullRequest, previous: Record, *, github: GitHubLike) -> str:
+    check_id = previous.data.get("check_run_id")
+    earlier = github.check_run_text(pr.repository, int(check_id)) if check_id else ""
+    return (
+        f"This pull request was reviewed before at {previous.data.get('sha')} with the verdict "
+        f"{previous.data.get('verdict')}. The earlier review said:\n"
+        f"{earlier or '(no text kept)'}\n\n"
+        "The diff below is only what changed since that review. Approve only if every earlier "
+        "finding is addressed by these changes and they introduce nothing blocking or important; "
+        "a finding about code outside this delta must quote the earlier review."
+    )
+
+
 def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdict:
     verdicts = [r.verdict for r in replies if r.verdict is not None]
     decision = (
@@ -132,13 +183,31 @@ def _render(verdict: ReviewVerdict) -> str:
 
 
 def _judge_chain(
-    pr, diff, policy, chain, *, tier, criteria, run_judge, root, failures, wanted: int
+    pr,
+    diff,
+    policy,
+    chain,
+    *,
+    tier,
+    criteria,
+    run_judge,
+    root,
+    failures,
+    wanted: int,
+    notes: str = "",
 ) -> list[JudgeReply]:
     """Walk the chain until `wanted` verdicts are in hand; a failure is logged, never fatal."""
     replies: list[JudgeReply] = []
     for provider in chain:
         reply = run_judge(
-            pr, diff, policy, provider=provider, tier=tier, criteria=criteria, root=root
+            pr,
+            diff,
+            policy,
+            provider=provider,
+            tier=tier,
+            criteria=criteria,
+            root=root,
+            **({"notes": notes} if notes else {}),
         )
         if reply.verdict is None:
             failures.append(f"{provider}/{tier}: {reply.failure}")
@@ -185,50 +254,19 @@ def review_pull(
         raise
 
 
-def _review_started(
+def _publish(
     pr: PullRequest,
     check: Any,
+    verdict: ReviewVerdict,
+    title: str,
     *,
     github: GitHubLike,
     policy: ReviewPolicy,
     ledger: Ledger,
     project: str,
     repo_path: Path | None,
-    run_judge: RunJudge,
-    root: Path | None,
+    failures: list[str],
 ) -> ReviewOutcome:
-    failures: list[str] = []
-    diff = github.diff(pr.repository, pr.number)
-    truncated = len(diff) > policy.max_diff_chars
-    producer = producer_provider(github.commit_messages(pr.repository, pr.number))
-    chain = policy.chain_for(producer=producer)
-    mode = policy.mode_for(pr, docs_only=docs_only(diff, policy))
-    criteria = _criteria(ledger, project)
-    common = dict(criteria=criteria, run_judge=run_judge, root=root, failures=failures)
-    if mode == "light":
-        replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=1, **common)
-    else:
-        replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=2, **common)
-        decisions = {r.verdict.verdict for r in replies if r.verdict}
-        escalate = len(decisions) > 1 or any(r.verdict.important for r in replies if r.verdict)
-        if escalate:
-            used = {r.provider for r in replies}
-            deep_chain = tuple(p for p in chain if p not in used) or chain
-            deep = _judge_chain(pr, diff, policy, deep_chain, tier="deep", wanted=1, **common)
-            replies = deep or replies  # the deep judge's verdict wins
-    if not any(r.verdict for r in replies):
-        verdict = ReviewVerdict(
-            verdict="request_changes",
-            summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
-            findings=[],
-            mode=mode,
-            providers=(),
-            diff_truncated=truncated,
-        )
-        title = "no verdict"
-    else:
-        verdict = _merge(replies, mode, truncated)
-        title = verdict.verdict
     # Attest FIRST: GitHub must never show an approval the ledger does not hold (found by the
     # independent reviewer on PR #3). The check run exists already (in progress), so its id is
     # part of the attestation; the conclusion and the PR review follow the ledger's answer.
@@ -294,7 +332,96 @@ def _review_started(
     if policy.rerun_label in pr.labels:
         github.remove_label(pr.repository, pr.number, policy.rerun_label)
     return outcome
-    outcome.attested = True
-    if repo_path is not None:
-        outcome.receipt = repo_path / RECEIPTS_DIR / receipt_filename(record)
-    return outcome
+
+
+def _review_started(
+    pr: PullRequest,
+    check: Any,
+    *,
+    github: GitHubLike,
+    policy: ReviewPolicy,
+    ledger: Ledger,
+    project: str,
+    repo_path: Path | None,
+    run_judge: RunJudge,
+    root: Path | None,
+) -> ReviewOutcome:
+    history = previous_verdicts(ledger, project, pr)
+    forced = policy.rerun_label in pr.labels
+    if len(history) >= policy.max_passes_per_pr and not forced:
+        verdict = ReviewVerdict(
+            verdict="request_changes",
+            summary=(
+                f"review budget exhausted: {len(history)} passes on this pull request "
+                f"(max {policy.max_passes_per_pr}); squash the fix-ups, then add the label "
+                f"{policy.rerun_label} for one more review"
+            ),
+            findings=[],
+            mode="budget",
+            providers=(),
+            diff_truncated=False,
+        )
+        return _publish(
+            pr,
+            check,
+            verdict,
+            "review budget exhausted",
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            failures=[],
+        )
+    failures: list[str] = []
+    previous = history[-1] if history else None
+    delta = _delta(pr, previous, github=github, policy=policy)
+    if delta is not None:
+        assert previous is not None
+        diff, notes = delta, _notes(pr, previous, github=github)
+        light = changed_lines(delta) <= policy.light_max_changed_lines
+    else:
+        diff, notes = github.diff(pr.repository, pr.number), ""
+        light = policy.mode_for(pr, docs_only=docs_only(diff, policy)) == "light"
+    truncated = len(diff) > policy.max_diff_chars
+    producer = producer_provider(github.commit_messages(pr.repository, pr.number))
+    chain = policy.chain_for(producer=producer)
+    criteria = _criteria(ledger, project)
+    common = dict(criteria=criteria, run_judge=run_judge, root=root, failures=failures, notes=notes)
+    if light:
+        replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=1, **common)
+    else:
+        replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=2, **common)
+        decisions = {r.verdict.verdict for r in replies if r.verdict}
+        escalate = len(decisions) > 1 or any(r.verdict.important for r in replies if r.verdict)
+        if escalate:
+            used = {r.provider for r in replies}
+            deep_chain = tuple(p for p in chain if p not in used) or chain
+            deep = _judge_chain(pr, diff, policy, deep_chain, tier="deep", wanted=1, **common)
+            replies = deep or replies  # the deep judge's verdict wins
+    mode = "incremental" if delta is not None else ("light" if light else "deep")
+    if not any(r.verdict for r in replies):
+        verdict = ReviewVerdict(
+            verdict="request_changes",
+            summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
+            findings=[],
+            mode=mode,
+            providers=(),
+            diff_truncated=truncated,
+        )
+        title = "no verdict"
+    else:
+        verdict = _merge(replies, mode, truncated)
+        title = verdict.verdict
+    return _publish(
+        pr,
+        check,
+        verdict,
+        title,
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project=project,
+        repo_path=repo_path,
+        failures=failures,
+    )

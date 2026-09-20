@@ -56,6 +56,10 @@ class ReviewPolicy(BaseModel):
     check_name: str = "red-rail/review"
     rerun_label: str = "rail-review:rerun"
     docs_globs: tuple[str, ...] = ("docs/**", "*.md", "**/*.md")
+    # convergence (2026-09-20): a pass after the first judges the delta since the last verdict
+    # with the earlier findings in hand; beyond the budget the check fails until the label
+    max_passes_per_pr: int = Field(default=4, ge=1)
+    incremental: bool = True
 
     @model_validator(mode="after")
     def _every_provider_has_a_model(self) -> ReviewPolicy:
