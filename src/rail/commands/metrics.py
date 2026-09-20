@@ -35,7 +35,10 @@ def command(repo: Path, window: int, ci: bool, as_json: bool) -> None:
             ledger, cfg.project, repo, now=datetime.now(UTC), window_days=window, ci=ci
         )
     except (FileNotFoundError, ValidationError, LedgerError) as exc:
-        click.echo(f"error: {exc}", err=True)
+        if as_json:  # a machine consumer gets JSON even on an error
+            click.echo(json.dumps({"error": str(exc)}))
+        else:
+            click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc
     if as_json:
         click.echo(json.dumps(metrics.to_dict(), indent=2))

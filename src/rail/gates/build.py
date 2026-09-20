@@ -11,7 +11,7 @@ from pathlib import Path
 
 from rail import gitrepo
 from rail.gates import GateResult, GateSpec, Stage
-from rail.model import MANIFEST_NAME, Stack, try_load_rail_config
+from rail.model import MANIFEST_NAME, Stack, manifest_problem, try_load_rail_config
 from rail.policy import effective
 
 CONVENTIONAL = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]+\))?!?: \S")
@@ -26,7 +26,9 @@ def has_tests(repo: Path) -> GateResult:
     # named `has_tests`, not `tests`: pytest would collect a `tests` function on import
     stack = _stack(repo)
     if stack is None:
-        return GateResult(Stage.BUILD, "tests", False, f"{MANIFEST_NAME} unreadable")
+        return GateResult(
+            Stage.BUILD, "tests", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
+        )
     if stack is Stack.DOCS:
         return GateResult(Stage.BUILD, "tests", True, "stack docs: no test suite required")
     if stack is Stack.PYTHON:
@@ -52,7 +54,9 @@ def has_tests(repo: Path) -> GateResult:
 def lint(repo: Path) -> GateResult:
     stack = _stack(repo)
     if stack is None:
-        return GateResult(Stage.BUILD, "lint", False, f"{MANIFEST_NAME} unreadable")
+        return GateResult(
+            Stage.BUILD, "lint", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
+        )
     if stack is Stack.DOCS:
         return GateResult(Stage.BUILD, "lint", True, "stack docs: no linter required")
     if stack is Stack.PYTHON:

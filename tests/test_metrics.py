@@ -295,3 +295,9 @@ def test_drill_recovery_time_is_measured_apart(tmp_path: Path) -> None:
     out = CliRunner().invoke(main, ["metrics", "--repo", str(repo), "--json"])
     assert out.exit_code == 0, out.output
     assert json.loads(out.output)["drill_recovery_time_minutes"] == 2.5
+
+
+def test_metrics_json_answers_json_on_an_error(tmp_path: Path) -> None:
+    out = CliRunner().invoke(main, ["metrics", "--repo", str(tmp_path), "--json"])
+    assert out.exit_code == 1
+    assert json.loads(out.output)["error"].startswith("rail.yaml is missing")

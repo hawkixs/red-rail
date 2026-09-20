@@ -87,19 +87,41 @@ class RailConfig(BaseModel):
         return self
 
 
+MISSING_HINT = (
+    f"{MANIFEST_NAME} is missing (run `rail new` for a new project, or write it for an "
+    "existing repository)"
+)
+
+
 def try_load_rail_config(repo: Path) -> RailConfig | None:
     """The manifest when it is present and valid, else None — the one definition of
-    "unreadable" shared by every gate and command (the `rail_config` gate reports why)."""
+    "unreadable" shared by every gate and command (`manifest_problem` says why)."""
     try:
         return load_rail_config(repo)
     except (FileNotFoundError, ValidationError):
         return None
 
 
+def manifest_problem(repo: Path) -> str | None:
+    """Why the manifest cannot be read, in the words every gate and command repeat: missing
+    (with the way out) or invalid (with the first error); None when it loads."""
+    try:
+        load_rail_config(repo)
+    except FileNotFoundError:
+        return MISSING_HINT
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        location = ".".join(str(part) for part in first["loc"]) or "<root>"
+        return f"{MANIFEST_NAME} is invalid: {location}: {first['msg']}"
+    return None
+
+
 def load_rail_config(repo: Path) -> RailConfig:
     """Read and validate `<repo>/rail.yaml`. A missing manifest is an error, not a default."""
     path = repo / MANIFEST_NAME
     if not path.is_file():
-        raise FileNotFoundError(f"{MANIFEST_NAME} not found in {repo}")
+        raise FileNotFoundError(
+            f"{MISSING_HINT.replace(' is missing', f' is missing in {repo}', 1)}"
+        )
     raw = yaml.safe_load(path.read_text()) or {}
     return RailConfig.model_validate(raw)

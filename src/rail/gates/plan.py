@@ -36,7 +36,9 @@ def plan(repo: Path) -> GateResult:
         )
     sections = markdown.task_sections(text)
     if not sections:
-        return GateResult(Stage.PLAN, "plan", False, f"{latest.name}: no `### Task` section")
+        return GateResult(
+            Stage.PLAN, "plan", False, f"{latest.name}: no `### Task …` heading (level 3)"
+        )
     unverified = [s.splitlines()[0] for s in sections if not markdown.has_verification(s)]
     if unverified:
         return GateResult(

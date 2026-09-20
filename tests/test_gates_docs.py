@@ -112,7 +112,7 @@ def test_plan_requires_a_verification_per_task(tmp_path: Path) -> None:
     result = plan(repo)
     assert not result.passed and "Task 1.2" in result.details
     doc.write_text("# plan\n\ndocs/specs/2026-09-15-red-beta-design.md\n")
-    assert "no `### Task`" in plan(repo).details
+    assert "no `### Task …` heading (level 3)" in plan(repo).details
 
 
 def test_plan_passes_on_a_conforming_plan(tmp_path: Path) -> None:

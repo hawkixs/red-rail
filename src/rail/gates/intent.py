@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from rail.gates import GateResult, GateSpec, Stage
 from rail.ledger import LedgerError, RecordKind, open_ledger
-from rail.model import MANIFEST_NAME, load_rail_config
+from rail.model import MANIFEST_NAME, load_rail_config, manifest_problem
 
 
 def contract(repo: Path) -> GateResult:
@@ -16,7 +16,9 @@ def contract(repo: Path) -> GateResult:
         cfg = load_rail_config(repo)
         records = open_ledger(repo).list(cfg.project, kind=RecordKind.CONTRACT)
     except (FileNotFoundError, ValidationError):
-        return GateResult(Stage.INTENT, "contract", False, f"{MANIFEST_NAME} unreadable")
+        return GateResult(
+            Stage.INTENT, "contract", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
+        )
     except LedgerError as exc:
         return GateResult(Stage.INTENT, "contract", False, str(exc))
     if not records:

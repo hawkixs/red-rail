@@ -27,8 +27,15 @@ def spec(repo: Path) -> GateResult:
         if not markdown.has_section(text, aliases)
     ]
     if missing:
+        accepted = "; ".join(
+            f"{name}: {' | '.join(REQUIRED_SPEC_SECTIONS[name])}" for name in missing
+        )
         return GateResult(
-            Stage.DESIGN, "spec", False, f"{latest.name}: missing section(s): {', '.join(missing)}"
+            Stage.DESIGN,
+            "spec",
+            False,
+            f"{latest.name}: missing section(s): {', '.join(missing)} "
+            f"(a heading containing one of — {accepted})",
         )
     return GateResult(
         Stage.DESIGN,

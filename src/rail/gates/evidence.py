@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from rail import gitrepo, monitor
 from rail.gates import GateResult, GateSpec, Stage
 from rail.ledger import AttestationKind, LedgerError, Record, open_ledger
-from rail.model import MANIFEST_NAME, load_rail_config, try_load_rail_config
+from rail.model import MANIFEST_NAME, load_rail_config, manifest_problem, try_load_rail_config
 
 
 def _attestations(repo: Path, kind: AttestationKind) -> list[Record] | str:
@@ -23,7 +23,7 @@ def _attestations(repo: Path, kind: AttestationKind) -> list[Record] | str:
         cfg = load_rail_config(repo)
         return open_ledger(repo).list(cfg.project, attestation=kind)
     except (FileNotFoundError, ValidationError):
-        return f"{MANIFEST_NAME} unreadable"
+        return manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
     except LedgerError as exc:
         return str(exc)
 
@@ -149,7 +149,9 @@ def visible(repo: Path) -> GateResult:
 
     cfg = try_load_rail_config(repo)
     if cfg is None:
-        return GateResult(Stage.OBSERVE, "visible", False, f"{MANIFEST_NAME} unreadable")
+        return GateResult(
+            Stage.OBSERVE, "visible", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
+        )
     deploy = _newest(repo, AttestationKind.DEPLOYED)
     if isinstance(deploy, str):
         return GateResult(Stage.OBSERVE, "visible", False, deploy)
