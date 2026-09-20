@@ -1,0 +1,15 @@
+{
+  "digest": "sha256:726d5bb312a2c0122c73b417257e08717a06d8ba512f75822b5e589d7b18c34b",
+  "idempotency_key": "bind:hawkixs/red-rail:9:8e4babe5f79c",
+  "issuer": "operator",
+  "kind": "binding",
+  "payload": {
+    "binding_id": "a4f5a75a-c5ed-4990-b4cc-0c30af60b4b9",
+    "head_sha": "8e4babe5f79cd58a67c79f43e4d6b8865a9f4077",
+    "number": 9,
+    "repository": "hawkixs/red-rail"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-20T10:44:24.559036Z",
+  "schema_version": 1
+}
