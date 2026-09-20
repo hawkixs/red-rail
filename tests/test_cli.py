@@ -128,7 +128,7 @@ def test_check_rejects_a_stage_outside_the_tier_unless_all(tmp_path: Path) -> No
 
 def test_check_ci_skips_workstation_gates(tmp_path: Path) -> None:
     repo = _bootstrap_repo(tmp_path)
-    git(repo, "remote", "remove", "gitlab")
+    git(repo, "remote", "remove", "origin")  # no GitHub remote: hygiene.remotes fails on the host
     assert CliRunner().invoke(main, ["check", "--repo", str(repo)]).exit_code == 1
     out = CliRunner().invoke(main, ["check", "--repo", str(repo), "--ci", "--json"])
     assert out.exit_code == 0, out.output

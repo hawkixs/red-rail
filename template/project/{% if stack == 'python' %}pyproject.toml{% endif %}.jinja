@@ -9,7 +9,8 @@ description = "{{ description }}"
 requires-python = ">=3.12"
 dependencies = []
 
-[project.optional-dependencies]
+[dependency-groups]
+# `uv run` and `uv sync` install the dev group by default: `make ci` works on a fresh clone.
 dev = ["pytest>=8.0", "ruff>=0.8"]
 
 [tool.setuptools.packages.find]

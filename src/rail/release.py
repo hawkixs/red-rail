@@ -1,8 +1,9 @@
 """`rail release` (stage 7, spec §6 step 6): tag + immutable artefact + attestation, from the
 host. The artefact is an OCI image pushed to the project's repository (tier default
 `ghcr.io/hawkixs/<project>`, decision 8faab5a3) and named by its manifest digest; the tag
-`v<version>` is annotated with the changelog and pushed to both remotes. Every subprocess
-goes through `run` so the flow is testable without docker, gh or a network."""
+`v<version>` is annotated with the changelog and pushed to GitHub — and to the mirror the
+manifest declares, if any (`hygiene.mirror_host`; ReD is GitHub only, decision 30acbbde).
+Every subprocess goes through `run` so the flow is testable without docker, gh or a network."""
 
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ class ReleasePlan:
     changelog: tuple[str, ...]
     tag_local: bool = False  # the tag already names HEAD here: a resumed release
     tag_on_origin: bool = False  # … and on origin
+    mirror_remote: str | None = None  # the remote of the declared mirror, None for GitHub only
 
     @property
     def tag(self) -> str:
@@ -68,9 +70,10 @@ class ReleasePlan:
             f"git tag -a {self.tag} -F - {self.sha}  # message: {len(self.changelog)} "
             "changelog line(s)",
             f"git push origin refs/tags/{self.tag}",
-            f"git push gitlab refs/tags/{self.tag}",
-            f"rail attest released --data version={self.version} --data digest=<digest> …",
         ]
+        if self.mirror_remote:
+            lines.append(f"git push {self.mirror_remote} refs/tags/{self.tag}")
+        lines.append(f"rail attest released --data version={self.version} --data digest=<digest> …")
         return lines
 
 
@@ -107,7 +110,8 @@ def _ok(
 
 def preflight(repo: Path, version: str, *, ledger: Ledger, run: Runner) -> ReleasePlan:
     """Everything measured before anything is built: the tier, the branch, a tree clean
-    outside the ledger mirrors, HEAD published, the tag free, an integration on history."""
+    outside the ledger mirrors, HEAD published, the tag free, an integration on history, and
+    the remote of the declared mirror when the manifest declares one."""
     if not SEMVER.match(version):
         raise ReleaseError(f"{version!r} is not a semantic version (X.Y.Z)")
     cfg = load_rail_config(repo)
@@ -184,6 +188,21 @@ def preflight(repo: Path, version: str, *, ledger: Ledger, run: Runner) -> Relea
         changelog=tuple(s for s in subjects.splitlines() if s),
         tag_local=tag_local,
         tag_on_origin=tag_on_origin,
+        mirror_remote=_mirror_remote(repo),
+    )
+
+
+def _mirror_remote(repo: Path) -> str | None:
+    """The git remote pointing at the declared mirror host; None when no mirror is declared.
+    A declared mirror without its remote is a precondition failure, not a silent skip."""
+    host = parameter(repo, "hygiene.mirror_host")
+    if not host:
+        return None
+    for name, url in gitrepo.remotes(repo).items():
+        if gitrepo.url_host(url) == str(host).lower():  # the exact host, never a substring
+            return name
+    raise ReleaseError(
+        f"the manifest declares the mirror {host} (hygiene.mirror_host) but no remote points there"
     )
 
 
@@ -255,8 +274,8 @@ def _identity_flags(repo: Path, *, run: Runner) -> list[str]:
 
 
 def tag_and_push(plan: ReleasePlan, repo: Path, *, run: Runner) -> None:
-    """Idempotent: what the previous run already did is skipped, the mirror is pushed always
-    (pushing an identical tag is a no-op for git)."""
+    """Idempotent: what the previous run already did is skipped; a declared mirror is pushed
+    always (pushing an identical tag is a no-op for git)."""
     message = (
         f"{plan.project} {plan.version}\n\n" + "\n".join(f"- {s}" for s in plan.changelog) + "\n"
     )
@@ -275,11 +294,14 @@ def tag_and_push(plan: ReleasePlan, repo: Path, *, run: Runner) -> None:
             cwd=repo,
             what="git push origin",
         )
-    done = _run(["git", "push", "gitlab", f"refs/tags/{plan.tag}"], run=run, cwd=repo)
+    if not plan.mirror_remote:
+        return
+    mirror = plan.mirror_remote
+    done = _run(["git", "push", mirror, f"refs/tags/{plan.tag}"], run=run, cwd=repo)
     if done.returncode != 0:
         raise ReleaseError(
-            f"git push gitlab {plan.tag} failed after GitHub succeeded — do not delete the "
-            f"GitHub tag; fix the mirror and run `git push gitlab refs/tags/{plan.tag}`: "
+            f"git push {mirror} {plan.tag} failed after GitHub succeeded — do not delete the "
+            f"GitHub tag; fix the mirror and run `git push {mirror} refs/tags/{plan.tag}`: "
             f"{(done.stderr or done.stdout).strip()}"
         )
 

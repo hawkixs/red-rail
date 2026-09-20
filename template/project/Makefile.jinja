@@ -5,9 +5,9 @@
 RAIL_FLAGS ?=
 
 {% if stack == 'python' -%}
-## Install the project and its dev extras
+## Install the project and its dev dependency group
 sync:
-	uv sync --extra dev
+	uv sync
 
 ## Lint and format check
 lint:

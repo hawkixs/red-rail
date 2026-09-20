@@ -18,7 +18,7 @@ from rail.gates.hygiene import (
 )
 from rail.ledger import RECEIPTS_DIR, AttestationKind
 from rail.ledger.file import FileLedger
-from tests.helpers import conforming_tree, git, init_repo, write_roster
+from tests.helpers import conforming_tree, git, init_repo, write_manifest, write_roster
 
 CLOCK = lambda: datetime(2026, 9, 15, 8, 0, tzinfo=UTC)  # noqa: E731
 
@@ -79,12 +79,24 @@ def test_settings_wants_a_permission_allowlist(tmp_path: Path) -> None:
     assert not settings(repo).passed
 
 
-def test_remotes_need_github_and_the_mirror(tmp_path: Path) -> None:
-    assert remotes(conforming_tree(tmp_path, "red-alpha", "bootstrap")).passed
-    lonely = init_repo(tmp_path / "lonely", remotes=False)
-    git(lonely, "remote", "add", "origin", "git@github.com:hawkixs/lonely.git")
+def test_remotes_need_github_and_only_a_declared_mirror(tmp_path: Path) -> None:
+    """ReD is GitHub only (decision 30acbbde): a lone GitHub remote passes; a mirror is required
+    only where the manifest declares one, and then it must exist."""
+    assert remotes(conforming_tree(tmp_path, "red-alpha", "bootstrap")).passed  # both: fine
+    lonely = init_repo(tmp_path / "red-lonely", remotes=False)
+    git(lonely, "remote", "add", "origin", "git@github.com:hawkixs/red-lonely.git")
     result = remotes(lonely)
-    assert not result.passed and "gitlab.hawkixs.local" in result.details
+    assert result.passed and result.details == "github.com"
+    write_manifest(
+        lonely,
+        project="red-lonely",
+        tier="bootstrap",
+        gates={"hygiene.mirror_host": ("gitlab.hawkixs.local", "this project keeps its mirror")},
+    )
+    result = remotes(lonely)
+    assert not result.passed and "no remote on gitlab.hawkixs.local" in result.details
+    git(lonely, "remote", "add", "gitlab", "ssh://git@gitlab.hawkixs.local:2222/red/red-lonely.git")
+    assert remotes(lonely).details == "github.com + gitlab.hawkixs.local"
     assert "not a git repository" in remotes(tmp_path / "nowhere").details
 
 

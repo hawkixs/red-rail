@@ -1,7 +1,19 @@
-"""The package imports and carries a version."""
+"""The package imports and reports the version pyproject.toml declares."""
+
+import importlib.metadata
+import tomllib
+from pathlib import Path
+
+import pytest
 
 from {{ project | replace('-', '_') }} import __version__
 
 
-def test_version() -> None:
+def test_version_is_the_one_declared_in_pyproject() -> None:
     assert __version__
+    try:
+        importlib.metadata.distribution("{{ project }}")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("bare source tree on sys.path, no installed distribution: nothing to compare")
+    with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as fh:
+        assert __version__ == tomllib.load(fh)["project"]["version"]
