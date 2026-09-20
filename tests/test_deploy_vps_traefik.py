@@ -198,5 +198,5 @@ def test_compose_is_read_at_the_released_commit_and_steps_are_printable(tmp_path
     assert steps[0].argv[0] == "ssh" and steps[1].title.startswith(
         "GET https://red-probe.example.invalid/healthz"
     )
-    with pytest.raises(DeployError, match="absent"):
+    with pytest.raises(DeployError, match="not committed"):
         target.compose_at("0" * 40)

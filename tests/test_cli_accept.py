@@ -20,6 +20,13 @@ from tests.test_ledger_brain import CONTRACT, T0, _clock
 
 def test_accept_on_the_file_ledger_writes_fulfilled(tmp_path: Path) -> None:
     repo = conforming_tree(tmp_path, "red-alpha", "prod")
+    FileLedger(repo / RECEIPTS_DIR).attest(
+        "red-alpha",
+        AttestationKind.INTEGRATED,
+        {"sha": git(repo, "rev-parse", "HEAD")},
+        issuer="op",
+        idempotency_key="i1",
+    )
     out = CliRunner().invoke(
         main, ["accept", "--repo", str(repo), "--rationale", "proof observed", "--json"]
     )
@@ -78,3 +85,13 @@ def test_accept_on_the_brain_ledger_is_the_requesters_call(
     assert out.exit_code == 0, out.output
     assert out.output.startswith("fulfilled  fulfilled:" + "b" * 40)
     assert brain.tickets[ticket].fulfillment_receipt is not None
+
+
+def test_accept_refuses_without_an_integration_on_history(tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "prod")
+    FileLedger(repo / RECEIPTS_DIR)  # empty ledger: nothing integrated
+    out = CliRunner().invoke(main, ["accept", "--repo", str(repo), "--rationale", "too early"])
+    assert out.exit_code == 1 and "not integrated" in out.output
+    assert not FileLedger(repo / RECEIPTS_DIR).list(
+        "red-alpha", attestation=AttestationKind.FULFILLED
+    )

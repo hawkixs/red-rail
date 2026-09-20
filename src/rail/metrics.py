@@ -26,9 +26,14 @@ def _hours(delta: timedelta) -> float:
 
 @dataclass(frozen=True, slots=True)
 class Conformance:
+    """Scored against the declared tier (spec §4): `stages` names the denominator, so the
+    count is never confused with `rail check --all`'s (red-arena, 2026-09-20)."""
+
     passed: int
     applicable: int
     exceptions: int
+    tier: str = "bootstrap"
+    stages: tuple[str, ...] = ()
 
     @property
     def score(self) -> float | None:
@@ -52,6 +57,7 @@ class Metrics:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["conformance"]["score"] = self.conformance.score
+        data["conformance"]["stages"] = list(self.conformance.stages)
         return data
 
 
@@ -137,11 +143,14 @@ def compute_metrics(
                 round((after[0].recorded_at - incident.recorded_at).total_seconds() / 60, 2)
             )
 
-    results = [r for r in run_gates(repo, stages=applicable_stages(repo), ci=ci) if not r.skipped]
+    stages = applicable_stages(repo)
+    results = [r for r in run_gates(repo, stages=stages, ci=ci) if not r.skipped]
     conformance = Conformance(
         passed=sum(1 for r in results if r.passed),
         applicable=len(results),
         exceptions=sum(1 for r in results if r.exception),
+        tier=(cfg.tier.value if cfg is not None else "bootstrap"),
+        stages=tuple(s.value for s in stages),
     )
     return Metrics(
         project=project,

@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from rail import gitrepo
 from rail.commands._options import json_option, repo_option
 from rail.commands.attest import echo_record
-from rail.ledger import LedgerError, open_ledger
+from rail.ledger import AttestationKind, LedgerError, open_ledger
 from rail.model import load_rail_config
 
 
@@ -26,6 +26,14 @@ def command(repo: Path, rationale: str, issuer: str, as_json: bool) -> None:
     try:
         project = load_rail_config(repo).project
         ledger = open_ledger(repo)
+        # stage 10 follows stage 6 on both ledgers: brain refuses without its integration
+        # receipt; the file ledger holds the operator to the same rule (red-arena, 2026-09-20)
+        if not ledger.list(project, attestation=AttestationKind.INTEGRATED):
+            raise LedgerError(
+                "no integration evidence on HEAD's history to accept: the delivery is not "
+                "integrated (brain observes the merge; on the file ledger, `rail attest "
+                "integrated` first)"
+            )
         record = ledger.accept(
             project, rationale=rationale, issuer=issuer, sha=gitrepo.head_sha(repo)
         )

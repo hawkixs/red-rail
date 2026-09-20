@@ -7,6 +7,7 @@ the layout red-gift already uses. The compose file is the project's `deploy/comp
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from collections.abc import Callable
@@ -129,10 +130,12 @@ class VpsTraefik:
             capture_output=True,
             text=True,
             check=False,
+            env={**os.environ, "LC_ALL": "C"},  # git's own words, one language
         )
         if done.returncode != 0:
             raise DeployError(
-                f"{self.params.compose_path} is absent at {sha[:12]}: {(done.stderr or '').strip()}"
+                f"{self.params.compose_path} is not committed at {sha[:12]} — the compose file "
+                "is read at the released commit, never from the working tree"
             )
         return done.stdout
 

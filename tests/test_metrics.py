@@ -140,7 +140,17 @@ def test_cli_metrics(tmp_path: Path) -> None:
     assert out.exit_code == 0, out.output
     payload = json.loads(out.output)
     assert payload["project"] == "red-alpha" and payload["deployments"] == 2
-    assert set(payload["conformance"]) == {"passed", "applicable", "exceptions", "score"}
+    assert set(payload["conformance"]) == {
+        "passed",
+        "applicable",
+        "exceptions",
+        "score",
+        "tier",
+        "stages",
+    }
+    assert payload["conformance"]["tier"] == "prod"  # the history fixture declares prod
+    assert payload["conformance"]["stages"][:3] == ["hygiene", "intent", "design"]
+    assert len(payload["conformance"]["stages"]) == 11
     out = CliRunner().invoke(main, ["metrics", "--repo", str(repo)])
     assert out.exit_code == 0 and "change failure rate" in out.output
 

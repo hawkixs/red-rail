@@ -209,3 +209,52 @@ def test_an_unattested_step_exits_2_with_every_replay_command(
     assert out.exit_code == 2, out.output
     assert "replay with: rail attest deployed --from" in out.output
     assert target.applied == [D1]  # the service is live; only the ledger is behind
+
+
+def test_a_failed_first_deploy_records_only_the_incident(
+    tmp_path: Path, target: FakeTarget
+) -> None:
+    """No previous artefact: nothing is rolled back, so no `rolled_back` is claimed."""
+    repo = _repo(tmp_path, ("0.1.0", D1))
+    target.broken.add(D1)
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 1 and "nothing to roll back to" in out.output
+    assert [k for k, _ in _kinds(repo)] == ["incident_detected"]
+
+
+def test_a_failed_rollback_leaves_the_incident_open(tmp_path: Path, target: FakeTarget) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    assert (
+        CliRunner()
+        .invoke(main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"])
+        .exit_code
+        == 0
+    )
+    target.broken.update({D1, D2})
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 1 and "rollback to 0.1.0 failed too" in out.output
+    assert [k for k, _ in _kinds(repo)] == ["deployed", "incident_detected"]
+
+
+def test_a_lock_during_the_rollback_exits_3_after_the_incident(
+    tmp_path: Path, target: FakeTarget
+) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    assert (
+        CliRunner()
+        .invoke(main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"])
+        .exit_code
+        == 0
+    )
+    target.broken.add(D2)
+    original = target.apply
+
+    def apply(artefact: Artefact) -> LiveVersion:
+        if artefact.digest == D1 and target.applied and target.applied[-1] == D2:
+            raise Locked("another deployment holds the lock")
+        return original(artefact)
+
+    target.apply = apply  # type: ignore[method-assign]
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 3 and "while rolling back 0.1.1" in out.output
+    assert [k for k, _ in _kinds(repo)] == ["deployed", "incident_detected"]

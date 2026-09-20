@@ -167,40 +167,50 @@ def forward(
             },
         )
         failure = f"{artefact.version} failed: {reason}"
-        restored = False
-        if previous is not None:
-            try:
-                target.apply(previous)
-                restored = True
-                failure += f" — rolled back to {previous.version}"
-            except DeployError as back:
-                failure += f" — and the rollback to {previous.version} failed too: {back}"
-        else:
+        # a `rolled_back` record means a completed rollback (ledger vocabulary, ADR-0004):
+        # without a previous artefact, or when putting it back fails, the incident stays open
+        # and nothing else is claimed (pre-review of PR #6)
+        if previous is None:
             failure += " — nothing to roll back to"
+            return Outcome(
+                None, tuple(attester.records), tuple(attester.unattested), failed=failure
+            )
+        try:
+            target.apply(previous)
+        except Locked as lock:
+            # the lock holder decides what is live; the incident is already in the ledger
+            raise Locked(
+                f"{lock} — while rolling back {artefact.version} after: {reason}"
+            ) from lock
+        except DeployError as back:
+            failure += f" — and the rollback to {previous.version} failed too: {back}"
+            return Outcome(
+                None, tuple(attester.records), tuple(attester.unattested), failed=failure
+            )
+        failure += f" — rolled back to {previous.version}"
         attester.attest(
             AttestationKind.ROLLED_BACK,
             {
                 "drill": False,
                 "automatic": True,
                 "from_digest": artefact.digest,
-                "to_digest": previous.digest if previous else "",
+                "to_digest": previous.digest,
                 "version": artefact.version,
                 "reason": reason,
             },
         )
-        if restored and previous is not None:
-            attester.attest(
-                AttestationKind.DEPLOYED,
-                deployed_data(previous, mode="rollback", domain=target.domain, previous=artefact),
-            )
-            attester.attest(
-                AttestationKind.RESTORED,
-                {
-                    "drill": False,
-                    "digest": previous.digest,
-                    "recovery_seconds": int(clock() - started),
-                },
-            )
+        attester.attest(
+            AttestationKind.DEPLOYED,
+            deployed_data(previous, mode="rollback", domain=target.domain, previous=artefact),
+        )
+        attester.attest(
+            AttestationKind.RESTORED,
+            {
+                "drill": False,
+                "digest": previous.digest,
+                "recovery_seconds": int(clock() - started),
+            },
+        )
         return Outcome(None, tuple(attester.records), tuple(attester.unattested), failed=failure)
     attester.attest(
         AttestationKind.DEPLOYED,

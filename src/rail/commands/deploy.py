@@ -78,11 +78,12 @@ def command(
         else:
             artefact = flow.newest_release(ledger, cfg.project, version)
         if dry_run:
+            steps = target.steps(artefact)  # computed first: a refusal prints no half plan
             click.echo(
                 f"{cfg.project} {'rollback to' if rollback else 'deploy'} "
                 f"{artefact.version} ({artefact.digest}) on {target.domain}"
             )
-            for step in target.steps(artefact):
+            for step in steps:
                 click.echo(f"  {step.title}")
                 click.echo(f"    $ {' '.join(step.argv)}")
             return
