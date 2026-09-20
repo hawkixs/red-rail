@@ -1,3 +1,8 @@
-"""{{ description }}"""
+"""{{ (project ~ ': ' ~ description) | wordwrap(94, break_long_words=False) }}"""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("{{ project }}")  # one source of truth: [project].version in pyproject.toml
+except PackageNotFoundError:  # the source tree on sys.path, no installed distribution
+    __version__ = "0+unknown"

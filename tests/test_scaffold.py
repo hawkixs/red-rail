@@ -51,6 +51,14 @@ def test_render_python_bootstrap(template_dir: Path, tmp_path: Path) -> None:
     assert (dest / "rail.yaml").read_text().startswith("rail: 1\nproject: red-probe\n")
     assert "tier: bootstrap" in (dest / "rail.yaml").read_text()
     assert "`red-probe`" in (dest / "CLAUDE.md").read_text()
+    # GitHub only (decision 30acbbde): no mirror is described anywhere in the rendered tree
+    for name in ("CLAUDE.md", "README.md"):
+        assert "gitlab" not in (dest / name).read_text().lower(), name
+    # what red-probe's first `make ci` on a fresh clone taught (2026-09-20): the dev tools are a
+    # uv dependency group — installed by `uv run` — not an extra that nothing installs
+    assert "[dependency-groups]" in (dest / "pyproject.toml").read_text()
+    assert "optional-dependencies" not in (dest / "pyproject.toml").read_text()
+    assert "\tuv sync\n" in (dest / "Makefile").read_text()
     assert (dest / "src" / "red_probe" / "__init__.py").is_file()
     assert (dest / "tests" / "test_smoke.py").is_file()
     assert (dest / ".copier-answers.yml").is_file()
@@ -67,6 +75,26 @@ def test_render_python_bootstrap(template_dir: Path, tmp_path: Path) -> None:
         if line.startswith(("\t", " "))
     ]
     assert recipes and all(line.startswith("\t") for line in recipes)
+
+
+def test_render_wraps_the_module_docstring_and_reads_the_version_from_the_install(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """A long description rendered verbatim into the module docstring was 127 characters on
+    red-probe (E501 on the first `make ci`); the version was a second hard-coded copy."""
+    description = (
+        "A disposable HTTP probe (/healthz, /version, /metrics) behind Traefik at "
+        "probe.hawkixs.com — the rail's end-to-end proof, described at some length."
+    )
+    dest = render(_project(template_dir, tmp_path / "red-probe", description=description))
+    module = (dest / "src" / "red_probe" / "__init__.py").read_text()
+    assert max(len(line) for line in module.splitlines()) <= 100
+    assert module.startswith('"""red-probe: A disposable HTTP probe')
+    assert 'version("red-probe")' in module and "0+unknown" in module
+    assert '__version__ = "0.1.0"' not in module
+    smoke = (dest / "tests" / "test_smoke.py").read_text()
+    assert "tomllib" in smoke and '["project"]["version"]' in smoke
+    assert 'distribution("red-probe")' in smoke  # compared only where the package is installed
 
 
 def test_render_go_prod_and_docs(template_dir: Path, tmp_path: Path) -> None:
