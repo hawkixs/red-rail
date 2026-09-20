@@ -19,7 +19,7 @@ from rail.gates import GateResult, run_gates
 from rail.ledger import Contract, Deliverable, Record, RequiredCheck, ReviewPolicy, open_ledger
 from rail.ledger.file import FileLedger
 from rail.model import LedgerBackend, Stack, Tier
-from rail.policy import stages_for
+from rail.policy import parameter, stages_for
 
 TEMPLATE_SOURCE = "git@github.com:hawkixs/red-rail.git"
 ANSWERS_FILE = ".copier-answers.yml"
@@ -235,8 +235,9 @@ def new_project(
     if failing:
         detail = "; ".join(f"{r.gate_id}: {r.details}" for r in failing)
         raise ScaffoldError(f"the fresh scaffold fails its own gates — {detail}")
+    mirror = parameter(project.dest, "hygiene.mirror_host")  # GitHub only unless declared
     if publish:
-        remotes.publish(project.dest, project.slug, project.description, run=run)
+        remotes.publish(project.dest, project.slug, project.description, mirror=mirror, run=run)
     if project.ledger is LedgerBackend.BRAIN:
         # brain enriches the deliverable from its repository registry: the repository exists
         # first; the mirror is a second commit so the bootstrap commit stays what was published
@@ -244,7 +245,7 @@ def new_project(
         _git(project.dest, "add", "-A", "docs/receipts")
         _git(project.dest, "commit", "-q", "-m", "chore(rail): mirror the delivery contract")
         if publish:
-            remotes.push_both(project.dest, run=run)
+            remotes.push(project.dest, mirror=bool(mirror), run=run)
     return results
 
 

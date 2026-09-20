@@ -1,4 +1,5 @@
-"""Publishing uses the host's gh and glab; here they are fakes that create local bare repos."""
+"""Publishing uses the host's gh — and glab only for a declared mirror; here they are fakes that
+create local bare repos."""
 
 import subprocess
 from pathlib import Path
@@ -48,11 +49,40 @@ def _local(tmp_path: Path) -> Path:
     return repo
 
 
-def test_publish_creates_both_repositories_and_pushes_main(
+def test_publish_creates_the_github_repository_only_by_default(
+    tmp_path: Path, hosts: FakeHosts
+) -> None:
+    """ReD is GitHub only (decision 30acbbde): no glab call, no `gitlab` remote."""
+    repo = _local(tmp_path)
+    publish(repo, "red-probe", "A probe.", run=hosts)
+    assert [c[:3] for c in hosts.calls] == [["gh", "repo", "view"], ["gh", "repo", "create"]]
+    assert not (tmp_path / "hosts" / "glab").exists()
+    names = subprocess.run(
+        ["git", "-C", str(repo), "remote"], check=True, capture_output=True, text=True
+    ).stdout.split()
+    assert names == ["origin"]
+    head = subprocess.run(
+        ["git", "-C", str(tmp_path / "hosts" / "gh" / "red-probe.git"), "rev-parse", "main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert (
+        head
+        == subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+
+
+def test_publish_with_a_declared_mirror_creates_both_repositories_and_pushes_main(
     tmp_path: Path, hosts: FakeHosts
 ) -> None:
     repo = _local(tmp_path)
-    publish(repo, "red-probe", "A probe.", run=hosts)
+    publish(repo, "red-probe", "A probe.", mirror="gitlab.hawkixs.local", run=hosts)
     assert [c[:3] for c in hosts.calls] == [
         ["gh", "repo", "view"],
         ["glab", "repo", "view"],
@@ -103,7 +133,7 @@ def test_second_push_failure_never_rewrites_the_first(
     repo = _local(tmp_path)
     monkeypatch.setattr(remotes, "MIRROR_URL", str(tmp_path / "nowhere" / "{slug}.git"))
     with pytest.raises(RemoteError, match="do not rewrite"):
-        publish(repo, "red-probe", "A probe.", run=hosts)
+        publish(repo, "red-probe", "A probe.", mirror="gitlab.hawkixs.local", run=hosts)
     assert (tmp_path / "hosts" / "gh" / "red-probe.git").is_dir()
 
 
@@ -135,4 +165,17 @@ def test_ensure_absent_distinguishes_absent_from_broken(tmp_path: Path) -> None:
             args, 1, "", "GraphQL: Could not resolve to a Repository"
         )
 
-    remotes.ensure_absent("red-probe", run=absent)  # no error: both hosts answered "not found"
+    remotes.ensure_absent("red-probe", run=absent)  # no error: GitHub answered "not found"
+
+
+def test_ensure_absent_asks_the_mirror_only_when_declared() -> None:
+    asked: list[str] = []
+
+    def absent(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        asked.append(args[0])
+        return subprocess.CompletedProcess(args, 1, "", "not found")
+
+    remotes.ensure_absent("red-probe", run=absent)
+    assert asked == ["gh"]
+    remotes.ensure_absent("red-probe", mirror="gitlab.hawkixs.local", run=absent)
+    assert asked == ["gh", "gh", "glab"]

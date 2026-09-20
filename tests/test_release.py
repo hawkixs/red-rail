@@ -12,7 +12,7 @@ from rail.cli import main
 from rail.ledger import RECEIPTS_DIR, AttestationKind
 from rail.ledger.file import FileLedger
 from rail.release import ReleaseError, build_and_push, preflight, release
-from tests.helpers import commit_all, conforming_tree, git, with_evidence
+from tests.helpers import commit_all, conforming_tree, git, with_evidence, write_manifest
 
 DIGEST = "sha256:" + "d" * 64
 
@@ -111,12 +111,12 @@ def test_build_and_push_logs_in_on_stdin_and_reads_the_digest(tmp_path: Path) ->
     assert ["docker", "push", plan.image_tag] in host.calls
 
 
-def test_release_end_to_end_attests_and_tags_both_remotes(tmp_path: Path) -> None:
+def test_release_end_to_end_attests_and_tags_github(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     host = FakeHost()
     outcome = release(repo, "0.1.0", run=host, issuer="operator")
     assert outcome.digest == DIGEST
-    assert host.pushed_tags == ["refs/tags/v0.1.0", "refs/tags/v0.1.0"]
+    assert host.pushed_tags == ["refs/tags/v0.1.0"]  # GitHub only: no mirror declared
     assert git(repo, "tag", "-l", "v0.1.0") == "v0.1.0"
     assert "feat: the probe" in git(repo, "tag", "-l", "--format=%(contents)", "v0.1.0")
     released = FileLedger(repo / RECEIPTS_DIR).list(
@@ -129,8 +129,47 @@ def test_release_end_to_end_attests_and_tags_both_remotes(tmp_path: Path) -> Non
     assert released[0].idempotency_key == "released:0.1.0"
 
 
+def _declare_mirror(repo: Path, host: str = "gitlab.hawkixs.local") -> None:
+    """The manifest keeps a mirror (decision 30acbbde made GitHub the only default)."""
+    write_manifest(
+        repo,
+        project="red-probe",
+        tier="prod",
+        deploy=True,
+        gates={"hygiene.mirror_host": (host, "this project keeps its mirror")},
+    )
+    commit_all(repo, "chore(rail): keep the mirror")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+
+def test_the_tag_reaches_the_mirror_only_when_the_manifest_declares_one(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    host = FakeHost()
+    plan = preflight(repo, "0.1.0", ledger=FileLedger(repo / RECEIPTS_DIR), run=host)
+    assert plan.mirror_remote is None
+    pushes = [step for step in plan.steps() if step.startswith("git push")]
+    assert pushes == ["git push origin refs/tags/v0.1.0"]
+    release(repo, "0.1.0", run=host, issuer="operator")
+    assert host.pushed_tags == ["refs/tags/v0.1.0"]
+    _declare_mirror(repo)
+    host = FakeHost()
+    plan = preflight(repo, "0.1.1", ledger=FileLedger(repo / RECEIPTS_DIR), run=host)
+    assert plan.mirror_remote == "gitlab"
+    assert plan.steps().count("git push gitlab refs/tags/v0.1.1") == 1
+    release(repo, "0.1.1", run=host, issuer="operator")
+    assert host.pushed_tags == ["refs/tags/v0.1.1", "refs/tags/v0.1.1"]
+
+
+def test_a_declared_mirror_without_its_remote_stops_the_preflight(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _declare_mirror(repo, host="mirror.example.invalid")
+    with pytest.raises(ReleaseError, match="mirror.example.invalid"):
+        preflight(repo, "0.1.0", ledger=FileLedger(repo / RECEIPTS_DIR), run=FakeHost())
+
+
 def test_a_mirror_failure_after_github_says_what_not_to_do(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
+    _declare_mirror(repo)
     host = FakeHost()
     host.fail.add("gitlab")
     with pytest.raises(ReleaseError, match="do not delete the GitHub tag"):
@@ -166,7 +205,7 @@ def test_a_release_whose_tag_already_names_head_resumes(tmp_path: Path) -> None:
     outcome = release(repo, "0.1.0", run=host, issuer="operator")
     assert outcome.digest == DIGEST
     assert not any(c[:2] == ["git", "tag"] for c in host.calls)  # not created twice
-    assert host.pushed_tags == ["refs/tags/v0.1.0", "refs/tags/v0.1.0"]
+    assert host.pushed_tags == ["refs/tags/v0.1.0"]  # GitHub only: no mirror declared
     commit_all(repo, "feat: later")
     git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     with pytest.raises(ReleaseError, match="already exists locally and names"):

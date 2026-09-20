@@ -51,7 +51,10 @@ REQUIRED_SPEC_SECTIONS: dict[str, tuple[str, ...]] = {
 
 GATE_DEFAULTS: dict[str, Any] = {
     "hygiene.canonical_host": "github.com",
-    "hygiene.mirror_host": "gitlab.hawkixs.local",
+    # ReD is GitHub only (decision 30acbbde, 2026-09-20): no mirror by default. A project that
+    # keeps one declares its host here (`gates:` in rail.yaml); `hygiene.remotes` then requires
+    # it, `rail new` creates it and `rail release` pushes the tag to it.
+    "hygiene.mirror_host": None,
     # the App identity the verdict gate trusts (issuer of the review_verdict attestation)
     "review.reviewer_identity": "red-rail-reviewer",
     "build.commit_window": 20,

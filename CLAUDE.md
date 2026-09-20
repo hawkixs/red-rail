@@ -13,9 +13,10 @@ red-rail is delivered by its own rail (dogfooding): `rail.yaml` declares tier `d
 - **Brain MCP project key**: `red-rail` (group `red`)
 - **Parent project**: ReD v1 (`~/hawkixs_infra/git_repo/ReD_v1/CLAUDE.md` — roster, cross-project rules)
 
-GitHub is the only remote that matters: ReD is GitHub only (decision `30acbbde`, 2026-09-20); the
-GitLab mirror this checkout still carries is history, not a target, and the policy that required a
-mirror is being retired.
+GitHub is the only remote: ReD is GitHub only (decision `30acbbde`, 2026-09-20). The GitLab
+mirror this checkout still carries is history, not a target: no policy requires it, nothing pushes
+to it. A project that keeps a mirror declares its host (`gates: hygiene.mirror_host`) and the rail
+then requires, creates and pushes it.
 
 ## Language
 
@@ -81,7 +82,8 @@ comments, test names. The conversation with the operator stays in French.
   contract for machines.
 - `src/rail/audit.py` (repository × stage matrix, golden-tested), `src/rail/metrics.py` (four
   DORA metrics + conformance from the ledger), `src/rail/scaffold.py` (copier: `copier.yml` at
-  the root, files under `template/project/`), `src/rail/remotes.py` (`gh` + `glab`, no token).
+  the root, files under `template/project/`), `src/rail/remotes.py` (`gh`; `glab` only for a
+  declared mirror; no token).
 - `workflows/pre-review.js` — a tiered Workflow (wf-scan → Explore on sonnet, read-only → wf-judge)
   launched by the `rail-review` skill from the producing session: a pre-review, never the gate.
 
@@ -144,6 +146,11 @@ red-rail/
   fenced by a `flock` on the target — not by `brain_delivery_claim` (no deployment work kind).
 - The release artefact is an OCI image on GHCR, named by its manifest digest; GitLab does not
   follow the move to red-base and its registry stays on a home machine.
+- GitHub only (decision `30acbbde`, 2026-09-20): `hygiene.mirror_host` defaults to none, so
+  `hygiene.remotes` wants GitHub alone, `rail new` creates GitHub alone and `rail release` pushes
+  the tag to `origin` alone — a declared mirror host turns the three back on for that project.
+  `hawkixs/red-rail` is public (Apache-2.0) since the same day: every project's CI installs
+  `rail` without a token.
 - Design spec: `docs/specs/2026-09-14-red-rail-design.md` (ten stages, three tiers,
   `rail.yaml`, end-to-end flow, failure modes, phasing).
 - Attestations come only from the server host; the runner VM never reaches brain or the VPS.

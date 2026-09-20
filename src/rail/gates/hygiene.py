@@ -176,15 +176,14 @@ def remotes(repo: Path) -> GateResult:
     if not gitrepo.is_git_repo(repo):
         return GateResult(Stage.HYGIENE, "remotes", False, "not a git repository")
     urls = gitrepo.remotes(repo)
-    missing = [
-        host for host in (canonical, mirror) if not any(host in url for url in urls.values())
-    ]
+    wanted = [canonical] + ([mirror] if mirror else [])  # a mirror only where declared
+    missing = [host for host in wanted if not any(host in url for url in urls.values())]
     if missing:
         names = ", ".join(sorted(urls)) or "none"
         return GateResult(
             Stage.HYGIENE, "remotes", False, f"no remote on {', '.join(missing)} (remotes: {names})"
         )
-    return GateResult(Stage.HYGIENE, "remotes", True, f"{canonical} + {mirror}")
+    return GateResult(Stage.HYGIENE, "remotes", True, " + ".join(wanted))
 
 
 def roster_entry(repo: Path) -> GateResult:

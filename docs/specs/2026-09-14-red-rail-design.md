@@ -215,6 +215,15 @@ red-rail/
 > and `drill` vocabulary (`rail.ledger`); `rail drill` is the §6 step 8 drill; `rail check
 > observe` adds `observe.visible` on red-monitor's `/api/latest`; `rail accept` is step 9
 > as the requester; the prod/python template renders the service, its image and its stack.
+>
+> Implementation note (phase 3 proof, 2026-09-20): ReD is GitHub only (decision `30acbbde`) —
+> `hygiene.mirror_host` defaults to none, `rail new` creates the GitHub repository alone and
+> `rail release` pushes the tag to `origin` alone; a project that keeps a mirror declares its
+> host in `rail.yaml` and the rail requires, creates and pushes it. `hawkixs/red-rail` is public
+> (Apache-2.0) since the same day, so `rail-ci.yml` installs `rail` in any project's CI without
+> a token. What red-probe's first `make ci` taught went back into the template: the dev tools
+> are a uv dependency group, the module docstring is wrapped, the version is read from the
+> installed distribution.
 
 Four mechanisms carry everything:
 

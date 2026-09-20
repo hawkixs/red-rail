@@ -1,5 +1,7 @@
-"""Publishing a new repository on both remotes with the host's `gh` and `glab` — the tools the
-operator already uses and authenticates; red-rail never handles a token (spec §7)."""
+"""Publishing a new repository on GitHub with the host's `gh` — and on a declared mirror with
+`glab` — the tools the operator already uses and authenticates; red-rail never handles a token
+(spec §7). ReD is GitHub only (decision 30acbbde): the mirror exists where `hygiene.mirror_host`
+is declared, nowhere else."""
 
 from __future__ import annotations
 
@@ -13,9 +15,11 @@ from rail.policy import GATE_DEFAULTS
 
 CANONICAL_OWNER = "hawkixs"
 MIRROR_GROUP = "hawkixs_project/red"
-# the hosts are the policy's (hygiene.canonical_host / hygiene.mirror_host): one place to change
+MIRROR_REMOTE = "gitlab"
+# the canonical host is the policy's (hygiene.canonical_host); the mirror host is the project's
+# declaration (`{host}`), since the default is none
 CANONICAL_URL = f"git@{GATE_DEFAULTS['hygiene.canonical_host']}:{CANONICAL_OWNER}/{{slug}}.git"
-MIRROR_URL = f"ssh://git@{GATE_DEFAULTS['hygiene.mirror_host']}:2222/{MIRROR_GROUP}/{{slug}}.git"
+MIRROR_URL = f"ssh://git@{{host}}:2222/{MIRROR_GROUP}/{{slug}}.git"
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -47,13 +51,13 @@ def _ok(args: list[str], *, run: Runner, what: str, cwd: Path | None = None) -> 
     return done.stdout
 
 
-def ensure_absent(slug: str, *, run: Runner) -> None:
-    """Both hosts must answer 'not found'. Any other failure (auth, network, rate limit) is
+def ensure_absent(slug: str, *, mirror: str | None = None, run: Runner) -> None:
+    """Every host must answer 'not found'. Any other failure (auth, network, rate limit) is
     not a free slug: it is a question the tool could not answer, and it stops here."""
-    for args, where in (
-        (["gh", "repo", "view", f"{CANONICAL_OWNER}/{slug}"], "GitHub"),
-        (["glab", "repo", "view", f"{MIRROR_GROUP}/{slug}"], "GitLab"),
-    ):
+    questions = [(["gh", "repo", "view", f"{CANONICAL_OWNER}/{slug}"], "GitHub")]
+    if mirror:
+        questions.append((["glab", "repo", "view", f"{MIRROR_GROUP}/{slug}"], "GitLab"))
+    for args, where in questions:
         done = _run(args, run=run)
         if done.returncode == 0:
             raise RemoteError(f"{where} already has {slug}; pick another slug")
@@ -99,35 +103,41 @@ def create_gitlab(slug: str, description: str, *, run: Runner) -> None:
     )
 
 
-def configure(repo: Path, slug: str, *, run: Runner) -> None:
+def configure(repo: Path, slug: str, *, mirror: str | None = None, run: Runner) -> None:
     _ok(
         ["git", "remote", "add", "origin", CANONICAL_URL.format(slug=slug)],
         run=run,
         cwd=repo,
         what="git remote add origin",
     )
-    _ok(
-        ["git", "remote", "add", "gitlab", MIRROR_URL.format(slug=slug)],
-        run=run,
-        cwd=repo,
-        what="git remote add gitlab",
-    )
+    if mirror:
+        _ok(
+            ["git", "remote", "add", MIRROR_REMOTE, MIRROR_URL.format(host=mirror, slug=slug)],
+            run=run,
+            cwd=repo,
+            what=f"git remote add {MIRROR_REMOTE}",
+        )
     _ok(["git", "config", "remote.pushDefault", "origin"], run=run, cwd=repo, what="git config")
 
 
-def push_both(repo: Path, *, run: Runner) -> None:
+def push(repo: Path, *, mirror: bool = False, run: Runner) -> None:
+    """`main` to GitHub, then to the mirror when there is one; a mirror failure after GitHub
+    succeeded is reported as what it is, never repaired by rewriting GitHub."""
     _ok(["git", "push", "-u", "origin", "main"], run=run, cwd=repo, what="git push origin main")
-    done = _run(["git", "push", "gitlab", "main"], run=run, cwd=repo)
+    if not mirror:
+        return
+    done = _run(["git", "push", MIRROR_REMOTE, "main"], run=run, cwd=repo)
     if done.returncode != 0:
         raise RemoteError(
-            "git push gitlab main failed after GitHub succeeded — do not rewrite GitHub; "
-            f"fix the mirror and run `git push gitlab main`: {(done.stderr or done.stdout).strip()}"
+            f"git push {MIRROR_REMOTE} main failed after GitHub succeeded — do not rewrite GitHub; "
+            f"fix the mirror and run `git push {MIRROR_REMOTE} main`: "
+            f"{(done.stderr or done.stdout).strip()}"
         )
 
 
 def parity(repo: Path, *, run: Runner) -> bool:
     heads = []
-    for remote in ("origin", "gitlab"):
+    for remote in ("origin", MIRROR_REMOTE):
         out = _ok(
             ["git", "ls-remote", remote, "refs/heads/main"],
             run=run,
@@ -147,14 +157,23 @@ def github_repository_id(slug: str, *, run: Runner = subprocess.run) -> int:
         raise RemoteError(f"gh api repos/{slug}: not an id: {out!r}") from exc
 
 
-def publish(repo: Path, slug: str, description: str, *, run: Runner = subprocess.run) -> None:
-    """Kickstart runbook `a050e6ec`, steps 2 and 8–12, as one call."""
-    ensure_absent(slug, run=run)
+def publish(
+    repo: Path,
+    slug: str,
+    description: str,
+    *,
+    mirror: str | None = None,
+    run: Runner = subprocess.run,
+) -> None:
+    """Kickstart runbook `a050e6ec`, steps 2 and 8–12, as one call; `mirror` is the declared
+    mirror host (`hygiene.mirror_host`), None for GitHub only."""
+    ensure_absent(slug, mirror=mirror, run=run)
     create_github(slug, description, run=run)
-    create_gitlab(slug, description, run=run)
-    configure(repo, slug, run=run)
-    push_both(repo, run=run)
-    if not parity(repo, run=run):
+    if mirror:
+        create_gitlab(slug, description, run=run)
+    configure(repo, slug, mirror=mirror, run=run)
+    push(repo, mirror=bool(mirror), run=run)
+    if mirror and not parity(repo, run=run):
         raise RemoteError(
             "main differs between GitHub and GitLab after the push; compare `git ls-remote`"
         )
