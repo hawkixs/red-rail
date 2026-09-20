@@ -354,14 +354,25 @@ def drill(
     except Locked:
         raise
     except DeployError as exc:
-        # the drill's rollback failed before any switch: the live artefact stays, the drill's
-        # incident stays in the ledger with the failure named (pre-review of PR #6)
+        # the drill's rollback failed: the service may be down on either artefact — that is
+        # a real incident now, named in the ledger (independent reviewer, PR #6)
+        attester.attest(
+            AttestationKind.INCIDENT_DETECTED,
+            {
+                "drill": False,
+                "automatic": True,
+                "digest": live.digest,
+                "version": live.version,
+                "reason": f"drill: rollback to {previous.version} failed: {exc}"[:1000],
+            },
+        )
         return Outcome(
             None,
             tuple(attester.records),
             tuple(attester.unattested),
-            failed=f"drill aborted: rollback to {previous.version} failed: {exc} — the live "
-            f"artefact should still be {live.version}; run `rail check observe`",
+            ledger_failures=tuple(attester.failures),
+            failed=f"drill aborted: rollback to {previous.version} failed: {exc} — run "
+            "`rail check observe`, then `rail deploy` or `rail deploy --rollback`",
         )
     attester.attest(
         AttestationKind.ROLLED_BACK,

@@ -291,7 +291,15 @@ def test_a_failed_drill_rollback_aborts_the_drill(tmp_path: Path, target: FakeTa
     target.broken.add(D1)
     out = runner.invoke(main, ["drill", "--repo", str(repo), "--yes"])
     assert out.exit_code == 1 and "drill aborted" in out.output
-    assert [k for k, _ in _kinds(repo)] == ["deployed", "deployed", "incident_detected"]
+    kinds = _kinds(repo)
+    assert [k for k, _ in kinds] == [
+        "deployed",
+        "deployed",
+        "incident_detected",
+        "incident_detected",
+    ]
+    assert kinds[-2][1]["drill"] is True
+    assert kinds[-1][1]["drill"] is False and "rollback to 0.1.0 failed" in kinds[-1][1]["reason"]
 
 
 def test_a_ledger_refusal_mid_sequence_exits_2(

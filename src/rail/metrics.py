@@ -123,7 +123,9 @@ def compute_metrics(
             continue
         before = [d for d in deployed if d.recorded_at < rollback.recorded_at]
         if before and rollback.recorded_at <= before[-1].recorded_at + FAILURE_WINDOW:
-            failed.add(_digest(before[-1]) or before[-1].digest)
+            # the artefact digest names the failed change; a deployment record without one
+            # is keyed by the record's own digest (Record.digest, always present)
+            failed.add(_digest(before[-1]) or f"record:{before[-1].digest}")
     attempts = len(deployed) + len(failed - went_live)
     recoveries: list[float] = []
     for incident in incidents:
@@ -131,8 +133,16 @@ def compute_metrics(
         if after:
             recoveries.append(_hours(after[0].recorded_at - incident.recorded_at))
     drills: list[float] = []
-    for incident in drill_incidents:
-        after = [r for r in drill_restores if r.recorded_at > incident.recorded_at]
+    for index, incident in enumerate(drill_incidents):
+        # a drill's restore is the first one after its incident and before the next drill:
+        # an aborted drill never borrows the restore of a later one
+        following = drill_incidents[index + 1 :]
+        bound = following[0].recorded_at if following else None
+        after = [
+            r
+            for r in drill_restores
+            if r.recorded_at > incident.recorded_at and (bound is None or r.recorded_at < bound)
+        ]
         if not after:
             continue
         seconds = after[0].data.get("recovery_seconds")

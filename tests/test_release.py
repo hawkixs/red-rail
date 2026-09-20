@@ -84,9 +84,9 @@ def test_preflight_refusals(tmp_path: Path) -> None:
     with pytest.raises(ReleaseError, match="outside docs/receipts"):
         preflight(repo, "0.1.0", ledger=FileLedger(repo / RECEIPTS_DIR), run=host)
     git(repo, "checkout", "-q", "--", "README.md")
-    (repo / "docs" / "receipts" / "stray.json").write_text("{}")  # a mirror is not code
-    git(repo, "tag", "v0.1.0")
-    with pytest.raises(ReleaseError, match="already exists"):
+    (repo / "docs" / "receipts" / "stray.txt").write_text("notes")  # a mirror is not code
+    git(repo, "tag", "v0.1.0", "HEAD~1")  # a tag that names another commit is taken
+    with pytest.raises(ReleaseError, match="already exists locally and names"):
         preflight(repo, "0.1.0", ledger=FileLedger(repo / RECEIPTS_DIR), run=host)
     git(repo, "checkout", "-q", "-b", "feat/x")
     with pytest.raises(ReleaseError, match="from main"):
@@ -152,3 +152,23 @@ def test_cli_plan_and_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     )
     assert out.exit_code == 0, out.output
     assert json.loads(out.output)["payload"]["data"]["digest"] == DIGEST
+
+
+def test_a_release_whose_tag_already_names_head_resumes(tmp_path: Path) -> None:
+    """A mirror push or an attestation failed last time: the tag exists and names HEAD, the
+    build and the push are idempotent, the release completes instead of refusing."""
+    repo = _repo(tmp_path)
+    host = FakeHost()
+    head = git(repo, "rev-parse", "HEAD")
+    git(repo, "tag", "-a", "v0.1.0", "-m", "first attempt")
+    plan = preflight(repo, "0.1.0", ledger=FileLedger(repo / RECEIPTS_DIR), run=host)
+    assert plan.tag_local and not plan.tag_on_origin
+    outcome = release(repo, "0.1.0", run=host, issuer="operator")
+    assert outcome.digest == DIGEST
+    assert not any(c[:2] == ["git", "tag"] for c in host.calls)  # not created twice
+    assert host.pushed_tags == ["refs/tags/v0.1.0", "refs/tags/v0.1.0"]
+    commit_all(repo, "feat: later")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    with pytest.raises(ReleaseError, match="already exists locally and names"):
+        preflight(repo, "0.1.0", ledger=FileLedger(repo / RECEIPTS_DIR), run=host)
+    assert head != git(repo, "rev-parse", "HEAD")

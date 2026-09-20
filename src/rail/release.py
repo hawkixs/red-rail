@@ -37,6 +37,8 @@ class ReleasePlan:
     platform: str
     previous_tag: str | None
     changelog: tuple[str, ...]
+    tag_local: bool = False  # the tag already names HEAD here: a resumed release
+    tag_on_origin: bool = False  # … and on origin
 
     @property
     def tag(self) -> str:
@@ -137,20 +139,24 @@ def preflight(repo: Path, version: str, *, ledger: Ledger, run: Runner) -> Relea
             f"HEAD {head[:12]} is not origin/main {upstream[:12]}: push or pull first"
         )
     tag = f"v{version}"
-    if (
-        _run(
-            ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"], run=run, cwd=repo
-        ).returncode
-        == 0
-    ):
-        raise ReleaseError(f"tag {tag} already exists locally")
-    if _ok(
-        ["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}"],
+    # a tag that already names HEAD is a release to resume (a mirror push or the attestation
+    # failed last time); a tag that names another commit is taken (independent reviewer, PR #6)
+    local = _run(["git", "rev-parse", "-q", "--verify", f"{tag}^{{commit}}"], run=run, cwd=repo)
+    tag_local = local.returncode == 0
+    if tag_local and local.stdout.strip() != head:
+        raise ReleaseError(
+            f"tag {tag} already exists locally and names {local.stdout.strip()[:12]}"
+        )
+    remote = _ok(
+        ["git", "ls-remote", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
         run=run,
         cwd=repo,
         what="git ls-remote",
-    ).strip():
-        raise ReleaseError(f"tag {tag} already exists on origin")
+    )
+    remote_shas = {line.split()[0] for line in remote.splitlines() if line.strip()}
+    tag_on_origin = bool(remote_shas)
+    if tag_on_origin and head not in remote_shas:
+        raise ReleaseError(f"tag {tag} already exists on origin and names another commit")
     integrated = [
         r
         for r in ledger.list(cfg.project, attestation=AttestationKind.INTEGRATED)
@@ -161,6 +167,9 @@ def preflight(repo: Path, version: str, *, ledger: Ledger, run: Runner) -> Relea
             "no integration receipt on HEAD's history: merge through the rail before releasing"
         )
     previous = gitrepo.latest_tag(repo)
+    if previous == tag:  # resuming: the changelog spans from the tag before this one
+        earlier = _run(["git", "describe", "--tags", "--abbrev=0", f"{tag}^"], run=run, cwd=repo)
+        previous = earlier.stdout.strip() if earlier.returncode == 0 else None
     span = f"{previous}..HEAD" if previous else "HEAD"
     subjects = _ok(
         ["git", "log", "--no-merges", "--format=%s", span], run=run, cwd=repo, what="git log"
@@ -173,6 +182,8 @@ def preflight(repo: Path, version: str, *, ledger: Ledger, run: Runner) -> Relea
         platform=str(parameter(repo, "deploy.platform")),
         previous_tag=previous,
         changelog=tuple(s for s in subjects.splitlines() if s),
+        tag_local=tag_local,
+        tag_on_origin=tag_on_origin,
     )
 
 
@@ -234,23 +245,36 @@ def build_and_push(plan: ReleasePlan, repo: Path, *, run: Runner) -> str:
     )
 
 
+def _identity_flags(repo: Path, *, run: Runner) -> list[str]:
+    """`-c user.name/user.email` when either is unset (CI, a bare host): an annotated tag
+    needs a tagger."""
+    for key in ("user.name", "user.email"):
+        if _run(["git", "config", "--get", key], run=run, cwd=repo).returncode != 0:
+            return ["-c", "user.name=rail", "-c", "user.email=rail@localhost"]
+    return []
+
+
 def tag_and_push(plan: ReleasePlan, repo: Path, *, run: Runner) -> None:
+    """Idempotent: what the previous run already did is skipped, the mirror is pushed always
+    (pushing an identical tag is a no-op for git)."""
     message = (
         f"{plan.project} {plan.version}\n\n" + "\n".join(f"- {s}" for s in plan.changelog) + "\n"
     )
-    _ok(
-        ["git", "tag", "-a", plan.tag, "-F", "-", plan.sha],
-        run=run,
-        cwd=repo,
-        what="git tag",
-        stdin=message,
-    )
-    _ok(
-        ["git", "push", "origin", f"refs/tags/{plan.tag}"],
-        run=run,
-        cwd=repo,
-        what="git push origin",
-    )
+    if not plan.tag_local:
+        _ok(
+            ["git", *_identity_flags(repo, run=run), "tag", "-a", plan.tag, "-F", "-", plan.sha],
+            run=run,
+            cwd=repo,
+            what="git tag",
+            stdin=message,
+        )
+    if not plan.tag_on_origin:
+        _ok(
+            ["git", "push", "origin", f"refs/tags/{plan.tag}"],
+            run=run,
+            cwd=repo,
+            what="git push origin",
+        )
     done = _run(["git", "push", "gitlab", f"refs/tags/{plan.tag}"], run=run, cwd=repo)
     if done.returncode != 0:
         raise ReleaseError(

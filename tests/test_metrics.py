@@ -333,3 +333,29 @@ def test_drill_recovery_falls_back_to_the_timestamps(tmp_path: Path) -> None:
     )
     m = compute_metrics(FileLedger(repo / RECEIPTS_DIR), "red-alpha", repo, now=T0 + 10 * h)
     assert m.drill_recovery_time_minutes == 4.0
+
+
+def test_an_aborted_drill_never_borrows_the_next_drills_restore(tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "prod")
+    write_roster(tmp_path, ["red-alpha"])
+    h = timedelta(hours=1)
+    for offset, kind, key in (
+        (1, AttestationKind.INCIDENT_DETECTED, "inc-aborted"),
+        (3, AttestationKind.INCIDENT_DETECTED, "inc-second"),
+    ):
+        _ledger_at(repo, T0 + offset * h).attest(
+            "red-alpha",
+            kind,
+            {"drill": True, "target": "vps-traefik"},
+            issuer="op",
+            idempotency_key=key,
+        )
+    _ledger_at(repo, T0 + 3 * h + timedelta(minutes=2)).attest(
+        "red-alpha",
+        AttestationKind.RESTORED,
+        {"drill": True, "target": "vps-traefik", "recovery_seconds": 120},
+        issuer="op",
+        idempotency_key="rs-second",
+    )
+    m = compute_metrics(FileLedger(repo / RECEIPTS_DIR), "red-alpha", repo, now=T0 + 10 * h)
+    assert m.drill_recovery_time_minutes == 2.0  # one pair, not two hours from the aborted one
