@@ -1,0 +1,9 @@
+red-rail
+Copyright 2026 Hawixs
+
+This product includes software developed by Hawixs, licensed under the
+Apache License, Version 2.0. See the LICENSE file.
+
+src/rail/contracts/ vendors, as data, the delivery contracts published by brain-v42
+(https://github.com/hawkixs/brain-v42, Apache License 2.0, same author) at the tag
+recorded in src/rail/contracts/pins.py.
