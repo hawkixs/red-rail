@@ -4,6 +4,9 @@
 
 RAIL_FLAGS ?=
 DATE ?= $(shell date +%F)
+# The drift snapshots name every ReD project: they live at the ReD root, outside this
+# public repository (red-watcher, 2026-09-20).
+AUDIT_DIR ?= ../../docs/audits
 
 ## Install the project with every extra (dev, brain, reviewer)
 sync:
@@ -25,11 +28,11 @@ check:
 ## What CI runs, in order
 ci: lint test check
 
-## Audit every ReD project and keep the dated snapshot (the drift table, versioned)
+## Audit every ReD project; the dated snapshot (the drift table) is written to AUDIT_DIR, outside this repository
 audit:
-	mkdir -p docs/audits
-	uv run rail audit .. --json > docs/audits/$(DATE)-projects.json
-	uv run rail audit .. > docs/audits/$(DATE)-projects.md
+	mkdir -p $(AUDIT_DIR)
+	uv run rail audit .. --json > $(AUDIT_DIR)/$(DATE)-projects.json
+	uv run rail audit .. > $(AUDIT_DIR)/$(DATE)-projects.md
 	uv run rail audit ..
 
 ## Symlink the facade skills into ~/.claude/skills (operator's workstation)

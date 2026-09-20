@@ -10,3 +10,6 @@ dist/
 
 # Agent tool worktrees (local, per session)
 .claude/worktrees/
+
+# Drift snapshots are written to the ReD root (make audit); never here, the repository is public
+docs/audits/

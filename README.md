@@ -56,10 +56,10 @@ producer's provider; the verdict is the `red-rail/review` check plus a PR review
 
 ```bash
 make ci                      # lint, test, check — exactly what CI runs
-make audit                   # dated drift snapshot under docs/audits/
+make audit                   # dated drift snapshot, written to the ReD root (outside this repository)
 make skills-install          # facade skills into ~/.claude/skills
 make contracts-check         # vendored brain-v42 contracts == the pinned tag (needs the sibling checkout)
 ```
 
-Private repository. Canonical remote: GitHub `hawkixs/red-rail`; mirror: GitLab
-`hawkixs_project/red/red-rail`.
+Public repository under the Apache License 2.0 (`LICENSE`, `NOTICE`). Canonical remote:
+GitHub `hawkixs/red-rail`.

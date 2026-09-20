@@ -9,13 +9,13 @@ automation. brain-v42 owns the **ledger** (tickets, contracts, evidence) — see
 red-rail is delivered by its own rail (dogfooding): `rail.yaml` declares tier `dev`.
 
 - **Repo**: `~/hawkixs_infra/git_repo/ReD_v1/projects/red-rail/`
-- **GitHub (`origin`)**: `git@github.com:hawkixs/red-rail.git` (private, canonical)
-- **GitLab (`gitlab`)**: `ssh://git@gitlab.hawkixs.local:2222/hawkixs_project/red/red-rail.git` (private mirror)
+- **GitHub (`origin`)**: `git@github.com:hawkixs/red-rail.git` (public, Apache-2.0, canonical)
 - **Brain MCP project key**: `red-rail` (group `red`)
 - **Parent project**: ReD v1 (`~/hawkixs_infra/git_repo/ReD_v1/CLAUDE.md` — roster, cross-project rules)
 
-Published branches are pushed to both remotes and compared SHA by SHA. GitHub and GitLab share
-no atomic transaction: a push to one remote is a deliberate divergence until the second is synced.
+GitHub is the only remote that matters: ReD is GitHub only (decision `30acbbde`, 2026-09-20); the
+GitLab mirror this checkout still carries is history, not a target, and the policy that required a
+mirror is being retired.
 
 ## Language
 
@@ -109,7 +109,7 @@ uv run rail release --version 0.1.0   # stage 7 (prod, from main): image on GHCR
 uv run rail deploy [--plan|--rollback] # stage 8 from the host: digest-pinned compose on the VPS, /version verified
 uv run rail drill                      # stage 9: rollback drill, recovery measured, roll-forward
 uv run rail accept --rationale "…"     # stage 10 as the requester (brain_delivery_accept)
-make audit                     # dated drift snapshot of the sibling projects (docs/audits/)
+make audit                     # dated drift snapshot of the sibling projects, written to ReD_v1/docs/audits/ (outside this public repository)
 make contracts-check           # vendored brain-v42 contracts equal the pinned tag
 make skills-install            # symlink the facade skills into ~/.claude/skills
 ```
@@ -127,7 +127,6 @@ red-rail/
 ├── docs/plans/            # implementation plans (dated)
 ├── docs/adr/              # architecture decision records (numbered)
 ├── docs/receipts/         # the file ledger: written by `rail attest` / `rail contract`, never by hand
-├── docs/audits/           # dated snapshots of `rail audit ..` (the drift table, versioned)
 ├── template/project/      # copier template (CLAUDE.md, rail.yaml, Makefile, CI, docs, skeletons)
 ├── .github/workflows/     # continuous-integration.yml + rail-ci.yml (reusable, called by projects)
 ├── workflows/             # pre-review.js (tiered pre-review, passes the tiering gate)
