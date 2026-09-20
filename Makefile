@@ -28,7 +28,7 @@ check:
 ## What CI runs, in order
 ci: lint test check
 
-## Audit every ReD project and keep the dated snapshot (the drift table, versioned)
+## Audit every ReD project; the dated snapshot (the drift table) is written to AUDIT_DIR, outside this repository
 audit:
 	mkdir -p $(AUDIT_DIR)
 	uv run rail audit .. --json > $(AUDIT_DIR)/$(DATE)-projects.json

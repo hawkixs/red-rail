@@ -10,12 +10,12 @@ red-rail is delivered by its own rail (dogfooding): `rail.yaml` declares tier `d
 
 - **Repo**: `~/hawkixs_infra/git_repo/ReD_v1/projects/red-rail/`
 - **GitHub (`origin`)**: `git@github.com:hawkixs/red-rail.git` (public, Apache-2.0, canonical)
-- **GitLab (`gitlab`)**: `ssh://git@gitlab.hawkixs.local:2222/hawkixs_project/red/red-rail.git` (private mirror)
 - **Brain MCP project key**: `red-rail` (group `red`)
 - **Parent project**: ReD v1 (`~/hawkixs_infra/git_repo/ReD_v1/CLAUDE.md` — roster, cross-project rules)
 
-Published branches are pushed to both remotes and compared SHA by SHA. GitHub and GitLab share
-no atomic transaction: a push to one remote is a deliberate divergence until the second is synced.
+GitHub is the only remote that matters: ReD is GitHub only (decision `30acbbde`, 2026-09-20); the
+GitLab mirror this checkout still carries is history, not a target, and the policy that required a
+mirror is being retired.
 
 ## Language
 
