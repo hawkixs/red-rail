@@ -176,6 +176,13 @@ def visible(repo: Path) -> GateResult:
             f"no running container of stack {cfg.project} on agent {agent}",
         )
     expected = str(deploy.data.get("digest") or "")
+    if not expected:
+        return GateResult(
+            Stage.OBSERVE,
+            "visible",
+            False,
+            "the deployed attestation carries no digest to compare with the running image",
+        )
     seen = {d for d in (monitor.image_digest(c.image) for c in running) if d}
     if seen and expected not in seen:
         return GateResult(

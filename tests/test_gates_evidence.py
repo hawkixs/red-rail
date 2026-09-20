@@ -291,3 +291,17 @@ def test_drill_and_fulfilled_anchor_on_the_newest_release_deployment(tmp_path: P
     _attest(ledger, AttestationKind.DEPLOYED, "d3", sha=head, digest="sha256:c", target="t")
     assert not drill(repo).passed and not fulfilled(repo).passed
     assert not deployed(repo).passed and "differs from released" in deployed(repo).details
+
+
+def test_visible_names_a_deployed_record_without_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = conforming_tree(tmp_path, "red-beta", "prod")
+    _attest(_ledger(repo), AttestationKind.DEPLOYED, "d1", sha=gitrepo.head_sha(repo), target="t")
+    monkeypatch.setattr(
+        monitor,
+        "read_agent",
+        lambda base_url, agent, **kwargs: _agent(_probe("ghcr.io/x/red-beta@sha256:" + "b" * 64)),
+    )
+    result = visible(repo)
+    assert not result.passed and "carries no digest" in result.details
