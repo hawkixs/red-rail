@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "red-rail"
-version = "0.3.0"
+version = "0.4.0"
 description = "Delivery rail for the ReD ecosystem: one standard, executable gates, measured drift"
 requires-python = ">=3.12"
 dependencies = [
