@@ -1,0 +1,18 @@
+{
+  "digest": "sha256:713142f7446e1c2b79a06baa2059f105c505dda072b3c1b7e0a19c19f316586a",
+  "idempotency_key": "fulfilled:da0837ac69df883d75ed230bd5d9e32fa07609e6",
+  "issuer": "brain-v42",
+  "kind": "attestation",
+  "payload": {
+    "data": {
+      "delivery_digest": "1e1f6a23407438fbf82ae23cb509a33bfab8a11b9a24afd2cd89706666b8960b",
+      "rationale": "red-probe delivered end to end through the rail on 2026-09-20: probe.hawkixs.com serves 0.1.1 with the released digest (rail release, rail deploy on vps-traefik); red-monitor sees the container and rail check observe passes; rail drill measured an 18 s recovery and rail metrics shows the four DORA metrics; rail check passes 23/23 at prod on red-probe and brain_delivery_get shows the chain to fulfilled (ticket 1321ba58)",
+      "receipt_id": "05e62ade-9dd7-4731-96e8-8185ea55bba2",
+      "sha": "da0837ac69df883d75ed230bd5d9e32fa07609e6"
+    },
+    "kind": "fulfilled"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-20T12:58:37.318405Z",
+  "schema_version": 1
+}
