@@ -1,0 +1,48 @@
+{
+  "digest": "sha256:ba96b2f66bf01fe47d4edd6fc379cc8628a9a6ec33bf997305742e6050fc0623",
+  "idempotency_key": "contract:22a72dcf-1cf4-4c73-9476-8414da5484ab:1",
+  "issuer": "red",
+  "kind": "contract",
+  "payload": {
+    "contract": {
+      "acceptance_criteria": [
+        "red-probe: /version equals the released digest on probe.hawkixs.com",
+        "red-monitor sees the red-probe container; rail check observe passes",
+        "rail drill measures a recovery time; rail metrics shows the four DORA metrics",
+        "rail check passes 10/10 at prod on red-probe; brain_delivery_get shows the chain to fulfilled"
+      ],
+      "acceptance_mode": "explicit",
+      "constraints": [],
+      "deliverables": [
+        {
+          "key": "main",
+          "no_checks_reason": null,
+          "repository": "hawkixs/red-rail",
+          "repository_id": 1369727198,
+          "required_checks": [
+            {
+              "app_slug": "red-rail-reviewer",
+              "kind": "check_run",
+              "name": "red-rail/review",
+              "provider_id": null
+            }
+          ],
+          "review": {
+            "allowed_reviewers": [
+              "red-rail-reviewer[bot]"
+            ],
+            "required_approvals": 1
+          },
+          "target_branch": "main"
+        }
+      ],
+      "objective": "Deliver red-rail phase 3: rail release, rail deploy on vps-traefik with rollback and drill, rail check observe on red-monitor, rail accept, rail metrics on real evidence, the prod template as a deployable service, the reviewer's convergence \u2014 proven by red-probe end to end",
+      "priority": 0,
+      "schema_version": 1
+    },
+    "reason": "phase 3 contract"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-20T00:58:14.640913Z",
+  "schema_version": 1
+}
