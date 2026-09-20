@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans-parallel` to dispatch tasks in batches via TeamCreate.
 
-**Goal:** Deliver phase 3 of the design spec [docs/specs/2026-09-14-red-rail-design.md](../specs/2026-09-14-red-rail-design.md) §6 and §8: `rail release` (tag + OCI image named by its manifest digest + `released` attestation), `rail deploy` on the target `vps-traefik` (the border VPS behind Traefik, digest-pinned compose, `/healthz` then `/version` verified through the public route, automatic rollback, `--rollback`, `--plan`), `rail drill` (the rollback drill that measures a recovery time without polluting the change failure rate), `rail check observe` reading red-monitor, `rail accept` (stage 10 as the requester), `rail metrics` on real evidence — then the proof: `red-probe`, a service scaffolded by `rail new --tier prod`, delivered end to end to `https://probe.hawkixs.com`, `/version` equal to the attested digest, red-monitor seeing the container, four DORA metrics, `rail check` 10/10 at `prod`, `brain_delivery_get` showing the chain to `fulfilled`.
+**Goal:** Deliver phase 3 of the design spec [docs/specs/2026-09-14-red-rail-design.md](../specs/2026-09-14-red-rail-design.md) §6 and §8: `rail release` (tag + OCI image named by its manifest digest + `released` attestation), `rail deploy` on the target `vps-traefik` (the border VPS behind Traefik, digest-pinned compose, `/healthz` then `/version` verified through the public route, automatic rollback, `--rollback`, `--plan`), `rail drill` (the rollback drill that measures a recovery time without polluting the change failure rate), `rail check observe` reading red-monitor, `rail accept` (stage 10 as the requester), `rail metrics` on real evidence — then the proof: `red-probe`, a service scaffolded by `rail new --tier prod`, delivered end to end to `https://probe.hawkixs.com`, `/version` equal to the attested digest, red-monitor seeing the container, four DORA metrics, `rail check` green on the ten stages at `prod`, `brain_delivery_get` showing the chain to `fulfilled`.
 **Test command:** `cd /home/hawixs/hawkixs_infra/git_repo/ReD_v1/projects/red-rail && make lint test`
 **Tech Stack:** Python 3.12, uv, Click 8, Pydantic 2, PyYAML, copier, pytest, ruff. Standard library only for HTTP (`urllib`) and the generated service (`http.server`). On the host: git ≥ 2.28, `gh` (scope `write:packages` present), `docker` 29 with `buildx` and `compose` v2, `ssh` with the alias `red-vps`, `glab` for the GitLab mirror (see the gestures). On the VPS: Docker 29.6, Compose v5.3, Traefik v2.11.
 
@@ -3977,7 +3977,7 @@ rail check observe --repo .
 ```
 Expected: `PASS observe.visible … 1 running container(s) of red-probe on vps, image digest sha256:… confirmed` (the red-monitor server on `10.100.0.2:8081` must be up; the collection interval is 15 s), `FAIL observe.drill no rollback drill after the last deployment` — the drill comes in Task 6.3. Commit the `deployed` receipt in the receipts PR of this step.
 
-### Task 6.3: Second release, drill, metrics, acceptance, 10/10
+### Task 6.3: Second release, drill, metrics, acceptance, every stage green
 
 **Files:**
 - Modify: `projects/red-probe/src/red_probe/service.py` (one visible change for 0.1.1)
@@ -4006,7 +4006,7 @@ rail metrics --repo . --json
 ```
 Expected (verify each field): `deployments: 2`, `deployment_frequency_per_week ≈ 0.467`, `lead_time_commit_to_deploy_hours` and `lead_time_contract_to_deploy_hours` non-null, `change_failure_rate: 0.0`, `recovery_time_hours: null` (no real incident), `drill_recovery_time_minutes` = the drill's measure, `conformance.score` = 1.0 once Step 4 is done.
 
-- [ ] **Step 4: Acceptance and the 10/10**
+- [ ] **Step 4: Acceptance and every stage green**
 
 ```bash
 rail accept --repo . --rationale "probe.hawkixs.com serves 0.1.1 with the released digest; red-monitor sees it; the drill measured <n>s" --issuer red-root
@@ -4025,7 +4025,7 @@ Expected: `fulfilled  fulfilled:<integration sha> … ` printed and `brain_deliv
 ```bash
 cd ~/hawkixs_infra/git_repo/ReD_v1/projects/red-rail && make audit
 ```
-Expected: the matrix shows `red-probe` at tier `prod` with every stage green (`10/10`); commit the snapshot and, in the spec's phase table, mark phase 3 `observed <date>` with the measured numbers (recovery seconds, lead time) — a docs-only PR.
+Expected: the matrix shows `red-probe` at tier `prod` with every stage green (all 23 gates of the ten stages); commit the snapshot and, in the spec's phase table, mark phase 3 `observed <date>` with the measured numbers (recovery seconds, lead time) — a docs-only PR.
 
 - [ ] **Step 2: The brain**
 

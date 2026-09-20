@@ -10,7 +10,7 @@ Stages 8 and 9 run from the host over the operator's ssh; the ledger is the roll
 1. Preview: `rail deploy --repo <path> --plan` (the remote script and the checks, nothing runs).
 2. Deploy: `rail deploy --repo <path>` — refuses without a `released` attestation, asks for
    confirmation, verifies `/version` equals the artefact, attests `deployed`. A failed
-   deployment rolls back by itself and exits 1. Exit 2 = live but unattested: run every
+   deployment puts the previous artefact back by itself when one exists (else the incident stays open) and exits 1. Exit 2 = live but unattested: run every
    `rail attest … --from` line printed. Exit 3 = another deployment holds the lock.
 3. Observe: `rail check observe --repo <path>` — red-monitor sees the container with the deployed
    digest; the drill gate needs step 4.

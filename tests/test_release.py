@@ -137,12 +137,12 @@ def test_a_mirror_failure_after_github_says_what_not_to_do(tmp_path: Path) -> No
         release(repo, "0.1.0", run=host, issuer="operator")
 
 
-def test_cli_plan_and_release(tmp_path: Path) -> None:
+def test_cli_plan_and_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     from rail.commands import release as release_command
 
     host = FakeHost()
-    release_command.RUN = host  # the command's injectable runner
+    monkeypatch.setattr(release_command, "RUN", host)  # the command's injectable runner
     out = CliRunner().invoke(main, ["release", "--repo", str(repo), "--version", "0.1.0", "--plan"])
     assert out.exit_code == 0, out.output
     assert "docker push ghcr.io/hawkixs/red-probe:0.1.0" in out.output

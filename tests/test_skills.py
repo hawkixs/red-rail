@@ -79,3 +79,9 @@ def test_release_and_deploy_skills_defer_to_the_rail_and_name_the_exit_codes() -
     ):
         assert text in deploy, text
     assert "docker compose" not in deploy.replace("never `docker compose`", "")
+
+
+def test_the_reviewer_skill_names_the_convergence_policy() -> None:
+    reviewer = _skills()["rail-reviewer"].lower()
+    for text in ("incremental", "budget", "max_passes_per_pr"):
+        assert text in reviewer, text

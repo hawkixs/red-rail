@@ -117,7 +117,12 @@ def preflight(repo: Path, version: str, *, ledger: Ledger, run: Runner) -> Relea
     if branch != "main":
         raise ReleaseError(f"release from main, not {branch}")
     status = _ok(["git", "status", "--porcelain"], run=run, cwd=repo, what="git status")
-    dirty = [line for line in status.splitlines() if not line[3:].startswith(RECEIPTS)]
+    dirty = [
+        line
+        for line in status.splitlines()
+        # `R  old -> new`: both names must be mirrors for the line to be ignored
+        if not all(path.startswith(RECEIPTS) for path in line[3:].split(" -> "))
+    ]
     if dirty:
         raise ReleaseError(
             "the working tree has changes outside docs/receipts/: commit or stash them"
@@ -176,7 +181,12 @@ def login(plan: ReleasePlan, *, run: Runner) -> None:
     environment, never printed. Another registry is expected to be logged in already."""
     if plan.registry != "ghcr.io":
         return
-    owner = plan.image_repository.split("/")[1]
+    parts = plan.image_repository.split("/")
+    if len(parts) < 3 or not parts[1]:
+        raise ReleaseError(
+            f"deploy.image_repository {plan.image_repository!r}: expected ghcr.io/<owner>/<name>"
+        )
+    owner = parts[1]
     token = _ok(["gh", "auth", "token"], run=run, what="gh auth token").strip()
     _ok(
         ["docker", "login", plan.registry, "-u", owner, "--password-stdin"],

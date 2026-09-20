@@ -46,9 +46,18 @@ def command(repo: Path, version: str, issuer: str, dry_run: bool, yes: bool, as_
     try:
         login(plan, run=RUN)
         digest = build_and_push(plan, repo, run=RUN)
+    except ReleaseError as exc:
+        click.echo(f"error: {exc}", err=True)
+        raise SystemExit(1) from exc
+    try:
         tag_and_push(plan, repo, run=RUN)
     except ReleaseError as exc:
         click.echo(f"error: {exc}", err=True)
+        click.echo(
+            f"the image {plan.image_repository}@{digest} is published; re-run the release once "
+            "the tag is settled (the build and the push are idempotent)",
+            err=True,
+        )
         raise SystemExit(1) from exc
     try:
         record = attest(ledger, plan, digest, issuer=issuer)

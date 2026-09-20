@@ -311,3 +311,25 @@ def test_metrics_json_answers_json_on_an_error(tmp_path: Path) -> None:
     out = CliRunner().invoke(main, ["metrics", "--repo", str(tmp_path), "--json"])
     assert out.exit_code == 1
     assert json.loads(out.output)["error"].startswith("rail.yaml is missing")
+
+
+def test_drill_recovery_falls_back_to_the_timestamps(tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "prod")
+    write_roster(tmp_path, ["red-alpha"])
+    h = timedelta(hours=1)
+    _ledger_at(repo, T0 + 2 * h).attest(
+        "red-alpha",
+        AttestationKind.INCIDENT_DETECTED,
+        {"drill": True, "digest": "sha256:b", "target": "vps-traefik"},
+        issuer="op",
+        idempotency_key="inc1",
+    )
+    _ledger_at(repo, T0 + 2 * h + timedelta(minutes=4)).attest(
+        "red-alpha",
+        AttestationKind.RESTORED,
+        {"drill": True, "digest": "sha256:a", "target": "vps-traefik"},  # no recovery_seconds
+        issuer="op",
+        idempotency_key="rs1",
+    )
+    m = compute_metrics(FileLedger(repo / RECEIPTS_DIR), "red-alpha", repo, now=T0 + 10 * h)
+    assert m.drill_recovery_time_minutes == 4.0

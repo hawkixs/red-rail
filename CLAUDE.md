@@ -36,7 +36,7 @@ comments, test names. The conversation with the operator stays in French.
   read the ledger, and gain `observe.visible` in phase 3: red-monitor sees the deployed
   container). Three scopes: `repo`; `workstation` (`hygiene.remotes`,
   `hygiene.roster_entry`, `observe.visible`, skipped under `--ci`); `ledger` (`intent.contract`,
-  `hygiene.mirrors`, every evidence gate — skipped under `--ci` when `ledger: brain`, because CI
+  `hygiene.mirrors`, every evidence gate but `observe.visible` — skipped under `--ci` when `ledger: brain`, because CI
   never holds a ledger credential). `hygiene.mirrors` reports a receipt whose digest is absent
   from the shared ledger (drift). `review.verdict` accepts only an independent, approving
   verdict issued by `review.reviewer_identity` (default `red-rail-reviewer`).

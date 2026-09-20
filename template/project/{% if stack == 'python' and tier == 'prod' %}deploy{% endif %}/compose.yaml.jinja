@@ -14,7 +14,7 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-    pids_limit: 64
+    pids_limit: 256  # one thread per connection in the service
     mem_limit: 128m
     cpus: "0.5"
     restart: unless-stopped

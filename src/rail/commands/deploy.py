@@ -66,6 +66,11 @@ def command(
     as_json: bool,
 ) -> None:
     """Deploy the newest release to the manifest's target, or roll back to the previous one."""
+    if rollback and version is not None:
+        raise click.UsageError(
+            "--rollback puts the previous deployed artefact back; "
+            "--version applies to a forward deployment"
+        )
     try:
         cfg = load_rail_config(repo)
         ledger = open_ledger(repo)

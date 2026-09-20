@@ -21,6 +21,7 @@ def base_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     thread.start()
     yield f"http://127.0.0.1:{server.server_port}"
     server.shutdown()
+    server.server_close()
 
 
 def _get(url: str) -> tuple[int, bytes]:
