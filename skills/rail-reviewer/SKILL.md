@@ -11,5 +11,9 @@ The reviewer runs on the host, in pull mode, with the operator's private config
 1. One PR on demand: `rail reviewer once --repository <owner/name> --pr <n>`.
 2. Everything pending once: `rail reviewer once`; the service: `rail reviewer run`.
 3. Re-run a review on the same head SHA by adding the label `rail-review:rerun` to the PR.
-4. Read the result with `rail check review --repo <path>` and `rail ledger list --repo <path>`.
+4. After a first verdict, a new push is judged `incremental` on the delta since the last head
+   (a rebase or the `rail-review:rerun` label forces a full review again); beyond
+   `max_passes_per_pr` (4) the check fails in mode `budget` without a judge until the label
+   grants one more pass.
+5. Read the result with `rail check review --repo <path>` and `rail ledger list --repo <path>`.
    The verdict is what the ledger says; when this skill and the CLI disagree, the CLI is right.

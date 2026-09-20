@@ -33,12 +33,22 @@ comments, test names. The conversation with the operator stays in French.
   and `effective(repo, key)`: a `gates:` override in `rail.yaml` is a declared exception,
   reported by `rail check` and `rail audit`, never hidden.
 - `src/rail/gates/` — `hygiene`, `intent`, `design`, `plan`, `build`, `evidence` (stages 5–10
-  read the ledger). Three scopes: `repo`; `workstation` (`hygiene.remotes`,
-  `hygiene.roster_entry`, skipped under `--ci`); `ledger` (`intent.contract`, `hygiene.mirrors`,
-  every evidence gate — skipped under `--ci` when `ledger: brain`, because CI never holds a
-  ledger credential). `hygiene.mirrors` reports a receipt whose digest is absent from the shared
-  ledger (drift). `review.verdict` accepts only an independent, approving verdict issued by
-  `review.reviewer_identity` (default `red-rail-reviewer`).
+  read the ledger, and gain `observe.visible` in phase 3: red-monitor sees the deployed
+  container). Three scopes: `repo`; `workstation` (`hygiene.remotes`,
+  `hygiene.roster_entry`, `observe.visible`, skipped under `--ci`); `ledger` (`intent.contract`,
+  `hygiene.mirrors`, every evidence gate — skipped under `--ci` when `ledger: brain`, because CI
+  never holds a ledger credential). `hygiene.mirrors` reports a receipt whose digest is absent
+  from the shared ledger (drift). `review.verdict` accepts only an independent, approving
+  verdict issued by `review.reviewer_identity` (default `red-rail-reviewer`).
+- `src/rail/http.py` — one bounded GET, timeout and size-capped, the only way the rail reaches
+  a network URL that is not brain or GitHub.
+- `src/rail/monitor.py` — reads red-monitor's `/api/latest` (image reference of a deployed
+  container) for `observe.visible`.
+- `src/rail/release.py` — stage 7: builds and pushes the image to GHCR by digest, tags both
+  remotes, attests `released`.
+- `src/rail/deploy/` — `vps_traefik.py` (the target as data: host, project directory, the
+  remote script run under `flock`) and `flow.py` (forward / rollback / drill and the
+  attestation sequences they write — ADR-0004).
 - `src/rail/ledger/` — the `Ledger` protocol, `FileLedger` (`docs/receipts/*.json`, append-only,
   digest + idempotency key, fails closed on a tampered receipt) and `BrainLedger`
   (`ledger/brain.py`: brain-v42 is the authority, the receipts are mirrors written BEFORE the
@@ -59,17 +69,21 @@ comments, test names. The conversation with the operator stays in French.
   models per tier, light/deep thresholds, producer read from `Co-Authored-By` trailers),
   `verdict.py` (enum-valued `ReviewVerdict`), `judges.py` (one headless run per judge, isolated
   seat, `guard.sh` for agy), `github.py` (minimal App client), `service.py` (one review per head
-  SHA, fail-closed, verdict attested), `config.py` (`~/.config/red-rail/reviewer.yaml`).
+  SHA, fail-closed, verdict attested; converges — a later head is judged `incremental` on the
+  delta since the last verdict, `max_passes_per_pr` caps the passes and the excess attests
+  `budget` without a judge, a rebase or `rail-review:rerun` forces a full review again),
+  `config.py` (`~/.config/red-rail/reviewer.yaml`).
 - `src/rail/commands/` — one module per command, auto-discovered by `src/rail/cli.py`:
   `check`, `attest`, `bind` (the PR to the contract, at its opening), `contract`, `ledger`,
-  `audit`, `metrics`, `new`, `upgrade`, `brain` (`ping`), `reviewer` (`once`, `run`). Exit code is the verdict; `--json` is the contract for
-  machines.
+  `audit`, `metrics`, `new`, `upgrade`, `brain` (`ping`), `reviewer` (`once`, `run`), `release`
+  (stage 7), `deploy` (`--rollback`, `--plan`), `drill` (stage 9), `accept` (stage 10, as the
+  requester); `new` takes `--ledger`/`--ticket`. Exit code is the verdict; `--json` is the
+  contract for machines.
 - `src/rail/audit.py` (repository × stage matrix, golden-tested), `src/rail/metrics.py` (four
   DORA metrics + conformance from the ledger), `src/rail/scaffold.py` (copier: `copier.yml` at
   the root, files under `template/project/`), `src/rail/remotes.py` (`gh` + `glab`, no token).
 - `workflows/pre-review.js` — a tiered Workflow (wf-scan → red-reviewer on sonnet → wf-judge)
   launched by the `rail-review` skill from the producing session: a pre-review, never the gate.
-  Phase 3: `deploy/`.
 
 Boundary rules with brain-v42, both testable: brain never learns a new gate; red-rail stores
 no durable fact outside the ledger.
@@ -91,6 +105,10 @@ uv run rail check              # the rail gates against this repository
 uv run rail brain ping         # brain-v42 reachable with the private token, as this project?
 uv run rail bind --pr N        # bind the pull request to the delivery contract, right after `gh pr create`
 uv run rail reviewer once      # one pass of the independent reviewer (host only)
+uv run rail release --version 0.1.0   # stage 7 (prod, from main): image on GHCR by digest, tag, attestation
+uv run rail deploy [--plan|--rollback] # stage 8 from the host: digest-pinned compose on the VPS, /version verified
+uv run rail drill                      # stage 9: rollback drill, recovery measured, roll-forward
+uv run rail accept --rationale "…"     # stage 10 as the requester (brain_delivery_accept)
 make audit                     # dated drift snapshot of the sibling projects (docs/audits/)
 make contracts-check           # vendored brain-v42 contracts equal the pinned tag
 make skills-install            # symlink the facade skills into ~/.claude/skills
@@ -103,7 +121,7 @@ red-rail/
 ├── Makefile               # sync, lint, test, check, ci, audit, contracts-check, skills-install
 ├── rail.yaml              # this project's manifest (tier dev, ledger brain + ticket, declared exceptions)
 ├── copier.yml             # the project template's questions; files live in template/project/
-├── src/rail/              # package `rail`: gates/, ledger/, brain/, contracts/, reviewer/, commands/
+├── src/rail/              # package `rail`: gates/, ledger/, brain/, contracts/, reviewer/, deploy/, commands/
 ├── tests/                 # incl. tests/golden/audit-matrix.json and the deterministic fixtures
 ├── docs/specs/            # design specs (dated)
 ├── docs/plans/            # implementation plans (dated)
@@ -113,7 +131,8 @@ red-rail/
 ├── template/project/      # copier template (CLAUDE.md, rail.yaml, Makefile, CI, docs, skeletons)
 ├── .github/workflows/     # continuous-integration.yml + rail-ci.yml (reusable, called by projects)
 ├── workflows/             # pre-review.js (tiered pre-review, passes the tiering gate)
-└── skills/                # Claude Code facades, no rules inside (rail-design … rail-reviewer)
+└── skills/                # Claude Code facades, no rules inside (rail-design … rail-reviewer,
+                           #   rail-release, rail-deploy)
 ```
 
 ## Key technical decisions
@@ -122,6 +141,10 @@ red-rail/
 - ADR-0002 — pluggable ledger, standalone first; never a plugin inside brain-v42.
 - ADR-0003 — the independent PR reviewer lives here and runs on the `headless-agents` library
   (brain-v42 workspace member, pinned to a tag); a session-launched review is only a pre-review.
+- ADR-0004 — deployment runs from the host over ssh, pins the artefact by digest, and is
+  fenced by a `flock` on the target — not by `brain_delivery_claim` (no deployment work kind).
+- The release artefact is an OCI image on GHCR, named by its manifest digest; GitLab does not
+  follow the move to red-base and its registry stays on a home machine.
 - Design spec: `docs/specs/2026-09-14-red-rail-design.md` (ten stages, three tiers,
   `rail.yaml`, end-to-end flow, failure modes, phasing).
 - Attestations come only from the server host; the runner VM never reaches brain or the VPS.

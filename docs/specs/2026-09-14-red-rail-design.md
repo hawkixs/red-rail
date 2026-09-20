@@ -207,6 +207,14 @@ red-rail/
 > brain milestones read from the ticket; `hygiene.mirrors` reports a receipt whose digest is
 > absent from the shared ledger. The brain API is pinned at the tag `delivery-attestations-v1.0`
 > (ADR-0002 amendment).
+>
+> Implementation note (phase 3, 2026-09-19): `rail release` names the artefact by its GHCR
+> manifest digest; `rail deploy` runs from the host over ssh under a lock on the target
+> (ADR-0004 replaces the brain claim of §7), verifies `/version` through Traefik and writes
+> the sequences `deployed` / `rolled_back` / `restored` / `incident_detected` with a `mode`
+> and `drill` vocabulary (`rail.ledger`); `rail drill` is the §6 step 8 drill; `rail check
+> observe` adds `observe.visible` on red-monitor's `/api/latest`; `rail accept` is step 9
+> as the requester; the prod/python template renders the service, its image and its stack.
 
 Four mechanisms carry everything:
 
@@ -298,6 +306,8 @@ Principle: **a gate fails explicitly, never silently; an exception is declared, 
 - **Concurrency.** Two sessions deploying the same project: `rail deploy` first takes a brain
   claim (`brain_delivery_claim`, token + fencing epoch — it exists, nothing is reinvented);
   a stale claim cannot release its successor.
+  *(amended 2026-09-19 — ADR-0004: a `flock` on the target's stack directory; the brain claim
+  has no deployment work kind)*
 - **Security.** No secret in the red-rail tree; tokens through stdin as `runnerctl` does;
   gitleaks in the `build` gate; brain stays on the host loopback; the runner VM has no brain
   or VPS access. Judges read PR content as **data**: read-only tools, enum-valued verdicts,

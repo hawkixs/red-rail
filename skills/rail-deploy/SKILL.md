@@ -1,0 +1,21 @@
+---
+name: rail-deploy
+description: Deploy a released ReD project to the border VPS behind Traefik with `rail deploy` (digest-pinned compose over ssh, /healthz then /version verified through the public route), roll back with `rail deploy --rollback`, exercise the drill with `rail drill`, then confirm with `rail check observe`. Use from the host, never from CI, never `docker compose` by hand.
+---
+
+# rail-deploy
+
+Stages 8 and 9 run from the host over the operator's ssh; the ledger is the rollback source.
+
+1. Preview: `rail deploy --repo <path> --plan` (the remote script and the checks, nothing runs).
+2. Deploy: `rail deploy --repo <path>` — refuses without a `released` attestation, asks for
+   confirmation, verifies `/version` equals the artefact, attests `deployed`. A failed
+   deployment rolls back by itself and exits 1. Exit 2 = live but unattested: run every
+   `rail attest … --from` line printed. Exit 3 = another deployment holds the lock.
+3. Observe: `rail check observe --repo <path>` — red-monitor sees the container with the deployed
+   digest; the drill gate needs step 4.
+4. Drill (two deployed artefacts needed): `rail drill --repo <path>` — incident simulated,
+   rollback, recovery measured, roll-forward; every record is marked `drill`.
+5. Real incident: `rail attest incident_detected --repo <path> --data …`, then
+   `rail deploy --repo <path> --rollback`. Never `docker compose` on the VPS by hand: the rail
+   would not know. When this skill and the CLI disagree, the CLI is right.
