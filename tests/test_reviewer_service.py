@@ -38,6 +38,9 @@ class FakeGitHub:
     )
     existing_checks: list[CheckRun] = field(default_factory=list)
     calls: list[tuple] = field(default_factory=list)
+    compare_text: str = "diff --git a/src/x.py b/src/x.py\n+print(2)\n"
+    compare_error: bool = False
+    check_texts: dict[int, str] = field(default_factory=dict)
 
     def diff(self, repository, number):
         return self.diff_text
@@ -61,6 +64,17 @@ class FakeGitHub:
 
     def remove_label(self, repository, number, label):
         self.calls.append(("unlabel", number, label))
+
+    def compare_diff(self, repository, base_sha, head_sha):
+        self.calls.append(("compare", base_sha, head_sha))
+        if self.compare_error:
+            from rail.reviewer.github import GitHubError
+
+            raise GitHubError("404 no common ancestor")
+        return self.compare_text
+
+    def check_run_text(self, repository, check_id):
+        return self.check_texts.get(check_id, "")
 
 
 def approve(provider: str, tier: str = "light") -> JudgeReply:
@@ -349,3 +363,112 @@ def test_pending_reviews_are_loaded_in_full_before_judging() -> None:
     loaded = pending_reviews(github, "hawkixs/red-alpha", policy)
     assert loaded == [full]
     assert policy.mode_for(loaded[0], docs_only=False) == "deep"
+
+
+def _earlier_verdict(
+    ledger: FileLedger, *, sha: str, check_run_id: int, verdict: str = "request_changes"
+) -> None:
+    data = ReviewVerdict(
+        verdict=verdict, summary="earlier", findings=[], mode="deep", providers=("codex",)
+    ).as_attestation_data(
+        sha=sha, check_run_id=check_run_id, repository=PR.repository, pr=PR.number
+    )
+    ledger.attest(
+        "red-alpha",
+        AttestationKind.REVIEW_VERDICT,
+        data,
+        issuer="red-rail-reviewer",
+        idempotency_key=f"review_verdict:{sha}:{check_run_id}",
+    )
+
+
+def test_a_second_pass_judges_the_delta_with_the_earlier_findings(tmp_path: Path) -> None:
+    repo, ledger = _repo(tmp_path)
+    _earlier_verdict(ledger, sha="0" * 40, check_run_id=11)
+    github = FakeGitHub(check_texts={11: "- [important] src/x.py:1 — bug: e"})
+    seen: list[dict] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        seen.append({"diff": diff, "tier": tier, "notes": notes})
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
+    assert outcome.verdict.mode == "incremental" and outcome.verdict.verdict == "approve"
+    assert ("compare", "0" * 40, PR.head_sha) in github.calls
+    assert len(seen) == 1 and seen[0]["tier"] == "light"
+    assert seen[0]["diff"] == github.compare_text  # the delta, not the whole PR
+    assert "0" * 40 in seen[0]["notes"] and "bug: e" in seen[0]["notes"]
+    assert ("complete", 99, "success", "approve") in github.calls
+
+
+def test_a_rebased_head_or_the_label_gets_a_full_review_again(tmp_path: Path) -> None:
+    repo, ledger = _repo(tmp_path)
+    _earlier_verdict(ledger, sha="0" * 40, check_run_id=11)
+    github = FakeGitHub(compare_error=True)
+    seen: list[str] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        seen.append(diff)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
+    assert outcome.verdict.mode == "light" and seen == [DIFF]
+    github = FakeGitHub()
+    seen.clear()
+    review_pull(
+        replace(PR, labels=("rail-review:rerun",), head_sha="c" * 40),
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
+    assert seen == [DIFF] and not any(c[0] == "compare" for c in github.calls)
+
+
+def test_the_pass_budget_fails_the_check_without_a_judge_until_relabelled(tmp_path: Path) -> None:
+    repo, ledger = _repo(tmp_path)
+    policy = default_policy().model_copy(update={"max_passes_per_pr": 2})
+    _earlier_verdict(ledger, sha="0" * 40, check_run_id=11)
+    _earlier_verdict(ledger, sha="1" * 40, check_run_id=12)
+    github = FakeGitHub()
+    calls: list[str] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        calls.append(provider)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        PR, github=github, policy=policy, ledger=ledger, project="red-alpha", run_judge=run_judge
+    )
+    assert calls == [] and outcome.attested
+    assert outcome.verdict.mode == "budget" and outcome.verdict.verdict == "request_changes"
+    assert "budget" in outcome.verdict.summary and "rail-review:rerun" in outcome.verdict.summary
+    assert ("complete", 99, "failure", "review budget exhausted") in github.calls
+    assert ("review", 7, "REQUEST_CHANGES") in github.calls
+    verdicts = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+    assert [v.data["mode"] for v in verdicts][-1] == "budget"
+    relabelled = replace(PR, labels=("rail-review:rerun",), head_sha="c" * 40)
+    outcome = review_pull(
+        relabelled,
+        github=FakeGitHub(),
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
+    assert calls and outcome.verdict.mode == "light"

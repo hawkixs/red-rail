@@ -21,9 +21,12 @@ def test_every_agent_call_names_a_tier_or_a_pinned_role() -> None:
     assert len(calls) == 3
     for match in calls:
         window = text[match.start() : match.start() + 900]
-        assert re.search(r"agentType:\s*'(wf-scan|red-reviewer|wf-judge)'", window), window[:120]
+        # a roster role pins the tier; Explore (outside the roster) must name its model
+        assert re.search(
+            r"agentType:\s*'(wf-scan|wf-judge)'|agentType:\s*'Explore',\s*model:\s*'sonnet'", window
+        ), window[:120]
     assert "fable" not in text.lower()
-    assert "agentType: 'red-reviewer', model: 'sonnet'" in text  # fan-out on sonnet, never opus
+    assert "agentType: 'Explore', model: 'sonnet'" in text  # fan-out on sonnet, never opus
 
 
 def test_meta_declares_the_three_phases_with_their_models() -> None:

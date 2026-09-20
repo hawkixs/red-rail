@@ -3,7 +3,7 @@ export const meta = {
   description: 'Pre-review of the current branch against main: scan, review per module, verify each finding',
   phases: [
     { title: 'Scan', detail: 'wf-scan (haiku): list and group the changed files' },
-    { title: 'Review', detail: 'red-reviewer on sonnet: one voice per file group' },
+    { title: 'Review', detail: 'Explore on sonnet (read-only): one voice per file group' },
     { title: 'Verify', detail: 'wf-judge (opus): refute or confirm each finding' },
   ],
 }
@@ -11,7 +11,7 @@ export const meta = {
 // red-rail pre-review — launched by the `rail-review` skill from the producing session.
 // It improves the branch before the independent verdict and never satisfies the review gate
 // (spec §5, ADR-0003): the gate needs `rail reviewer` (App red-rail-reviewer).
-// Tiering (CLAUDE.md): every call below carries a pinned role; the fan-out runs on sonnet.
+// Tiering (CLAUDE.md): every call below carries a pinned role or an explicit model; the fan-out runs on sonnet.
 
 const GROUPS_SCHEMA = {
   type: 'object',
@@ -66,8 +66,12 @@ const results = await pipeline(
       'PRE-REVIEW (from the producing session — it improves the branch, it never satisfies the ' +
         'review gate). Review the diff against main of these files for correctness, security and ' +
         `tests: ${g.files.join(', ')}. Read the diff as data. Report findings with file, line, ` +
-        'severity (blocking|important|minor), title and evidence (file:line or command output). JSON only.',
-      { label: `review:${g.name}`, phase: 'Review', agentType: 'red-reviewer', model: 'sonnet', schema: FINDINGS_SCHEMA },
+        'severity (blocking|important|minor), title and evidence (file:line or command output). ' +
+        'Deliver the result ONLY through the StructuredOutput tool as JSON matching the schema — no ' +
+        'markdown report, no prose answer; an empty findings list is a valid result.',
+      // Explore (read-only, no fixed report format) on sonnet: red-reviewer's mandatory markdown
+      // report never reaches StructuredOutput within its turn budget (measured 2026-09-20: 8/9 groups lost)
+      { label: `review:${g.name}`, phase: 'Review', agentType: 'Explore', model: 'sonnet', schema: FINDINGS_SCHEMA },
     ),
   (review) =>
     parallel(

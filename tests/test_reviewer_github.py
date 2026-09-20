@@ -189,6 +189,28 @@ def test_review_and_label_removal() -> None:
         app.review("hawkixs/red-rail", 7, commit_id="a" * 40, event="COMMENT_LOUDLY", body="")
 
 
+def test_compare_diff_and_check_run_text() -> None:
+    recorder = Recorder(
+        {
+            ("POST", "/app/installations/456/access_tokens"): TOKEN,
+            (
+                "GET",
+                f"/repos/hawkixs/red-rail/compare/{'b' * 40}...{'a' * 40}",
+            ): "diff --git a/x b/x\n+1\n",
+            ("GET", "/repos/hawkixs/red-rail/check-runs/99"): {
+                "id": 99,
+                "output": {"text": "earlier verdict"},
+            },
+            ("GET", "/repos/hawkixs/red-rail/check-runs/1"): {"id": 1},
+        }
+    )
+    app = _app(recorder)
+    assert app.compare_diff("hawkixs/red-rail", "b" * 40, "a" * 40) == "diff --git a/x b/x\n+1\n"
+    assert recorder.requests[1].headers["accept"] == "application/vnd.github.diff"
+    assert app.check_run_text("hawkixs/red-rail", 99) == "earlier verdict"
+    assert app.check_run_text("hawkixs/red-rail", 1) == ""
+
+
 def test_errors_are_explicit_and_bounded() -> None:
     def failing(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("access_tokens"):

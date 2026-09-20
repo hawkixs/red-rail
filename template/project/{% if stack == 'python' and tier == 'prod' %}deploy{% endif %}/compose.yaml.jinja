@@ -1,0 +1,49 @@
+# {{ project }} on the border VPS behind Traefik. `rail deploy` writes this file at the
+# released commit under /opt/{{ project }}/releases/<version>/ with a .env holding
+# IMAGE_REFERENCE (repository@sha256:…), IMAGE_DIGEST, GIT_SHA, VERSION, DOMAIN,
+# TRAEFIK_NETWORK and TRAEFIK_CERT_RESOLVER. No port is published: Traefik reaches the
+# container on the shared network (red-watcher's perimeter).
+services:
+  app:
+    image: ${IMAGE_REFERENCE:?IMAGE_REFERENCE is required}
+    environment:
+      APP_IMAGE_DIGEST: ${IMAGE_DIGEST:?IMAGE_DIGEST is required}
+      APP_PORT: "8080"
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256  # one thread per connection in the service
+    mem_limit: 128m
+    cpus: "0.5"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:?TRAEFIK_NETWORK is required}
+      - traefik.http.routers.{{ project }}.rule=Host(`${DOMAIN:?DOMAIN is required}`)
+      - traefik.http.routers.{{ project }}.entrypoints=websecure
+      - traefik.http.routers.{{ project }}.tls=true
+      - traefik.http.routers.{{ project }}.tls.certresolver=${TRAEFIK_CERT_RESOLVER:?TRAEFIK_CERT_RESOLVER is required}
+      - traefik.http.services.{{ project }}.loadbalancer.server.port=8080
+      - traefik.http.services.{{ project }}.loadbalancer.healthcheck.path=/healthz
+      - traefik.http.services.{{ project }}.loadbalancer.healthcheck.interval=10s
+      - traefik.http.services.{{ project }}.loadbalancer.healthcheck.timeout=3s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:?TRAEFIK_NETWORK is required}

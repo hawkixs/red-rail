@@ -52,6 +52,17 @@ TOOL_PARAMETERS = {
         "limit",
         "cursor",
     },
+    # `brain_delivery_accept` is outside the vendored v1.0 attestation contract
+    # (`delivery-attestations-v1.0`): it belongs to the delivery workflow API, not
+    # `brain_delivery_attest` / `brain_delivery_attestation_list`.
+    "brain_delivery_accept": {
+        "ticket_id",
+        "actor_project",
+        "rationale",
+        "expected_revision",
+        "expected_attempt",
+        "expected_delivery_digest",
+    },
 }
 T0 = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
 CONTRACT = {

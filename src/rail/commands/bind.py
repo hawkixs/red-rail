@@ -58,7 +58,9 @@ def command(repo: Path, number: int, head_sha: str | None, issuer: str, as_json:
             if r.payload.get("repository") == slug and int(r.payload.get("number") or 0) == number
         ]
         if bound:
-            click.echo(f"already bound: {slug}#{number} ({bound[-1].idempotency_key})", err=True)
+            click.echo(
+                f"note: already bound: {slug}#{number} ({bound[-1].idempotency_key})", err=True
+            )
             echo_record(bound[-1], repo, as_json)
             return
         sha = head_sha or head_sha_of(slug, number)

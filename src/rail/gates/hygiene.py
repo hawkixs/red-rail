@@ -17,7 +17,14 @@ from rail import gitrepo, markdown
 from rail.gates import GateResult, GateSpec, Stage
 from rail.ledger import BRAIN_MILESTONES, RECEIPTS_DIR, LedgerError, RecordKind, open_ledger
 from rail.ledger.file import FileLedger, load_receipt, receipt_filename
-from rail.model import MANIFEST_NAME, LedgerBackend, load_rail_config, try_load_rail_config
+from rail.model import (
+    MANIFEST_NAME,
+    MISSING_HINT,
+    LedgerBackend,
+    load_rail_config,
+    manifest_problem,
+    try_load_rail_config,
+)
 from rail.policy import effective
 
 DOCS_DIRS = ("docs/specs", "docs/plans", "docs/adr")
@@ -81,7 +88,7 @@ def rail_config(repo: Path) -> GateResult:
     try:
         cfg = load_rail_config(repo)
     except FileNotFoundError:
-        return GateResult(Stage.HYGIENE, "rail_config", False, f"{MANIFEST_NAME} is missing")
+        return GateResult(Stage.HYGIENE, "rail_config", False, MISSING_HINT)
     except ValidationError as exc:
         first = exc.errors()[0]
         location = ".".join(str(part) for part in first["loc"]) or "<root>"
@@ -120,7 +127,7 @@ def claude_md(repo: Path) -> GateResult:
     problems: list[str] = []
     cfg = try_load_rail_config(repo)
     if cfg is None:
-        problems.append(f"{MANIFEST_NAME} unreadable, brain key not verifiable")
+        problems.append(f"{manifest_problem(repo)}; brain key not verifiable")
     elif f"`{cfg.brain_key}`" not in text:
         problems.append(f"brain key `{cfg.brain_key}` not mentioned")
     targets = make_targets(repo)
@@ -234,7 +241,9 @@ def mirrors(repo: Path) -> GateResult:
     kept from a file-ledger past are history, not drift."""
     cfg = try_load_rail_config(repo)
     if cfg is None:
-        return GateResult(Stage.HYGIENE, "mirrors", False, f"{MANIFEST_NAME} unreadable")
+        return GateResult(
+            Stage.HYGIENE, "mirrors", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
+        )
     if cfg.ledger is LedgerBackend.FILE:
         return GateResult(
             Stage.HYGIENE, "mirrors", True, "file ledger: the receipts are the ledger"

@@ -9,11 +9,13 @@ import pytest
 from click.testing import CliRunner
 
 from rail import gitrepo
+from rail.brain.client import BrainClient
 from rail.cli import main
 from rail.ledger import RECEIPTS_DIR, RecordKind
 from rail.ledger.file import FileLedger
-from rail.model import Stack, Tier
+from rail.model import LedgerBackend, Stack, Tier
 from rail.scaffold import NewProject, ScaffoldError, new_project, render, upgrade
+from tests.fake_brain import FakeBrain
 
 ROOT = Path(__file__).resolve().parents[1]
 CLOCK = lambda: datetime(2026, 9, 15, 8, 0, tzinfo=UTC)  # noqa: E731
@@ -204,8 +206,11 @@ def test_git_identity_fallback_covers_a_missing_name(
     assert len(init_git(project)) == 40
 
 
-def test_verify_scores_the_rendered_manifest(template_dir: Path, tmp_path: Path) -> None:
-    """Review finding: rail new must check the tier that landed on disk, not the one in memory."""
+def test_verify_scores_the_bootstrap_floor_regardless_of_the_declared_tier(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """`verify` is the floor a fresh tree can pass; the declared tier is what `rail check`
+    demands next, not what `rail new` scores itself against."""
     from rail.gates import Stage
     from rail.scaffold import record_contract, verify, write_bootstrap_spec
 
@@ -216,4 +221,98 @@ def test_verify_scores_the_rendered_manifest(template_dir: Path, tmp_path: Path)
     manifest = project.dest / "rail.yaml"
     manifest.write_text(manifest.read_text().replace("tier: bootstrap", "tier: dev"))
     stages = {r.stage for r in verify(project)}
-    assert Stage.PLAN in stages and Stage.BUILD in stages
+    assert stages == {Stage.HYGIENE, Stage.INTENT, Stage.DESIGN}
+
+
+def test_render_prod_python_on_the_brain_ledger(template_dir: Path, tmp_path: Path) -> None:
+    ticket = "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"
+    dest = render(
+        _project(
+            template_dir,
+            tmp_path / "red-probe",
+            tier=Tier.PROD,
+            ledger=LedgerBackend.BRAIN,
+            ticket=ticket,
+        )
+    )
+    manifest = (dest / "rail.yaml").read_text()
+    assert "ledger: brain\n" in manifest and f"ticket: {ticket}\n" in manifest
+    assert "target: vps-traefik" in manifest
+    assert "ledger `brain`" in (dest / "CLAUDE.md").read_text()
+    assert (dest / "Dockerfile").is_file() and (dest / "deploy" / "compose.yaml").is_file()
+
+
+def test_a_prod_scaffold_is_verified_at_the_bootstrap_floor(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    project = _project(template_dir, tmp_path / "red-probe", tier=Tier.PROD)
+    results = new_project(project, publish=False, clock=CLOCK)
+    assert all(r.passed for r in results), [r for r in results if not r.passed]
+    assert {r.stage.value for r in results} == {"hygiene", "intent", "design"}
+    contract = FileLedger(project.dest / RECEIPTS_DIR).list("red-probe", kind=RecordKind.CONTRACT)
+    deliverable = contract[0].payload["contract"]["deliverables"][0]
+    assert deliverable["required_checks"] == [
+        {
+            "kind": "check_run",
+            "name": "red-rail/review",
+            "app_slug": "red-rail-reviewer",
+            "provider_id": None,
+        }
+    ]
+    assert deliverable["review"] == {
+        "required_approvals": 1,
+        "allowed_reviewers": ["red-rail-reviewer[bot]"],
+    }
+    out = CliRunner().invoke(main, ["check", "--repo", str(project.dest), "--ci"])
+    assert out.exit_code == 1  # release, deploy, observe, learn: the declared tier's debt
+    assert "FAIL  release.released" in out.output
+
+
+def test_a_bootstrap_contract_needs_no_check_and_no_approval(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    project = _project(template_dir, tmp_path / "red-probe")
+    new_project(project, publish=False, clock=CLOCK)
+    contract = FileLedger(project.dest / RECEIPTS_DIR).list("red-probe", kind=RecordKind.CONTRACT)
+    deliverable = contract[0].payload["contract"]["deliverables"][0]
+    assert deliverable["required_checks"] == [] and deliverable["no_checks_reason"]
+    assert deliverable["review"]["required_approvals"] == 0
+
+
+def test_brain_mode_records_the_contract_after_the_remotes_and_mirrors_it(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    brain = FakeBrain(agent="rail new")
+    ticket = brain.add_ticket("red", "red-probe")
+    brain.register_repository("red-probe", 4242, "hawkixs/red-probe")
+    project = _project(
+        template_dir,
+        tmp_path / "red-probe",
+        tier=Tier.PROD,
+        ledger=LedgerBackend.BRAIN,
+        ticket=ticket,
+    )
+    calls: list[list[str]] = []
+
+    def run(args, **kwargs):  # the remotes are faked: gh/glab/git push never run here
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    results = new_project(
+        project,
+        publish=False,
+        clock=CLOCK,
+        client=BrainClient.in_memory(brain, agent="rail new"),
+        run=run,
+    )
+    assert all(r.passed for r in results)
+    assert brain.tickets[ticket].revisions, "the contract is set in brain"
+    revision = brain.tickets[ticket].revisions[-1]
+    assert revision["deliverables"][0]["review"]["required_approvals"] == 1
+    subjects = gitrepo.recent_subjects(project.dest, 2)
+    assert subjects == [
+        "chore(rail): mirror the delivery contract",
+        "chore: bootstrap red-probe with the ReD rail",
+    ]
+    assert (project.dest / RECEIPTS_DIR).glob("*-contract-*.json")
+    assert calls == []  # publish=False: nothing pushed

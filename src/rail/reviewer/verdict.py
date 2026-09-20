@@ -26,7 +26,7 @@ class ReviewVerdict(BaseModel):
     verdict: Decision
     summary: str = Field(min_length=1, max_length=4000)
     findings: list[Finding] = Field(default_factory=list, max_length=100)
-    mode: Literal["light", "deep"] = "light"
+    mode: Literal["light", "deep", "incremental", "budget"] = "light"
     providers: tuple[str, ...] = ()
     diff_truncated: bool = False
 

@@ -181,6 +181,18 @@ class GitHubApp:
             self._request("GET", f"/repos/{repository}/pulls/{number}", accept=DIFF, raw=True)
         )
 
+    def compare_diff(self, repository: str, base_sha: str, head_sha: str) -> str:
+        """The changes between two commits of the repository as a diff (`GitHubError` when
+        the base is gone — a rebased or force-pushed pull request)."""
+        return str(
+            self._request(
+                "GET",
+                f"/repos/{repository}/compare/{base_sha}...{head_sha}",
+                accept=DIFF,
+                raw=True,
+            )
+        )
+
     def commit_messages(self, repository: str, number: int) -> list[str]:
         data = self._request(
             "GET", f"/repos/{repository}/pulls/{number}/commits", params={"per_page": "100"}
@@ -225,6 +237,12 @@ class GitHubApp:
             params={"app_id": str(self.app_id), "check_name": name, "per_page": "50"},
         )
         return [_check(raw) for raw in data.get("check_runs", [])]
+
+    def check_run_text(self, repository: str, check_id: int) -> str:
+        """The `output.text` our App published on a check run (the rendered verdict)."""
+        data = self._request("GET", f"/repos/{repository}/check-runs/{check_id}")
+        output = data.get("output") if isinstance(data, dict) else None
+        return str((output or {}).get("text") or "")
 
     def review(
         self, repository: str, number: int, *, commit_id: str, event: ReviewEvent, body: str

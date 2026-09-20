@@ -49,3 +49,14 @@ producing session — which `a06f57be` rejects as not independent.
 - The operator creates and installs the `red-rail-reviewer` GitHub App; its private key lives
   outside any tree. Subscriptions are welded to the host HOME, so the reviewer never runs in CI.
 - brain-v42's lot 4 shrinks to its own GitHub client for the observer.
+
+## Amendment (2026-09-20)
+
+The reviewer converges: after a first verdict on a pull request, a new head is judged on the
+delta since the last judged head (`GET /compare`, the earlier verdict's text carried into the
+prompt, mode `incremental`, light when the delta is small), rather than re-reading the whole
+diff on every push. A rebase or force-push, or the label `rail-review:rerun`, discards the
+delta and triggers a full review again. `max_passes_per_pr` (4) caps the passes on one pull
+request: beyond it the check fails without running a judge — the verdict is attested in mode
+`budget` — until the label `rail-review:rerun` grants one more pass. The ledger is the pass
+counter (no in-memory state); drafts are never reviewed.

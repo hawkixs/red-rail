@@ -14,6 +14,8 @@ EXPECTED = {
     "rail-audit",
     "rail-review",
     "rail-reviewer",
+    "rail-release",
+    "rail-deploy",
 }
 FRONTMATTER = re.compile(
     r"^---\nname: (?P<name>[\w-]+)\ndescription: (?P<description>.+?)\n---\n", re.DOTALL
@@ -24,7 +26,7 @@ def _skills() -> dict[str, str]:
     return {d.name: (d / "SKILL.md").read_text() for d in SKILLS.iterdir() if d.is_dir()}
 
 
-def test_the_seven_skills_exist() -> None:
+def test_the_nine_skills_exist() -> None:
     assert set(_skills()) == EXPECTED
 
 
@@ -38,9 +40,10 @@ def test_frontmatter_name_matches_the_directory() -> None:
 
 def test_every_skill_calls_the_cli_and_says_the_cli_is_right() -> None:
     for name, text in _skills().items():
-        assert re.search(r"`rail (check|attest|audit|contract|reviewer|brain)\b", text), (
-            f"{name}: no CLI call"
-        )
+        assert re.search(
+            r"`rail (check|attest|audit|contract|reviewer|brain|release|deploy|drill|accept|new)\b",
+            text,
+        ), f"{name}: no CLI call"
         assert "the CLI is right" in text, f"{name}: must defer to the CLI"
 
 
@@ -59,3 +62,26 @@ def test_review_skills_defer_to_the_reviewer_and_never_to_themselves() -> None:
     assert "workflows/pre-review.js" in review
     reviewer = _skills()["rail-reviewer"].lower()
     assert "rail reviewer once" in reviewer and "red-rail-reviewer" in reviewer
+
+
+def test_release_and_deploy_skills_defer_to_the_rail_and_name_the_exit_codes() -> None:
+    release = _skills()["rail-release"].lower()
+    assert "rail release --version" in release and "receipts pr" in release
+    deploy = _skills()["rail-deploy"].lower()
+    for text in (
+        "rail deploy",
+        "--rollback",
+        "--plan",
+        "rail drill",
+        "rail check observe",
+        "exit 2",
+        "exit 3",
+    ):
+        assert text in deploy, text
+    assert "docker compose" not in deploy.replace("never `docker compose`", "")
+
+
+def test_the_reviewer_skill_names_the_convergence_policy() -> None:
+    reviewer = _skills()["rail-reviewer"].lower()
+    for text in ("incremental", "budget", "max_passes_per_pr"):
+        assert text in reviewer, text

@@ -23,6 +23,7 @@ from rail.ledger import (
     Record,
     RecordKind,
     brain_digest,
+    idempotency_key_for,
 )
 
 
@@ -81,6 +82,21 @@ class FileLedger:
             issuer,
             idempotency_key,
             recorded_at=emitted_at,
+        )
+
+    def accept(
+        self, project: str, *, rationale: str, issuer: str, sha: str | None = None
+    ) -> Record:
+        """Without brain the acceptance is a `fulfilled` attestation, keyed by the commit."""
+        data: dict[str, Any] = {"rationale": rationale}
+        if sha:
+            data["sha"] = sha
+        return self.attest(
+            project,
+            AttestationKind.FULFILLED,
+            data,
+            issuer=issuer,
+            idempotency_key=idempotency_key_for(AttestationKind.FULFILLED, data),
         )
 
     def list(

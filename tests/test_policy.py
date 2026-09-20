@@ -4,7 +4,15 @@ from pathlib import Path
 
 from rail.gates import GateResult, GateSpec, Stage, run_gate, run_gates
 from rail.model import Tier
-from rail.policy import GATE_DEFAULTS, applicable_stages, declared_tier, effective, stages_for
+from rail.policy import (
+    GATE_DEFAULTS,
+    applicable_stages,
+    declared_tier,
+    effective,
+    parameter,
+    stages_for,
+)
+from tests.helpers import write_manifest
 
 MINIMAL = "rail: 1\nproject: red-probe\nbrain_key: red-probe\ntier: dev\nstack: python\n"
 
@@ -105,3 +113,46 @@ def test_run_gates_filters_by_stage(tmp_path: Path) -> None:
         "receipts",
         "mirrors",
     ]
+
+
+def test_deploy_and_observe_defaults_are_versioned_here() -> None:
+    assert GATE_DEFAULTS["deploy.ssh_host"] == "red-vps"
+    assert GATE_DEFAULTS["deploy.stack_root"] == "/opt"
+    assert GATE_DEFAULTS["deploy.traefik_network"] == "pls_project_default"
+    assert GATE_DEFAULTS["deploy.cert_resolver"] == "letsencrypt"
+    assert GATE_DEFAULTS["deploy.image_repository"] == "ghcr.io/hawkixs/{project}"
+    assert GATE_DEFAULTS["deploy.platform"] == "linux/amd64"
+    assert GATE_DEFAULTS["deploy.healthcheck_timeout_seconds"] == 120
+    assert GATE_DEFAULTS["deploy.compose_path"] == "deploy/compose.yaml"
+    assert GATE_DEFAULTS["deploy.remote_timeout_seconds"] == 900
+    assert GATE_DEFAULTS["observe.monitor_url"] == "http://10.100.0.2:8081"
+    assert GATE_DEFAULTS["observe.monitor_agent"] == "vps"
+
+
+def test_parameter_expands_the_project_and_honours_a_declared_override(tmp_path: Path) -> None:
+    write_manifest(tmp_path, project="red-probe", tier="prod", deploy=True)
+    assert parameter(tmp_path, "deploy.image_repository", project="red-probe") == (
+        "ghcr.io/hawkixs/red-probe"
+    )
+    assert parameter(tmp_path, "deploy.healthcheck_timeout_seconds") == 120
+    write_manifest(
+        tmp_path,
+        project="red-probe",
+        tier="prod",
+        deploy=True,
+        gates={"deploy.image_repository": ("registry.example.invalid/{project}", "legacy")},
+    )
+    assert parameter(tmp_path, "deploy.image_repository", project="red-probe") == (
+        "registry.example.invalid/red-probe"
+    )
+    assert effective(tmp_path, "deploy.image_repository")[1] == "legacy"
+    write_manifest(
+        tmp_path,
+        project="red-probe",
+        tier="prod",
+        deploy=True,
+        gates={"deploy.image_repository": ("registry.example.invalid/{oops}/{project}", "stray")},
+    )
+    assert parameter(tmp_path, "deploy.image_repository", project="red-probe") == (
+        "registry.example.invalid/{oops}/red-probe"
+    )

@@ -74,6 +74,7 @@ def test_run_gates_returns_one_result_per_gate_and_never_raises(
         "integrate.receipt",
         "release.released",
         "deploy.deployed",
+        "observe.visible",
         "observe.drill",
         "learn.fulfilled",
     ]
@@ -131,3 +132,26 @@ def test_ledger_gates_are_skipped_in_ci_only_with_the_brain_ledger(tmp_path: Pat
     assert skipped.passed and skipped.skipped == "ledger"
     assert "unreachable from CI" in skipped.details
     assert run_gate(spec, repo, ci=False).details == "ran"
+
+
+def test_a_missing_manifest_is_named_the_same_way_everywhere(tmp_path: Path) -> None:
+    """One fact, one wording (found by the red-arena session on 2026-09-20): a repository
+    without rail.yaml hears "is missing" and the way out from every gate, never "unreadable"."""
+    from rail.gates import build, evidence, hygiene, intent
+    from rail.model import MISSING_HINT, manifest_problem
+
+    assert manifest_problem(tmp_path) == MISSING_HINT and "rail new" in MISSING_HINT
+    gates = (
+        hygiene.rail_config,
+        hygiene.mirrors,
+        intent.contract,
+        build.has_tests,
+        evidence.visible,
+    )
+    for gate in gates:
+        result = gate(tmp_path)
+        assert not result.passed and "is missing" in result.details, result
+        assert "unreadable" not in result.details, result
+    (tmp_path / "rail.yaml").write_text("rail: 1\nproject: nope\n")
+    assert manifest_problem(tmp_path).startswith("rail.yaml is invalid: ")
+    assert "is invalid" in intent.contract(tmp_path).details

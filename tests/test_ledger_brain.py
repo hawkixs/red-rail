@@ -22,7 +22,7 @@ from rail.ledger import (
     open_ledger,
 )
 from rail.ledger.brain import KNOWN_REFUSALS, BrainLedger, record_from_row
-from rail.ledger.file import load_receipt
+from rail.ledger.file import load_receipt, receipt_filename
 from tests.fake_brain import FakeBrain
 from tests.helpers import conforming_tree, write_manifest
 from tests.ledger_contract import LedgerContract
@@ -61,12 +61,15 @@ class TestBrainLedgerContract(LedgerContract):
     delivery workflow, because brain refuses an attestation before any contract."""
 
     def make_ledger(self, tmp_path: Path) -> Ledger:
-        ledger, brain, _ = _ledger(tmp_path)
+        ledger, self.brain, self.ticket = _ledger(tmp_path)
         ledger.contract_set(
             "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
         )
         # `test_contract_set_and_bind_are_records_of_their_kind` sets a second revision: fine.
         return _OtherProjectsAreEmpty(ledger)
+
+    def integrate(self, ledger: Ledger, tmp_path: Path) -> None:
+        self.brain.integrate(self.ticket, "a" * 40, issued_at=T0)
 
     # The four overrides below adapt assertions that assume a ledger starts empty, or that
     # a fresh milestone kind can be attested directly — both false for a brain-backed ledger
@@ -453,9 +456,9 @@ def test_server_enriched_fields_do_not_defeat_content_idempotency(tmp_path: Path
     assert again == first and len(brain.tickets[ticket].revisions) == 1
 
 
-def test_attestations_are_listed_in_the_ticket_scope(tmp_path: Path) -> None:
-    """Minor finding of the independent reviewer (PR #3, eighth pass): let the server restrict
-    the list to the ticket instead of filtering rows client-side."""
+def test_attestations_are_listed_in_the_issuer_scope(tmp_path: Path) -> None:
+    """A project's attestations span its tickets (`test_the_ledger_of_a_project_spans_its_tickets`
+    below): the server is asked in the issuer scope, not restricted to one ticket."""
     ledger, brain, ticket = _ledger(tmp_path)
     ledger.contract_set(
         "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
@@ -466,4 +469,57 @@ def test_attestations_are_listed_in_the_ticket_scope(tmp_path: Path) -> None:
     brain.calls.clear()
     assert len(ledger.list("red-probe", attestation=AttestationKind.DEPLOYED)) == 1
     listing = [c for c in brain.calls if c[0] == "brain_delivery_attestation_list"]
-    assert listing and listing[0][1].get("ticket_id") == ticket
+    assert listing and listing[0][1].get("ticket_id") is None
+
+
+def test_accept_calls_brain_as_the_requester_and_mirrors_the_receipt(tmp_path: Path) -> None:
+    ledger, brain, ticket = _ledger(tmp_path)
+    ledger.contract_set("red-probe", CONTRACT, reason="r", issuer="red", idempotency_key="c1")
+    with pytest.raises(LedgerError, match="not integrated"):
+        ledger.accept("red-probe", rationale="too early", issuer="op")
+    brain.integrate(ticket, "b" * 40, issued_at=T0 + timedelta(hours=1))
+    record = ledger.accept("red-probe", rationale="the probe answers", issuer="red-root")
+    call = next(a for n, a in brain.calls if n == "brain_delivery_accept")
+    assert call["ticket_id"] == ticket
+    assert brain.tickets[ticket].fulfillment_receipt is not None
+    assert brain.tickets[ticket].fulfillment_receipt["explicit_acceptance"] == {
+        "requester_project": "red",
+        "rationale": "the probe answers",
+    }
+    assert record.attestation is AttestationKind.FULFILLED and record.issuer == "brain-v42"
+    assert record.data["sha"] == "b" * 40 and record.data["rationale"] == "the probe answers"
+    mirror = load_receipt(tmp_path / RECEIPTS_DIR / receipt_filename(record))
+    assert mirror.digest == record.digest
+    # idempotent: a second acceptance returns the same receipt, no second mirror
+    again = ledger.accept("red-probe", rationale="the probe answers", issuer="red-root")
+    assert again.digest == record.digest
+
+
+def test_the_ledger_of_a_project_spans_its_tickets(tmp_path: Path) -> None:
+    """One ticket per delivery, one ledger per project: attestations of an earlier ticket
+    (phase 2) stay visible when the manifest moves to the next one (phase 3)."""
+    ledger, brain, ticket = _ledger(tmp_path)
+    ledger.contract_set("red-probe", CONTRACT, reason="r", issuer="red", idempotency_key="c1")
+    ledger.attest(
+        "red-probe",
+        AttestationKind.RELEASED,
+        {"version": "0.1.0", "sha": "c" * 40, "digest": "sha256:c"},
+        issuer="op",
+        idempotency_key="released:0.1.0",
+    )
+    later = brain.add_ticket("red", "red-probe")
+    moved = BrainLedger(
+        ledger.client,
+        ticket=later,
+        project="red-probe",
+        receipts_dir=tmp_path / RECEIPTS_DIR,
+        clock=_clock(T0 + timedelta(days=1)),
+        repository_id=lambda slug: 4242,
+    )
+    moved.contract_set("red-probe", CONTRACT, reason="phase 3", issuer="red", idempotency_key="c2")
+    versions = [
+        r.data["version"] for r in moved.list("red-probe", attestation=AttestationKind.RELEASED)
+    ]
+    assert versions == ["0.1.0"]
+    call = next(a for n, a in brain.calls if n == "brain_delivery_attestation_list")
+    assert call["ticket_id"] is None

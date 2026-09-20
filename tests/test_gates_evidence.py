@@ -3,11 +3,23 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from rail import gitrepo
+import pytest
+
+from rail import gitrepo, monitor
 from rail.gates import Stage
-from rail.gates.evidence import GATES, deployed, drill, fulfilled, integrated, released, verdict
+from rail.gates.evidence import (
+    GATES,
+    deployed,
+    drill,
+    fulfilled,
+    integrated,
+    released,
+    verdict,
+    visible,
+)
 from rail.ledger import RECEIPTS_DIR, AttestationKind
 from rail.ledger.file import FileLedger
+from rail.monitor import AgentView, Container
 from tests.helpers import commit_all, conforming_tree
 
 T0 = datetime(2026, 9, 15, 8, 0, tzinfo=UTC)
@@ -30,6 +42,7 @@ def test_registry_covers_stages_5_to_10() -> None:
         (Stage.INTEGRATE, "receipt"),
         (Stage.RELEASE, "released"),
         (Stage.DEPLOY, "deployed"),
+        (Stage.OBSERVE, "visible"),
         (Stage.OBSERVE, "drill"),
         (Stage.LEARN, "fulfilled"),
     ]
@@ -37,7 +50,7 @@ def test_registry_covers_stages_5_to_10() -> None:
 
 def test_every_gate_fails_explicitly_without_evidence(tmp_path: Path) -> None:
     repo = conforming_tree(tmp_path, "red-beta", "prod")
-    for gate in (verdict, integrated, released, deployed, drill, fulfilled):
+    for gate in (verdict, integrated, released, deployed, visible, drill, fulfilled):
         result = gate(repo)
         assert not result.passed and "no " in result.details, result
     assert "rail.yaml" in verdict(tmp_path).details
@@ -193,5 +206,102 @@ def test_reviewer_identity_is_a_declared_exception_like_any_default(tmp_path: Pa
     assert verdict(repo).passed
 
 
-def test_every_evidence_gate_is_ledger_scoped() -> None:
-    assert {g.scope for g in GATES} == {"ledger"}
+def test_every_evidence_gate_is_ledger_scoped_except_the_live_check() -> None:
+    assert {g.scope for g in GATES if g.code != "visible"} == {"ledger"}
+    assert next(g for g in GATES if g.code == "visible").scope == "workstation"
+
+
+def _agent(*containers: Container, status: str = "up") -> AgentView:
+    return AgentView(agent="vps", status=status, last_seen=T0, containers=containers)
+
+
+def _probe(image: str, state: str = "running") -> Container:
+    return Container(name="red-beta-app-1", stack="red-beta", image=image, state=state, health="")
+
+
+def test_visible_needs_a_running_container_of_the_stack_with_the_deployed_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = conforming_tree(tmp_path, "red-beta", "prod")
+    head = gitrepo.head_sha(repo)
+    assert "no deployed" in visible(repo).details and not visible(repo).passed
+    ledger = _ledger(repo)
+    _attest(
+        ledger,
+        AttestationKind.DEPLOYED,
+        "d1",
+        sha=head,
+        digest="sha256:" + "a" * 64,
+        target="vps-traefik",
+    )
+    seen: list[tuple[str, str]] = []
+
+    def fake_read(base_url: str, agent: str, **kwargs: object) -> AgentView:
+        seen.append((base_url, agent))
+        return fake_read.view  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(monitor, "read_agent", fake_read)
+    fake_read.view = _agent()  # type: ignore[attr-defined]
+    result = visible(repo)
+    assert not result.passed and "no running container of stack red-beta" in result.details
+    assert seen[-1] == ("http://10.100.0.2:8081", "vps")
+    fake_read.view = _agent(_probe("ghcr.io/hawkixs/red-beta@sha256:" + "b" * 64))  # type: ignore[attr-defined]
+    result = visible(repo)
+    assert not result.passed and "ledger says sha256:" + "a" * 64 in result.details
+    fake_read.view = _agent(_probe("ghcr.io/hawkixs/red-beta@sha256:" + "a" * 64))  # type: ignore[attr-defined]
+    result = visible(repo)
+    assert result.passed and "digest sha256:" + "a" * 64 + " confirmed" in result.details
+    fake_read.view = _agent(_probe("red-beta:dev"))  # type: ignore[attr-defined]
+    result = visible(repo)
+    assert result.passed and "digest not reported" in result.details
+    fake_read.view = _agent(_probe("red-beta:dev"), status="down")  # type: ignore[attr-defined]
+    assert not visible(repo).passed and "agent vps is down" in visible(repo).details
+
+    def broken(base_url: str, agent: str, **kwargs: object) -> AgentView:
+        raise monitor.MonitorError("HTTP 503")
+
+    monkeypatch.setattr(monitor, "read_agent", broken)
+    assert "red-monitor: HTTP 503" in visible(repo).details
+
+
+def test_drill_and_fulfilled_anchor_on_the_newest_release_deployment(tmp_path: Path) -> None:
+    """A drill's roll-forward (`mode: drill`) and a rollback are not new deliveries: the drill
+    that followed the last release still counts, and an acceptance before them still holds."""
+    repo = conforming_tree(tmp_path, "red-beta", "prod")
+    head = gitrepo.head_sha(repo)
+    ledger = _ledger(repo)
+    _attest(ledger, AttestationKind.RELEASED, "r1", sha=head, version="1.0.0", digest="sha256:b")
+    _attest(ledger, AttestationKind.DEPLOYED, "d1", sha=head, digest="sha256:b", target="t")
+    _attest(ledger, AttestationKind.FULFILLED, "f1", sha=head)
+    _attest(ledger, AttestationKind.INCIDENT_DETECTED, "i1", drill=True, digest="sha256:b")
+    _attest(ledger, AttestationKind.ROLLED_BACK, "rb1", drill=True, from_digest="sha256:b")
+    _attest(ledger, AttestationKind.RESTORED, "rs1", drill=True, digest="sha256:a")
+    _attest(
+        ledger,
+        AttestationKind.DEPLOYED,
+        "d2",
+        sha=head,
+        digest="sha256:b",
+        target="t",
+        mode="drill",
+    )
+    assert drill(repo).passed, drill(repo).details
+    assert fulfilled(repo).passed, fulfilled(repo).details
+    assert deployed(repo).passed, deployed(repo).details
+    _attest(ledger, AttestationKind.DEPLOYED, "d3", sha=head, digest="sha256:c", target="t")
+    assert not drill(repo).passed and not fulfilled(repo).passed
+    assert not deployed(repo).passed and "differs from released" in deployed(repo).details
+
+
+def test_visible_names_a_deployed_record_without_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = conforming_tree(tmp_path, "red-beta", "prod")
+    _attest(_ledger(repo), AttestationKind.DEPLOYED, "d1", sha=gitrepo.head_sha(repo), target="t")
+    monkeypatch.setattr(
+        monitor,
+        "read_agent",
+        lambda base_url, agent, **kwargs: _agent(_probe("ghcr.io/x/red-beta@sha256:" + "b" * 64)),
+    )
+    result = visible(repo)
+    assert not result.passed and "carries no digest" in result.details

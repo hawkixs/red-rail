@@ -1,7 +1,8 @@
 """Stages 5–10 read evidence from the ledger. A gate passes when the newest matching
 attestation is on HEAD's history; the distance in commits is reported so drift is
-measured. Phase 3 adds the live checks (`/version`, red-monitor); phase 1 checks the
-evidence chain itself."""
+measured. Phase 3 adds the live check through red-monitor (`observe.visible`, spec §6
+step 8) and re-anchors `drill`/`fulfilled` on the newest release deployment, not a
+rollback or a drill's roll-forward; phase 1 checks the evidence chain itself."""
 
 from __future__ import annotations
 
@@ -10,10 +11,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from rail import gitrepo
+from rail import gitrepo, monitor
 from rail.gates import GateResult, GateSpec, Stage
 from rail.ledger import AttestationKind, LedgerError, Record, open_ledger
-from rail.model import MANIFEST_NAME, load_rail_config
+from rail.model import MANIFEST_NAME, load_rail_config, manifest_problem, try_load_rail_config
 
 
 def _attestations(repo: Path, kind: AttestationKind) -> list[Record] | str:
@@ -22,7 +23,7 @@ def _attestations(repo: Path, kind: AttestationKind) -> list[Record] | str:
         cfg = load_rail_config(repo)
         return open_ledger(repo).list(cfg.project, attestation=kind)
     except (FileNotFoundError, ValidationError):
-        return f"{MANIFEST_NAME} unreadable"
+        return manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
     except LedgerError as exc:
         return str(exc)
 
@@ -103,6 +104,16 @@ def _newest(repo: Path, kind: AttestationKind) -> Record | None | str:
     return records[-1] if records else None
 
 
+def _newest_release_deploy(repo: Path) -> Record | None | str:
+    """The newest `deployed` that is a delivery: a rollback or a drill's roll-forward names the
+    live digest but is not a new release (`mode` conventions in `rail.ledger`)."""
+    records = _attestations(repo, AttestationKind.DEPLOYED)
+    if isinstance(records, str):
+        return records
+    releases = [r for r in records if (r.data.get("mode") or "release") == "release"]
+    return releases[-1] if releases else None
+
+
 def deployed(repo: Path) -> GateResult:
     release = _newest(repo, AttestationKind.RELEASED)
     if isinstance(release, str):
@@ -131,8 +142,68 @@ def deployed(repo: Path) -> GateResult:
     return GateResult(Stage.DEPLOY, "deployed", True, f"deployed {expected} ({deploy.digest[:19]})")
 
 
-def drill(repo: Path) -> GateResult:
+def visible(repo: Path) -> GateResult:
+    """red-monitor sees the stack on the target's agent (spec §6 step 8); when the image
+    reference is digest-pinned it must be the digest the ledger says is live."""
+    from rail.policy import parameter
+
+    cfg = try_load_rail_config(repo)
+    if cfg is None:
+        return GateResult(
+            Stage.OBSERVE, "visible", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
+        )
     deploy = _newest(repo, AttestationKind.DEPLOYED)
+    if isinstance(deploy, str):
+        return GateResult(Stage.OBSERVE, "visible", False, deploy)
+    if deploy is None:
+        return GateResult(Stage.OBSERVE, "visible", False, "no deployed attestation to observe")
+    url = str(parameter(repo, "observe.monitor_url"))
+    agent = str(parameter(repo, "observe.monitor_agent"))
+    try:
+        view = monitor.read_agent(url, agent)
+    except monitor.MonitorError as exc:
+        return GateResult(Stage.OBSERVE, "visible", False, f"red-monitor: {exc}")
+    if view.status != "up":
+        return GateResult(
+            Stage.OBSERVE, "visible", False, f"agent {agent} is {view.status or 'unknown'}"
+        )
+    running = [c for c in monitor.stack_containers(view, cfg.project) if c.state == "running"]
+    if not running:
+        return GateResult(
+            Stage.OBSERVE,
+            "visible",
+            False,
+            f"no running container of stack {cfg.project} on agent {agent}",
+        )
+    expected = str(deploy.data.get("digest") or "")
+    if not expected:
+        return GateResult(
+            Stage.OBSERVE,
+            "visible",
+            False,
+            "the deployed attestation carries no digest to compare with the running image",
+        )
+    seen = {d for d in (monitor.image_digest(c.image) for c in running) if d}
+    if seen and expected not in seen:
+        return GateResult(
+            Stage.OBSERVE,
+            "visible",
+            False,
+            f"red-monitor sees {', '.join(sorted(seen))} on {agent}, ledger says {expected}",
+        )
+    digest = (
+        f"image digest {expected} confirmed" if expected in seen else "image digest not reported"
+    )
+    return GateResult(
+        Stage.OBSERVE,
+        "visible",
+        True,
+        f"{len(running)} running container(s) of {cfg.project} on {agent}, {digest}",
+    )
+
+
+def drill(repo: Path) -> GateResult:
+    deploy = _newest_release_deploy(repo)
     if isinstance(deploy, str):
         return GateResult(Stage.OBSERVE, "drill", False, deploy)
     if deploy is None:
@@ -159,7 +230,7 @@ def drill(repo: Path) -> GateResult:
 
 
 def fulfilled(repo: Path) -> GateResult:
-    deploy = _newest(repo, AttestationKind.DEPLOYED)
+    deploy = _newest_release_deploy(repo)
     if isinstance(deploy, str):
         return GateResult(Stage.LEARN, "fulfilled", False, deploy)
     done = _newest(repo, AttestationKind.FULFILLED)
@@ -177,6 +248,7 @@ GATES = [
     GateSpec(Stage.INTEGRATE, "receipt", integrated, scope="ledger"),
     GateSpec(Stage.RELEASE, "released", released, scope="ledger"),
     GateSpec(Stage.DEPLOY, "deployed", deployed, scope="ledger"),
+    GateSpec(Stage.OBSERVE, "visible", visible, scope="workstation"),
     GateSpec(Stage.OBSERVE, "drill", drill, scope="ledger"),
     GateSpec(Stage.LEARN, "fulfilled", fulfilled, scope="ledger"),
 ]

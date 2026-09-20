@@ -5,7 +5,8 @@ Mapping (decided with brain-v42 on 2026-09-18, decision 4e7c2545): one subject p
 ticket — `project` is the ticket's `to_project` and the `actor_project` of every call;
 `issuer` is the `X-Brain-Agent` label; `recorded_at` is `emitted_at`; `data` is the payload.
 Milestones (`integrated`, `fulfilled`) are receipts brain issues and are read from the
-ticket, never attested from here.
+ticket, never attested from here. Stage 10 is `accept`, the requester's call; a project's
+attestations are listed across its tickets.
 """
 
 from __future__ import annotations
@@ -224,6 +225,31 @@ class BrainLedger:
             raise LedgerError("brain stored a different payload digest than the mirror's")
         return record
 
+    def accept(
+        self, project: str, *, rationale: str, issuer: str, sha: str | None = None
+    ) -> Record:
+        """`brain_delivery_accept` as the requester, against the exact integration evidence
+        the view shows (revision, attempt, delivery digest); the fulfilment receipt brain
+        returns is mirrored like the other milestone. `sha` is brain's, never the caller's."""
+        self._same(project)
+        view = self._view(required=True)
+        receipt = view.get("integration_receipt")
+        if not receipt:
+            raise LedgerError("no integration receipt to accept: the delivery is not integrated")
+        row = self._call_checked(
+            "brain_delivery_accept",
+            {
+                "ticket_id": str(self.ticket),
+                "actor_project": self.requester,
+                "rationale": rationale,
+                "expected_revision": int(receipt["contract_revision"]),
+                "expected_attempt": int(receipt["attempt"]),
+                "expected_delivery_digest": str(view["assessment"]["delivery_digest"]),
+            },
+            agent=issuer,
+        )
+        return self.mirrors.mirror(self._milestone_record(row, AttestationKind.FULFILLED))
+
     def list(
         self,
         project: str,
@@ -347,12 +373,14 @@ class BrainLedger:
         return records
 
     def _attestation_records(self, attestation: AttestationKind | None) -> list[Record]:
+        """The project's facts across its tickets: issuer scope, not restricted to one
+        ticket — one ticket per delivery, one ledger per project — mirrors, metrics and
+        evidence survive a ticket change; milestones stay the manifest ticket's."""
         records: list[Record] = []
         cursor: str | None = None
         while True:
             arguments: dict[str, Any] = {
                 "actor_project": self.project,
-                "ticket_id": str(self.ticket),  # the ticket scope: the server restricts
                 "issuer_project": self.project,
                 "limit": PAGE,
                 "cursor": cursor,
@@ -364,14 +392,36 @@ class BrainLedger:
             except (BrainToolError, BrainUnreachable) as exc:
                 raise LedgerError(f"brain_delivery_attestation_list: {exc}") from exc
             for row in page.get("items", []):
-                if str(row.get("ticket_id")) != str(self.ticket):
-                    continue
                 record = record_from_row(self.project, row)
                 if record is not None:
                     records.append(record)
             cursor = page.get("next_cursor")
             if not cursor:
                 return records
+
+    def _milestone_record(self, receipt: dict[str, Any], kind: AttestationKind) -> Record:
+        proofs = (receipt.get("proof") or {}).get("artifact_proofs") or []
+        sha = str((proofs[0].get("integration_sha") if proofs else "") or "")
+        return Record.build(
+            kind=RecordKind.ATTESTATION,
+            project=self.project,
+            issuer=MILESTONE_ISSUER,
+            idempotency_key=f"{kind.value}:{sha or receipt['id']}",
+            payload={
+                "kind": kind.value,
+                "data": {
+                    "sha": sha,
+                    "receipt_id": str(receipt["id"]),
+                    "delivery_digest": str(receipt.get("delivery_digest") or ""),
+                    **(
+                        {"rationale": str(acceptance.get("rationale") or "")}
+                        if (acceptance := receipt.get("explicit_acceptance"))
+                        else {}
+                    ),
+                },
+            },
+            recorded_at=_instant(receipt["issued_at"]),
+        )
 
     def _milestone_records(
         self, view: dict[str, Any], attestation: AttestationKind | None
@@ -384,25 +434,7 @@ class BrainLedger:
             receipt = view.get(key)
             if not receipt or (attestation is not None and attestation is not kind):
                 continue
-            proofs = (receipt.get("proof") or {}).get("artifact_proofs") or []
-            sha = str((proofs[0].get("integration_sha") if proofs else "") or "")
-            records.append(
-                Record.build(
-                    kind=RecordKind.ATTESTATION,
-                    project=self.project,
-                    issuer=MILESTONE_ISSUER,
-                    idempotency_key=f"{kind.value}:{sha or receipt['id']}",
-                    payload={
-                        "kind": kind.value,
-                        "data": {
-                            "sha": sha,
-                            "receipt_id": str(receipt["id"]),
-                            "delivery_digest": str(receipt.get("delivery_digest") or ""),
-                        },
-                    },
-                    recorded_at=_instant(receipt["issued_at"]),
-                )
-            )
+            records.append(self._milestone_record(receipt, kind))
         return records
 
 
