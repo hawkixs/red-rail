@@ -28,7 +28,12 @@ def command(repo: Path, rationale: str, issuer: str, as_json: bool) -> None:
         ledger = open_ledger(repo)
         # stage 10 follows stage 6 on both ledgers: brain refuses without its integration
         # receipt; the file ledger holds the operator to the same rule (red-arena, 2026-09-20)
-        if not ledger.list(project, attestation=AttestationKind.INTEGRATED):
+        integrated = [
+            r
+            for r in ledger.list(project, attestation=AttestationKind.INTEGRATED)
+            if r.data.get("sha") and gitrepo.is_ancestor(repo, str(r.data["sha"]))
+        ]
+        if not integrated:
             raise LedgerError(
                 "no integration evidence on HEAD's history to accept: the delivery is not "
                 "integrated (brain observes the merge; on the file ledger, `rail attest "

@@ -487,7 +487,7 @@ def test_accept_calls_brain_as_the_requester_and_mirrors_the_receipt(tmp_path: P
         "rationale": "the probe answers",
     }
     assert record.attestation is AttestationKind.FULFILLED and record.issuer == "brain-v42"
-    assert record.data["sha"] == "b" * 40
+    assert record.data["sha"] == "b" * 40 and record.data["rationale"] == "the probe answers"
     mirror = load_receipt(tmp_path / RECEIPTS_DIR / receipt_filename(record))
     assert mirror.digest == record.digest
     # idempotent: a second acceptance returns the same receipt, no second mirror

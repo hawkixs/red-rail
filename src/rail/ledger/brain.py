@@ -413,6 +413,11 @@ class BrainLedger:
                     "sha": sha,
                     "receipt_id": str(receipt["id"]),
                     "delivery_digest": str(receipt.get("delivery_digest") or ""),
+                    **(
+                        {"rationale": str(acceptance.get("rationale") or "")}
+                        if (acceptance := receipt.get("explicit_acceptance"))
+                        else {}
+                    ),
                 },
             },
             recorded_at=_instant(receipt["issued_at"]),

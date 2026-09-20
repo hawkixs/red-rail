@@ -7,6 +7,7 @@ from pathlib import Path
 
 import click
 
+from rail.ledger import LedgerError
 from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.policy import stages_for
 from rail.remotes import RemoteError
@@ -110,6 +111,14 @@ def command(
         raise SystemExit(1) from exc
     except RemoteError as exc:
         click.echo(f"error: {exc}\nthe local tree is intact under {project.dest}", err=True)
+        raise SystemExit(1) from exc
+    except LedgerError as exc:
+        # brain mode records the contract after the remotes: the tree and the remotes exist
+        click.echo(
+            f"error: {exc}\nthe tree under {project.dest} and its remotes are in place; record "
+            "the contract with `rail contract set` once the ledger answers",
+            err=True,
+        )
         raise SystemExit(1) from exc
     click.echo(f"created {project.dest}")
     for r in results:

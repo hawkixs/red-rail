@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step
-from rail.ledger import AttestationKind, Ledger, Record, Unattested, idempotency_key_for
+from rail.ledger import (
+    AttestationKind,
+    Ledger,
+    LedgerError,
+    Record,
+    Unattested,
+    idempotency_key_for,
+)
 from rail.model import DeployTarget, RailConfig
 
 
@@ -43,6 +50,7 @@ class Attester:
     issuer: str
     records: list[Record] = field(default_factory=list)
     unattested: list[Unattested] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)  # a refusal that left no mirror
     _floor: datetime | None = field(default=None, init=False, repr=False)
 
     def _emitted_at(self) -> datetime:
@@ -74,6 +82,8 @@ class Attester:
             )
         except Unattested as exc:
             self.unattested.append(exc)
+        except LedgerError as exc:
+            self.failures.append(f"{kind.value}: {exc}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,12 +93,14 @@ class Outcome:
     unattested: tuple[Unattested, ...]
     failed: str | None = None  # the forward deployment failed and was rolled back
     recovery_seconds: int | None = None
+    ledger_failures: tuple[str, ...] = ()  # refusals that left no mirror (exit 2, like unattested)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "live": None if self.live is None else asdict(self.live),
             "records": [r.model_dump(mode="json") for r in self.records],
             "unattested": [str(u.receipt) for u in self.unattested],
+            "ledger_failures": list(self.ledger_failures),
             "failed": self.failed,
             "recovery_seconds": self.recovery_seconds,
         }
@@ -173,7 +185,11 @@ def forward(
         if previous is None:
             failure += " — nothing to roll back to"
             return Outcome(
-                None, tuple(attester.records), tuple(attester.unattested), failed=failure
+                None,
+                tuple(attester.records),
+                tuple(attester.unattested),
+                ledger_failures=tuple(attester.failures),
+                failed=failure,
             )
         try:
             target.apply(previous)
@@ -185,7 +201,11 @@ def forward(
         except DeployError as back:
             failure += f" — and the rollback to {previous.version} failed too: {back}"
             return Outcome(
-                None, tuple(attester.records), tuple(attester.unattested), failed=failure
+                None,
+                tuple(attester.records),
+                tuple(attester.unattested),
+                ledger_failures=tuple(attester.failures),
+                failed=failure,
             )
         failure += f" — rolled back to {previous.version}"
         attester.attest(
@@ -211,12 +231,23 @@ def forward(
                 "recovery_seconds": int(clock() - started),
             },
         )
-        return Outcome(None, tuple(attester.records), tuple(attester.unattested), failed=failure)
+        return Outcome(
+            None,
+            tuple(attester.records),
+            tuple(attester.unattested),
+            ledger_failures=tuple(attester.failures),
+            failed=failure,
+        )
     attester.attest(
         AttestationKind.DEPLOYED,
         deployed_data(artefact, mode="release", domain=target.domain, previous=previous),
     )
-    return Outcome(live, tuple(attester.records), tuple(attester.unattested))
+    return Outcome(
+        live,
+        tuple(attester.records),
+        tuple(attester.unattested),
+        ledger_failures=tuple(attester.failures),
+    )
 
 
 def rollback(
@@ -236,7 +267,29 @@ def rollback(
     if live is None or previous is None:
         raise DeployError("nothing to roll back to: the ledger names no earlier deployed artefact")
     started = clock()
-    restored = target.apply(previous)
+    try:
+        restored = target.apply(previous)
+    except Locked:
+        raise
+    except DeployError as exc:
+        # the previous artefact could not be put back: the live state is in doubt, and the
+        # ledger says so (pre-review of PR #6)
+        attester.attest(
+            AttestationKind.INCIDENT_DETECTED,
+            {
+                "drill": False,
+                "automatic": False,
+                "digest": live.digest,
+                "version": live.version,
+                "reason": f"rollback to {previous.version} failed: {exc}"[:1000],
+            },
+        )
+        return Outcome(
+            None,
+            tuple(attester.records),
+            tuple(attester.unattested),
+            failed=f"rollback to {previous.version} failed: {exc} — run `rail check observe`",
+        )
     attester.attest(
         AttestationKind.ROLLED_BACK,
         {
@@ -258,7 +311,11 @@ def rollback(
         {"drill": False, "digest": previous.digest, "recovery_seconds": seconds},
     )
     return Outcome(
-        restored, tuple(attester.records), tuple(attester.unattested), recovery_seconds=seconds
+        restored,
+        tuple(attester.records),
+        tuple(attester.unattested),
+        ledger_failures=tuple(attester.failures),
+        recovery_seconds=seconds,
     )
 
 
@@ -292,7 +349,20 @@ def drill(
             "reason": "drill",
         },
     )
-    target.apply(previous)
+    try:
+        target.apply(previous)
+    except Locked:
+        raise
+    except DeployError as exc:
+        # the drill's rollback failed before any switch: the live artefact stays, the drill's
+        # incident stays in the ledger with the failure named (pre-review of PR #6)
+        return Outcome(
+            None,
+            tuple(attester.records),
+            tuple(attester.unattested),
+            failed=f"drill aborted: rollback to {previous.version} failed: {exc} — the live "
+            f"artefact should still be {live.version}; run `rail check observe`",
+        )
     attester.attest(
         AttestationKind.ROLLED_BACK,
         {
@@ -329,5 +399,9 @@ def drill(
         deployed_data(live, mode="drill", domain=target.domain, previous=previous),
     )
     return Outcome(
-        forward_live, tuple(attester.records), tuple(attester.unattested), recovery_seconds=seconds
+        forward_live,
+        tuple(attester.records),
+        tuple(attester.unattested),
+        ledger_failures=tuple(attester.failures),
+        recovery_seconds=seconds,
     )

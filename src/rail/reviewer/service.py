@@ -135,7 +135,12 @@ def _delta(
 
 def _notes(pr: PullRequest, previous: Record, *, github: GitHubLike) -> str:
     check_id = previous.data.get("check_run_id")
-    earlier = github.check_run_text(pr.repository, int(check_id)) if check_id else ""
+    earlier = ""
+    if check_id:
+        try:
+            earlier = github.check_run_text(pr.repository, int(check_id))
+        except GitHubError:
+            earlier = ""  # a purged check run: the verdict stands, its text is gone
     return (
         f"This pull request was reviewed before at {previous.data.get('sha')} with the verdict "
         f"{previous.data.get('verdict')}. The earlier review said:\n"

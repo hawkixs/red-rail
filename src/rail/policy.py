@@ -80,6 +80,7 @@ GATE_DEFAULTS: dict[str, Any] = {
     "deploy.platform": "linux/amd64",
     "deploy.healthcheck_timeout_seconds": 120,  # the first deployment waits for its certificate
     "deploy.compose_path": "deploy/compose.yaml",  # in the project, read at the released commit
+    "deploy.remote_timeout_seconds": 900,  # the ssh session (pull + up --wait) is killed after
     # --- observe (spec §6 step 8): the red-monitor server and the agent watching the target ---
     "observe.monitor_url": "http://10.100.0.2:8081",
     "observe.monitor_agent": "vps",
@@ -118,5 +119,5 @@ def parameter(repo: Path, key: str, *, project: str | None = None) -> Any:
     default can name the project (`ghcr.io/hawkixs/{project}`)."""
     value, _ = effective(repo, key)
     if isinstance(value, str) and project is not None:
-        return value.format(project=project)
+        return value.replace("{project}", project)  # literal: a stray brace never raises
     return value

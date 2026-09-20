@@ -32,6 +32,7 @@ class Parameters:
     cert_resolver: str
     healthcheck_timeout: int
     compose_path: str
+    remote_timeout: int  # the whole remote phase: pull + up --wait + symlink
 
     @classmethod
     def read(cls, repo: Path) -> Parameters:
@@ -42,6 +43,7 @@ class Parameters:
             cert_resolver=str(parameter(repo, "deploy.cert_resolver")),
             healthcheck_timeout=int(parameter(repo, "deploy.healthcheck_timeout_seconds")),
             compose_path=str(parameter(repo, "deploy.compose_path")),
+            remote_timeout=int(parameter(repo, "deploy.remote_timeout_seconds")),
         )
 
 
@@ -169,8 +171,19 @@ class VpsTraefik:
         step = self.steps(artefact)[0]
         try:
             done = self._run(
-                list(step.argv), input=step.stdin, capture_output=True, text=True, check=False
+                list(step.argv),
+                input=step.stdin,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=self.params.remote_timeout,
             )
+        except subprocess.TimeoutExpired as exc:
+            # the lock lives in the ssh session: killing it releases the target
+            raise DeployError(
+                f"remote deployment of {artefact.version} timed out after "
+                f"{self.params.remote_timeout}s; the ssh session was killed and the lock released"
+            ) from exc
         except (FileNotFoundError, OSError) as exc:
             raise DeployError(f"ssh is not available on this host: {exc}") from exc
         if done.returncode == LOCKED:

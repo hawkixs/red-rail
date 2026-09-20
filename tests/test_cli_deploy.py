@@ -258,3 +258,55 @@ def test_a_lock_during_the_rollback_exits_3_after_the_incident(
     out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
     assert out.exit_code == 3 and "while rolling back 0.1.1" in out.output
     assert [k for k, _ in _kinds(repo)] == ["deployed", "incident_detected"]
+
+
+def test_a_failed_manual_rollback_records_an_incident(tmp_path: Path, target: FakeTarget) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"]
+        ).exit_code
+        == 0
+    )
+    assert runner.invoke(main, ["deploy", "--repo", str(repo), "--yes"]).exit_code == 0
+    target.broken.add(D1)
+    out = runner.invoke(main, ["deploy", "--repo", str(repo), "--rollback", "--yes"])
+    assert out.exit_code == 1 and "rollback to 0.1.0 failed" in out.output
+    kinds = _kinds(repo)
+    assert [k for k, _ in kinds][-1] == "incident_detected"
+    assert kinds[-1][1]["automatic"] is False and kinds[-1][1]["digest"] == D2
+
+
+def test_a_failed_drill_rollback_aborts_the_drill(tmp_path: Path, target: FakeTarget) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"]
+        ).exit_code
+        == 0
+    )
+    assert runner.invoke(main, ["deploy", "--repo", str(repo), "--yes"]).exit_code == 0
+    target.broken.add(D1)
+    out = runner.invoke(main, ["drill", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 1 and "drill aborted" in out.output
+    assert [k for k, _ in _kinds(repo)] == ["deployed", "deployed", "incident_detected"]
+
+
+def test_a_ledger_refusal_mid_sequence_exits_2(
+    tmp_path: Path, target: FakeTarget, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rail.ledger import IdempotencyConflict
+
+    repo = _repo(tmp_path, ("0.1.0", D1))
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+
+    def refusing(project, kind, data, **kwargs):
+        raise IdempotencyConflict("key reused")
+
+    monkeypatch.setattr(ledger, "attest", refusing)
+    monkeypatch.setattr("rail.commands.deploy.open_ledger", lambda repo: ledger)
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 2 and "the ledger refused deployed: key reused" in out.output
+    assert target.applied == [D1]

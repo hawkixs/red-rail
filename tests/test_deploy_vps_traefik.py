@@ -100,7 +100,7 @@ def test_remote_script_is_locked_and_carries_the_files() -> None:
         version="0.1.0", sha="c" * 40, digest=DIGEST, image=f"ghcr.io/hawkixs/red-probe@{DIGEST}"
     )
     params = Parameters(
-        "red-vps", "/opt", "pls_project_default", "letsencrypt", 120, "deploy/compose.yaml"
+        "red-vps", "/opt", "pls_project_default", "letsencrypt", 120, "deploy/compose.yaml", 900
     )
     env = env_file("red-probe", artefact, "probe.hawkixs.com", params)
     script = remote_script("red-probe", "0.1.0", COMPOSE, env, params)
@@ -221,3 +221,18 @@ def test_an_artefact_carries_only_characters_the_target_script_is_safe_with() ->
         }
         with pytest.raises(DeployError, match=f"artefact {field}"):
             Artefact(**kwargs)
+
+
+def test_a_remote_session_that_hangs_is_killed_and_reported(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    artefact = _artefact(repo)
+
+    def hanging(args, **kwargs):
+        if args[0] == "ssh":
+            assert kwargs.get("timeout") == 900
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return subprocess.run(args, **kwargs)
+
+    target = VpsTraefik(repo, load_rail_config(repo), run=hanging, http=FakeWeb(_live(artefact)))
+    with pytest.raises(DeployError, match="timed out after 900s"):
+        target.apply(artefact)

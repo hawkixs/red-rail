@@ -124,6 +124,7 @@ def test_deploy_and_observe_defaults_are_versioned_here() -> None:
     assert GATE_DEFAULTS["deploy.platform"] == "linux/amd64"
     assert GATE_DEFAULTS["deploy.healthcheck_timeout_seconds"] == 120
     assert GATE_DEFAULTS["deploy.compose_path"] == "deploy/compose.yaml"
+    assert GATE_DEFAULTS["deploy.remote_timeout_seconds"] == 900
     assert GATE_DEFAULTS["observe.monitor_url"] == "http://10.100.0.2:8081"
     assert GATE_DEFAULTS["observe.monitor_agent"] == "vps"
 
@@ -145,3 +146,13 @@ def test_parameter_expands_the_project_and_honours_a_declared_override(tmp_path:
         "registry.example.invalid/red-probe"
     )
     assert effective(tmp_path, "deploy.image_repository")[1] == "legacy"
+    write_manifest(
+        tmp_path,
+        project="red-probe",
+        tier="prod",
+        deploy=True,
+        gates={"deploy.image_repository": ("registry.example.invalid/{oops}/{project}", "stray")},
+    )
+    assert parameter(tmp_path, "deploy.image_repository", project="red-probe") == (
+        "registry.example.invalid/{oops}/red-probe"
+    )

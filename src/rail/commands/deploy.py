@@ -38,7 +38,9 @@ def report(outcome: flow.Outcome, as_json: bool) -> None:
             click.echo(f"error: {outcome.failed}", err=True)
     for unattested in outcome.unattested:
         click.echo(f"error: {unattested}", err=True)
-    if outcome.unattested:
+    for failure in outcome.ledger_failures:
+        click.echo(f"error: the ledger refused {failure}", err=True)
+    if outcome.unattested or outcome.ledger_failures:
         raise SystemExit(2)
     if outcome.failed:
         raise SystemExit(1)

@@ -69,7 +69,7 @@ def test_accept_on_the_brain_ledger_is_the_requesters_call(
     ledger.contract_set("red-probe", CONTRACT, reason="r", issuer="red", idempotency_key="c1")
     out = CliRunner().invoke(main, ["accept", "--repo", str(repo), "--rationale", "too early"])
     assert out.exit_code == 1 and "not integrated" in out.output
-    brain.integrate(ticket, "b" * 40, issued_at=T0)
+    brain.integrate(ticket, git(repo, "rev-parse", "HEAD"), issued_at=T0)
     out = CliRunner().invoke(
         main,
         [
@@ -83,7 +83,7 @@ def test_accept_on_the_brain_ledger_is_the_requesters_call(
         ],
     )
     assert out.exit_code == 0, out.output
-    assert out.output.startswith("fulfilled  fulfilled:" + "b" * 40)
+    assert out.output.startswith("fulfilled  fulfilled:" + git(repo, "rev-parse", "HEAD"))
     assert brain.tickets[ticket].fulfillment_receipt is not None
 
 
@@ -95,3 +95,17 @@ def test_accept_refuses_without_an_integration_on_history(tmp_path: Path) -> Non
     assert not FileLedger(repo / RECEIPTS_DIR).list(
         "red-alpha", attestation=AttestationKind.FULFILLED
     )
+
+
+def test_accept_refuses_an_integration_that_is_not_on_history(tmp_path: Path) -> None:
+    """A stale `integrated` record for another line of history is not HEAD's integration."""
+    repo = conforming_tree(tmp_path, "red-alpha", "prod")
+    FileLedger(repo / RECEIPTS_DIR).attest(
+        "red-alpha",
+        AttestationKind.INTEGRATED,
+        {"sha": "0" * 40},
+        issuer="op",
+        idempotency_key="i-stale",
+    )
+    out = CliRunner().invoke(main, ["accept", "--repo", str(repo), "--rationale", "stale"])
+    assert out.exit_code == 1 and "not integrated" in out.output
