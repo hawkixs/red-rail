@@ -19,7 +19,8 @@ machine.
 
 - The artefact is an OCI image on GHCR (`ghcr.io/hawkixs/<project>`), named by its manifest
   digest; `rail release` builds and pushes it from the host, the token on stdin, and tags
-  `v<version>` on both remotes. The `released` attestation is the only source `rail deploy`
+  `v<version>` on `origin` (and on a declared mirror — GitHub only since 2026-09-20, decision
+  `30acbbde`). The `released` attestation is the only source `rail deploy`
   reads.
 - `rail deploy` runs from the host with the operator's ssh: one bash script on stdin per
   phase, under `flock` on `/opt/<project>/.deploy.lock` (exit 75 → `rail deploy` exit 3).

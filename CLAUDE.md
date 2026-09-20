@@ -13,10 +13,10 @@ red-rail is delivered by its own rail (dogfooding): `rail.yaml` declares tier `d
 - **Brain MCP project key**: `red-rail` (group `red`)
 - **Parent project**: ReD v1 (`~/hawkixs_infra/git_repo/ReD_v1/CLAUDE.md` — roster, cross-project rules)
 
-GitHub is the only remote: ReD is GitHub only (decision `30acbbde`, 2026-09-20). The GitLab
-mirror this checkout still carries is history, not a target: no policy requires it, nothing pushes
-to it. A project that keeps a mirror declares its host (`gates: hygiene.mirror_host`) and the rail
-then requires, creates and pushes it.
+GitHub is the only remote that counts: ReD is GitHub only (decision `30acbbde`, 2026-09-20). The
+`gitlab` remote this checkout still carries is history, not a target: no policy requires it,
+nothing pushes to it. A project that keeps a mirror declares its host (`gates: hygiene.mirror_host`)
+and the rail then requires it and pushes release tags to it; `rail new` creates GitHub alone.
 
 ## Language
 
@@ -148,7 +148,8 @@ red-rail/
   follow the move to red-base and its registry stays on a home machine.
 - GitHub only (decision `30acbbde`, 2026-09-20): `hygiene.mirror_host` defaults to none, so
   `hygiene.remotes` wants GitHub alone, `rail new` creates GitHub alone and `rail release` pushes
-  the tag to `origin` alone — a declared mirror host turns the three back on for that project.
+  the tag to `origin` alone — a declared mirror host (matched exactly against the remotes' URLs)
+  makes the gate require it and the release push to it.
   `hawkixs/red-rail` is public (Apache-2.0) since the same day: every project's CI installs
   `rail` without a token.
 - Design spec: `docs/specs/2026-09-14-red-rail-design.md` (ten stages, three tiers,

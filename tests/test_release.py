@@ -167,6 +167,22 @@ def test_a_declared_mirror_without_its_remote_stops_the_preflight(tmp_path: Path
         preflight(repo, "0.1.0", ledger=FileLedger(repo / RECEIPTS_DIR), run=FakeHost())
 
 
+def test_the_mirror_remote_is_found_by_its_exact_host_whatever_its_name(tmp_path: Path) -> None:
+    """Pre-review finding on PR #9: a substring match would push the tag to a remote whose URL
+    merely contains the declared host (in its path, or as a longer hostname)."""
+    repo = _repo(tmp_path)
+    git(repo, "remote", "remove", "gitlab")
+    git(repo, "remote", "add", "a-decoy", "ssh://git@gitlab.hawkixs.local.example/red/x.git")
+    git(repo, "remote", "add", "b-decoy", "git@github.com:hawkixs/gitlab.hawkixs.local-tools.git")
+    _declare_mirror(repo)
+    with pytest.raises(ReleaseError, match="no remote points there"):
+        preflight(repo, "0.1.0", ledger=FileLedger(repo / RECEIPTS_DIR), run=FakeHost())
+    git(repo, "remote", "add", "mirror", "ssh://git@GitLab.hawkixs.local:2222/red/red-probe.git")
+    plan = preflight(repo, "0.1.0", ledger=FileLedger(repo / RECEIPTS_DIR), run=FakeHost())
+    assert plan.mirror_remote == "mirror"
+    assert "git push mirror refs/tags/v0.1.0" in plan.steps()
+
+
 def test_a_mirror_failure_after_github_says_what_not_to_do(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _declare_mirror(repo)

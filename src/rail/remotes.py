@@ -5,6 +5,7 @@ is declared, nowhere else."""
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from collections.abc import Callable
@@ -32,33 +33,51 @@ _ABSENT = re.compile(r"not found|could not resolve|404", re.IGNORECASE)
 
 
 def _run(
-    args: list[str], *, run: Runner, cwd: Path | None = None
+    args: list[str], *, run: Runner, cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     kwargs: dict[str, Any] = {"capture_output": True, "text": True, "check": False}
     if cwd is not None:
         kwargs["cwd"] = str(cwd)
+    if env is not None:
+        kwargs["env"] = env
     try:
         return run(args, **kwargs)
     except (FileNotFoundError, OSError) as exc:
         raise RemoteError(f"{args[0]} is not available on this host: {exc}") from exc
 
 
-def _ok(args: list[str], *, run: Runner, what: str, cwd: Path | None = None) -> str:
-    done = _run(args, run=run, cwd=cwd)
+def _ok(
+    args: list[str],
+    *,
+    run: Runner,
+    what: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+    done = _run(args, run=run, cwd=cwd, env=env)
     if done.returncode != 0:
         detail = (done.stderr or done.stdout).strip()
         raise RemoteError(f"{what} failed (exit {done.returncode}): {detail}")
     return done.stdout
 
 
+def _glab_env(mirror: str) -> dict[str, str]:
+    """`glab` targets the declared mirror host, not whatever host it was last logged into."""
+    return {**os.environ, "GITLAB_HOST": mirror}
+
+
 def ensure_absent(slug: str, *, mirror: str | None = None, run: Runner) -> None:
     """Every host must answer 'not found'. Any other failure (auth, network, rate limit) is
     not a free slug: it is a question the tool could not answer, and it stops here."""
-    questions = [(["gh", "repo", "view", f"{CANONICAL_OWNER}/{slug}"], "GitHub")]
+    questions: list[tuple[list[str], str, dict[str, str] | None]] = [
+        (["gh", "repo", "view", f"{CANONICAL_OWNER}/{slug}"], "GitHub", None)
+    ]
     if mirror:
-        questions.append((["glab", "repo", "view", f"{MIRROR_GROUP}/{slug}"], "GitLab"))
-    for args, where in questions:
-        done = _run(args, run=run)
+        questions.append(
+            (["glab", "repo", "view", f"{MIRROR_GROUP}/{slug}"], "GitLab", _glab_env(mirror))
+        )
+    for args, where, env in questions:
+        done = _run(args, run=run, env=env)
         if done.returncode == 0:
             raise RemoteError(f"{where} already has {slug}; pick another slug")
         detail = (done.stderr or done.stdout).strip()
@@ -84,7 +103,7 @@ def create_github(slug: str, description: str, *, run: Runner) -> None:
     )
 
 
-def create_gitlab(slug: str, description: str, *, run: Runner) -> None:
+def create_gitlab(slug: str, description: str, *, mirror: str, run: Runner) -> None:
     _ok(
         [
             "glab",
@@ -100,6 +119,7 @@ def create_gitlab(slug: str, description: str, *, run: Runner) -> None:
         ],
         run=run,
         what="glab repo create",
+        env=_glab_env(mirror),
     )
 
 
@@ -120,9 +140,9 @@ def configure(repo: Path, slug: str, *, mirror: str | None = None, run: Runner) 
     _ok(["git", "config", "remote.pushDefault", "origin"], run=run, cwd=repo, what="git config")
 
 
-def push(repo: Path, *, mirror: bool = False, run: Runner) -> None:
-    """`main` to GitHub, then to the mirror when there is one; a mirror failure after GitHub
-    succeeded is reported as what it is, never repaired by rewriting GitHub."""
+def push(repo: Path, *, mirror: str | None = None, run: Runner) -> None:
+    """`main` to GitHub, then to the declared mirror when there is one; a mirror failure after
+    GitHub succeeded is reported as what it is, never repaired by rewriting GitHub."""
     _ok(["git", "push", "-u", "origin", "main"], run=run, cwd=repo, what="git push origin main")
     if not mirror:
         return
@@ -170,9 +190,9 @@ def publish(
     ensure_absent(slug, mirror=mirror, run=run)
     create_github(slug, description, run=run)
     if mirror:
-        create_gitlab(slug, description, run=run)
+        create_gitlab(slug, description, mirror=mirror, run=run)
     configure(repo, slug, mirror=mirror, run=run)
-    push(repo, mirror=bool(mirror), run=run)
+    push(repo, mirror=mirror, run=run)
     if mirror and not parity(repo, run=run):
         raise RemoteError(
             "main differs between GitHub and GitLab after the push; compare `git ls-remote`"

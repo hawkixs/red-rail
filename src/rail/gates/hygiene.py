@@ -1,7 +1,8 @@
 """Hygiene gates: the floor every tier stands on, starting with `bootstrap`.
 
-`remotes` and `roster_entry` are workstation-scoped: they read the operator's clone (two
-remotes, the ReD root roster two directories up) and are reported as skipped under `--ci`.
+`remotes` and `roster_entry` are workstation-scoped: they read the operator's clone (the GitHub
+remote — a mirror only where the manifest declares one — and the ReD root roster two
+directories up) and are reported as skipped under `--ci`.
 """
 
 from __future__ import annotations
@@ -177,7 +178,8 @@ def remotes(repo: Path) -> GateResult:
         return GateResult(Stage.HYGIENE, "remotes", False, "not a git repository")
     urls = gitrepo.remotes(repo)
     wanted = [canonical] + ([mirror] if mirror else [])  # a mirror only where declared
-    missing = [host for host in wanted if not any(host in url for url in urls.values())]
+    hosts = {gitrepo.url_host(url) for url in urls.values()}
+    missing = [host for host in wanted if str(host).lower() not in hosts]
     if missing:
         names = ", ".join(sorted(urls)) or "none"
         return GateResult(

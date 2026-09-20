@@ -3,9 +3,12 @@ None / False / empty, and the gate turns that into an explicit failure."""
 
 from __future__ import annotations
 
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+
+_SCP_LIKE = re.compile(r"^(?:[^@/:]+@)?(?P<host>[^:/]+):(?!//).+$")  # git@host:path
 
 
 def _git(repo: Path, *args: str) -> str | None:
@@ -38,6 +41,19 @@ def distance(repo: Path, sha: str) -> int | None:
         return None
     count = _git(repo, "rev-list", "--count", f"{sha}..HEAD")
     return int(count) if count is not None else None
+
+
+def url_host(url: str) -> str:
+    """The host of a remote URL, lower-cased: `ssh://git@host:2222/path`, `git@host:path`,
+    `https://host/path`; a local path has none. Compared exactly, never as a substring."""
+    match = _SCP_LIKE.match(url) if "://" not in url else None
+    if match:
+        return match.group("host").lower()
+    if "://" in url:
+        authority = url.split("://", 1)[1].split("/", 1)[0]
+        host = authority.rsplit("@", 1)[-1].split(":", 1)[0]
+        return host.lower()
+    return ""
 
 
 def remotes(repo: Path) -> dict[str, str]:

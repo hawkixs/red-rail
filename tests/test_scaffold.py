@@ -95,6 +95,22 @@ def test_render_wraps_the_module_docstring_and_reads_the_version_from_the_instal
     smoke = (dest / "tests" / "test_smoke.py").read_text()
     assert "tomllib" in smoke and '["project"]["version"]' in smoke
     assert 'distribution("red-probe")' in smoke  # compared only where the package is installed
+    assert "assert __version__\n" in smoke  # the fallback is still asserted truthy
+    # a long slug must not push the version line past 100 characters either
+    long_slug = "red-a-project-whose-slug-is-forty-four-chars"
+    dest = render(_project(template_dir, tmp_path / long_slug, slug=long_slug, brain_key=long_slug))
+    module = (dest / "src" / long_slug.replace("-", "_") / "__init__.py").read_text()
+    assert max(len(line) for line in module.splitlines()) <= 100
+
+
+def test_a_description_that_would_break_the_rendered_files_is_refused(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """The description is spliced into a docstring and a TOML string: a double quote, a
+    backslash or a line break would break the module or pyproject — refused up front."""
+    for bad in ('Implements the "outbox" pattern', "a back\\slash", "two\nlines"):
+        with pytest.raises(ScaffoldError, match="description"):
+            _project(template_dir, tmp_path / "red-probe", description=bad)
 
 
 def test_render_go_prod_and_docs(template_dir: Path, tmp_path: Path) -> None:
@@ -118,6 +134,32 @@ def test_render_refuses_an_existing_destination(template_dir: Path, tmp_path: Pa
     (tmp_path / "red-probe").mkdir()
     with pytest.raises(ScaffoldError, match="already exists"):
         render(_project(template_dir, tmp_path / "red-probe"))
+
+
+def test_new_project_publishes_github_only(template_dir: Path, tmp_path: Path) -> None:
+    """The publish path of `rail new`: GitHub is asked, created and pushed; glab is never
+    called and no `gitlab` remote is added (decision 30acbbde)."""
+    calls: list[list[str]] = []
+
+    def run(args, **kwargs):
+        calls.append(list(args))
+        stdout = "not found" if args[:3] == ["gh", "repo", "view"] else ""
+        code = 1 if args[:3] == ["gh", "repo", "view"] else 0
+        return subprocess.CompletedProcess(args, code, stdout=stdout, stderr="not found")
+
+    project = _project(template_dir, tmp_path / "red-probe")
+    results = new_project(project, publish=True, clock=CLOCK, run=run)
+    assert all(r.passed for r in results)
+    assert [c[:3] for c in calls if c[0] in ("gh", "glab")] == [
+        ["gh", "repo", "view"],
+        ["gh", "repo", "create"],
+    ]
+    remote_adds = [c for c in calls if c[:3] == ["git", "remote", "add"]]
+    assert [c[3] for c in remote_adds] == ["origin"]
+    assert ["git", "push", "-u", "origin", "main"] in calls
+    assert not any("gitlab" in c for c in calls)
+    spec = next((project.dest / "docs" / "specs").glob("*-bootstrap-design.md")).read_text()
+    assert "gitlab" not in spec.lower() and "hawkixs/red-probe" in spec
 
 
 def test_new_project_passes_bootstrap_without_remotes(template_dir: Path, tmp_path: Path) -> None:

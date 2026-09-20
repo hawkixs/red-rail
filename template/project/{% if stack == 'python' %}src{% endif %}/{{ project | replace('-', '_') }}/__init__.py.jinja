@@ -2,7 +2,8 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
+# one source of truth: [project].version in pyproject.toml, read from the installed distribution
 try:
-    __version__ = version("{{ project }}")  # one source of truth: [project].version in pyproject.toml
+    __version__ = version("{{ project }}")
 except PackageNotFoundError:  # the source tree on sys.path, no installed distribution
     __version__ = "0+unknown"

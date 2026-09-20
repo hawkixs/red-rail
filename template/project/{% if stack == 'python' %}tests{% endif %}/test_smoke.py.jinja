@@ -10,6 +10,7 @@ from {{ project | replace('-', '_') }} import __version__
 
 
 def test_version_is_the_one_declared_in_pyproject() -> None:
+    assert __version__
     try:
         importlib.metadata.distribution("{{ project }}")
     except importlib.metadata.PackageNotFoundError:

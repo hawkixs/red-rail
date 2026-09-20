@@ -24,6 +24,9 @@ class FakeHosts:
     def __call__(self, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if args[0] in ("gh", "glab"):
             self.calls.append(args)
+            if args[0] == "glab":
+                env = kwargs.get("env")
+                assert isinstance(env, dict) and env.get("GITLAB_HOST") == "gitlab.hawkixs.local"
             bare = self._bare(args[0], args[3])
             if args[2] == "view":
                 return subprocess.CompletedProcess(args, 0 if bare.exists() else 1, "", "not found")
@@ -91,6 +94,7 @@ def test_publish_with_a_declared_mirror_creates_both_repositories_and_pushes_mai
     ]
     assert hosts.calls[2][3:] == ["hawkixs/red-probe", "--private", "--description", "A probe."]
     assert hosts.calls[3][3:5] == ["hawkixs_project/red/red-probe", "--private"]
+    assert all("GITLAB_HOST" not in str(c) for c in hosts.calls)  # the host travels in the env
     assert "--skipGitInit" in hosts.calls[3] and "--defaultBranch" in hosts.calls[3]
     for tool in ("gh", "glab"):
         head = subprocess.run(
@@ -135,6 +139,18 @@ def test_second_push_failure_never_rewrites_the_first(
     with pytest.raises(RemoteError, match="do not rewrite"):
         publish(repo, "red-probe", "A probe.", mirror="gitlab.hawkixs.local", run=hosts)
     assert (tmp_path / "hosts" / "gh" / "red-probe.git").is_dir()
+
+
+def test_a_mirror_out_of_parity_after_the_pushes_is_an_error(
+    tmp_path: Path, hosts: FakeHosts, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The parity check is the last word of a mirrored publish: a mismatch is reported, never
+    ignored (and the check does not run at all without a mirror)."""
+    repo = _local(tmp_path)
+    monkeypatch.setattr(remotes, "parity", lambda repo, *, run: False)
+    with pytest.raises(RemoteError, match="main differs between GitHub and GitLab"):
+        publish(repo, "red-probe", "A probe.", mirror="gitlab.hawkixs.local", run=hosts)
+    publish(_local(tmp_path / "again"), "red-again", "A probe.", run=hosts)  # no mirror: no check
 
 
 def test_a_missing_tool_is_a_remote_error(tmp_path: Path) -> None:

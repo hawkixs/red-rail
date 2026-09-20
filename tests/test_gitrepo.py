@@ -93,3 +93,16 @@ def test_helpers_never_raise_outside_a_repository(tmp_path: Path) -> None:
     assert gitrepo.head_sha(tmp_path) is None
     assert gitrepo.latest_tag(tmp_path) is None
     assert gitrepo.is_ancestor(tmp_path, "abc") is False
+
+
+def test_url_host_reads_the_authority_of_every_remote_syntax() -> None:
+    """The mirror host is compared exactly, never as a substring of the whole URL."""
+    from rail.gitrepo import url_host
+
+    assert url_host("git@github.com:hawkixs/red-probe.git") == "github.com"
+    assert url_host("ssh://git@gitlab.hawkixs.local:2222/hawkixs_project/red/red-probe.git") == (
+        "gitlab.hawkixs.local"
+    )
+    assert url_host("https://GitHub.com/hawkixs/red-probe.git") == "github.com"
+    assert url_host("git@github.com:hawkixs/gitlab.hawkixs.local-tools.git") == "github.com"
+    assert url_host("/srv/git/red-probe.git") == ""

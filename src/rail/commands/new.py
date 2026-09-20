@@ -56,7 +56,7 @@ def _slug(ctx: click.Context, param: click.Parameter, value: str) -> str:
     "publish",
     default=True,
     show_default=True,
-    help="Create and push GitHub + GitLab with gh/glab.",
+    help="Create the GitHub repository with gh and push main (a declared mirror: glab too).",
 )
 @click.option(
     "--ledger",

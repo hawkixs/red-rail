@@ -110,7 +110,8 @@ def _ok(
 
 def preflight(repo: Path, version: str, *, ledger: Ledger, run: Runner) -> ReleasePlan:
     """Everything measured before anything is built: the tier, the branch, a tree clean
-    outside the ledger mirrors, HEAD published, the tag free, an integration on history."""
+    outside the ledger mirrors, HEAD published, the tag free, an integration on history, and
+    the remote of the declared mirror when the manifest declares one."""
     if not SEMVER.match(version):
         raise ReleaseError(f"{version!r} is not a semantic version (X.Y.Z)")
     cfg = load_rail_config(repo)
@@ -198,7 +199,7 @@ def _mirror_remote(repo: Path) -> str | None:
     if not host:
         return None
     for name, url in gitrepo.remotes(repo).items():
-        if str(host) in url:
+        if gitrepo.url_host(url) == str(host).lower():  # the exact host, never a substring
             return name
     raise ReleaseError(
         f"the manifest declares the mirror {host} (hygiene.mirror_host) but no remote points there"

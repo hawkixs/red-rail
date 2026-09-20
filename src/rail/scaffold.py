@@ -44,6 +44,15 @@ class NewProject:
     ledger: LedgerBackend = LedgerBackend.FILE
     ticket: str | None = None
 
+    def __post_init__(self) -> None:
+        # the description is spliced into a module docstring and a TOML string by the template:
+        # a double quote, a backslash or a line break would break the rendered files
+        if not self.description.strip() or any(c in self.description for c in '"\\\n\r'):
+            raise ScaffoldError(
+                "description: one line, without double quotes or backslashes (it is rendered "
+                "into a docstring and pyproject.toml)"
+            )
+
     @property
     def answers(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -79,7 +88,7 @@ BOOTSTRAP_SPEC = """# {slug} — Bootstrap design
 | # | Decision |
 |---|---|
 | 1 | Tier `{tier}`, stack `{stack}`, ledger `{ledger}` (`rail.yaml`) |
-| 2 | Canonical remote GitHub `hawkixs/{slug}`, mirror GitLab `hawkixs_project/red/{slug}` |
+| 2 | One remote, GitHub `hawkixs/{slug}` — ReD is GitHub only; a mirror is a declaration |
 
 ## 3. Non-goals
 
@@ -245,7 +254,7 @@ def new_project(
         _git(project.dest, "add", "-A", "docs/receipts")
         _git(project.dest, "commit", "-q", "-m", "chore(rail): mirror the delivery contract")
         if publish:
-            remotes.push(project.dest, mirror=bool(mirror), run=run)
+            remotes.push(project.dest, mirror=mirror, run=run)
     return results
 
 
