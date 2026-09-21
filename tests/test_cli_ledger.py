@@ -501,3 +501,68 @@ def test_contract_set_with_a_required_check_needs_no_reason(tmp_path: Path) -> N
     deliverable = json.loads(out.output)["payload"]["contract"]["deliverables"][0]
     assert deliverable["no_checks_reason"] is None
     assert deliverable["required_checks"][0]["app_slug"] == "red-rail-reviewer"
+
+
+def test_contract_set_treats_a_blank_reason_as_no_reason(tmp_path: Path) -> None:
+    """`--no-checks-reason "   "` satisfied the guard by truthiness and stored a reason that
+    explains nothing — in an append-only ledger. Blank is absent."""
+    repo = _repo(tmp_path)
+    base = ["contract", "set", "--repo", str(repo), "--objective", "x", "--reason", "r"]
+    for blank in ("   ", "\t", "\n ", ""):
+        out = CliRunner().invoke(main, [*base, "--no-checks-reason", blank])
+        assert out.exit_code == 2, f"{blank!r}: {out.output}"
+        assert "--no-checks-reason" in out.output
+    assert not list((repo / RECEIPTS_DIR).glob("*.json"))
+
+
+def test_contract_set_refuses_a_reason_that_contradicts_a_required_check(tmp_path: Path) -> None:
+    """The two flags are the two sides of one declaration; a blank reason is not a side."""
+    repo = _repo(tmp_path)
+    base = [
+        "contract",
+        "set",
+        "--repo",
+        str(repo),
+        "--objective",
+        "x",
+        "--reason",
+        "r",
+        "--required-check",
+        "check_run:red-rail/review@red-rail-reviewer",
+    ]
+    out = CliRunner().invoke(main, [*base, "--no-checks-reason", "because"])
+    assert out.exit_code == 2 and "contradicts" in out.output
+
+    # blank is absent, so this is the plain `--required-check` case and must be accepted —
+    # and must not exit 1 with a raw pydantic ValidationError
+    out = CliRunner().invoke(main, [*base, "--no-checks-reason", "  ", "--json"])
+    assert out.exit_code == 0, out.output
+    assert (
+        json.loads(out.output)["payload"]["contract"]["deliverables"][0]["no_checks_reason"] is None
+    )
+
+
+def test_contract_set_refuses_the_same_required_check_twice(tmp_path: Path) -> None:
+    """brain rejects a duplicate selector; the file ledger must not accept what brain would
+    refuse, or the wall only appears at the switch."""
+    repo = _repo(tmp_path)
+    spec = "check_run:red-rail/review@red-rail-reviewer"
+    out = CliRunner().invoke(
+        main,
+        [
+            "contract",
+            "set",
+            "--repo",
+            str(repo),
+            "--objective",
+            "x",
+            "--reason",
+            "r",
+            "--required-check",
+            spec,
+            "--required-check",
+            spec,
+        ],
+    )
+    assert out.exit_code == 1 and "duplicate required check selector" in out.output
+    assert not list((repo / RECEIPTS_DIR).glob("*.json"))

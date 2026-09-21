@@ -262,3 +262,24 @@ def test_deliverable_without_a_required_check_must_say_why() -> None:
         required_checks=[RequiredCheck(name="red-rail/review", app_slug="red-rail-reviewer")],
     )
     assert checked.no_checks_reason is None
+
+
+def test_deliverable_refuses_the_same_required_check_twice() -> None:
+    """The second half of brain-v42's `_explicit_check_policy`, which the mirror first
+    omitted: two identical selectors are a contract brain refuses."""
+    from rail.ledger import Deliverable, RequiredCheck
+
+    check = RequiredCheck(name="ci", app_slug="red-rail-reviewer")
+    with pytest.raises(ValidationError, match="duplicate required check selector"):
+        Deliverable(key="main", repository="hawkixs/red-alpha", required_checks=[check, check])
+
+    # a different publisher for the same name is a different selector, and stays legal
+    other = RequiredCheck(name="ci", app_slug="someone-else")
+    assert (
+        len(
+            Deliverable(
+                key="main", repository="hawkixs/red-alpha", required_checks=[check, other]
+            ).required_checks
+        )
+        == 2
+    )

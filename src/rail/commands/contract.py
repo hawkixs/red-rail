@@ -152,6 +152,11 @@ def set_(
 ) -> None:
     """Create or amend the project's delivery contract in the ledger."""
     checks = [parse_required_check(spec) for spec in required_checks]
+    # blank is absent: `--no-checks-reason "   "` satisfied the guard by truthiness alone and
+    # stored a reason that explains nothing, in an append-only ledger. Normalising here also
+    # keeps `--no-checks-reason ""` from reaching pydantic and exiting 1 with a raw
+    # ValidationError, where every sibling misuse in this command exits 2 as a UsageError.
+    no_checks_reason = (no_checks_reason or "").strip() or None
     if not checks and not no_checks_reason:
         # brain refuses this contract with `invalid_arguments` without naming the field;
         # stop before the ledger and name the flag instead (decision bc679157: a command
