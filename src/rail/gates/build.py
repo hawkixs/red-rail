@@ -84,6 +84,12 @@ GO_TOOLS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _INVOKES(name: str) -> re.Pattern[str]:  # noqa: N802  (a pattern factory, read as a constant)
+    """`go tool <name>` however the toolchain is spelled — `go`, `$(GO)`, `${GOCMD}`. The
+    property is the invocation, not the list of ways to name the binary that performs it."""
+    return re.compile(rf"\btool\s+{re.escape(name)}\b")
+
+
 def _live_lines(text: str, *, comment: str) -> str:
     """`text` with commented-out content removed, so dead text never satisfies the gate: a
     `# go tool staticcheck ./...  # TODO re-enable` runs nothing and must not count as a
@@ -150,10 +156,14 @@ def _go_profile(repo: Path) -> GateResult:
     if not makefile.is_file():
         return GateResult(Stage.BUILD, "lint", False, "Makefile is missing")
     runner = _recipe_lines(makefile.read_text())
-    # the invocation, not the bare name: the template's own `sync` target runs
-    # `go get -tool …/staticcheck@v0.8.1`, so the name alone is always present and matching
-    # it would let anyone delete the real call and still pass
-    uncalled = [name for name, _ in GO_TOOLS if f"go tool {name}" not in runner]
+    # `tool <name>`, not the bare name and not `go tool <name>`. The bare name is always
+    # present — the template's own `sync` runs `go get -tool …/staticcheck@v0.8.1` — so
+    # matching it would let anyone delete the real call and still pass. Requiring the literal
+    # `go` rejected `$(GO) tool staticcheck`, which is the ordinary Makefile idiom and the
+    # only option on a host with no Go toolchain, where `make GO=./scripts/go` runs it in a
+    # container. Dropping the prefix cannot reopen the hole: after `-tool`, `go get` takes a
+    # module path, never the bare name, so an installation line has no `tool <name>` in it.
+    uncalled = [name for name, _ in GO_TOOLS if not _INVOKES(name).search(runner)]
     if uncalled:
         return GateResult(
             Stage.BUILD,
