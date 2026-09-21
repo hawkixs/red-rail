@@ -115,6 +115,16 @@ class BrainLedger:
 
     # -- protocol -------------------------------------------------------------------------
 
+    def coordination_status(self) -> str | None:
+        """What brain says about the ticket the manifest declares. Measured on the real
+        ledger: a fulfilled ticket reads `closed` / `accepted` / `integrated`, an open one
+        `open` / `pending` / `awaiting_artifact`."""
+        view = self._view(required=False)
+        if view is None:
+            return None
+        status = view.get("assessment", {}).get("coordination_status")
+        return str(status) if status else None
+
     def contract_set(
         self, project: str, contract: Contract, *, reason: str, issuer: str, idempotency_key: str
     ) -> Record:

@@ -286,6 +286,12 @@ class Record(BaseModel):
 
 
 class Ledger(Protocol):
+    def coordination_status(self) -> str | None:
+        """`open` / `closed` for a ledger whose contract lives on a ticket, None for one
+        that has no such notion. A closed ticket is terminal: it can no longer take a pull
+        request, so it is no longer an intention covering new work."""
+        ...
+
     def contract_set(
         self, project: str, contract: Contract, *, reason: str, issuer: str, idempotency_key: str
     ) -> Record: ...

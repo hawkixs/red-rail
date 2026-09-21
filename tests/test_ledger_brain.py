@@ -536,3 +536,67 @@ def test_the_ledger_of_a_project_spans_its_tickets(tmp_path: Path) -> None:
     assert versions == ["0.1.0"]
     call = next(a for n, a in brain.calls if n == "brain_delivery_attestation_list")
     assert call["ticket_id"] is None
+
+
+# -- a terminal ticket is not an intention ------------------------------------------------
+
+
+def _brain_repo(tmp_path: Path, brain: FakeBrain, ticket: str) -> Path:
+    """A repository whose manifest declares `ledger: brain` and that ticket."""
+    repo = conforming_tree(tmp_path, "red-probe", "bootstrap")
+    write_manifest(repo, project="red-probe", tier="bootstrap")
+    (repo / "rail.yaml").write_text(
+        (repo / "rail.yaml").read_text() + f"ledger: brain\nticket: {ticket}\n"
+    )
+    return repo
+
+
+def test_intent_refuses_a_contract_whose_ticket_is_closed(tmp_path: Path) -> None:
+    """A contract record that exists proves it existed, not that it still covers this work.
+    Measured on the real ledger: a fulfilled ticket reads `coordination_status: closed`,
+    `acceptance_state: accepted`. Six pull requests once shipped under a closed contract
+    while `rail check` stayed green, because the gate only asked whether a record existed."""
+    from rail.gates.intent import contract as intent_contract
+
+    brain = FakeBrain(agent="op")
+    ticket = brain.add_ticket("red", "red-probe")
+    brain.register_repository("red-probe", 4242, "hawkixs/red-probe")
+    repo = _brain_repo(tmp_path, brain, ticket)
+    client = BrainClient.in_memory(brain, agent="op")
+    BrainLedger(
+        client,
+        ticket=ticket,
+        project="red-probe",
+        receipts_dir=repo / RECEIPTS_DIR,
+        clock=_clock(),
+        repository_id=lambda slug: 4242,
+    ).contract_set("red-probe", CONTRACT, reason="r", issuer="op", idempotency_key="c1")
+
+    import rail.ledger as ledger_module
+
+    original = ledger_module.open_ledger
+
+    def _open(repo_path: Path, **kwargs: object) -> Ledger:
+        return BrainLedger(
+            client,
+            ticket=ticket,
+            project="red-probe",
+            receipts_dir=repo_path / RECEIPTS_DIR,
+            clock=_clock(),
+            repository_id=lambda slug: 4242,
+        )
+
+    import rail.gates.intent as intent_module
+
+    intent_module.open_ledger = _open  # type: ignore[assignment]
+    try:
+        assert intent_contract(repo).passed, "an open ticket is an intention"
+
+        brain.tickets[ticket].closed = True
+        result = intent_contract(repo)
+        assert not result.passed, result.details
+        assert "closed" in result.details
+        assert ticket[:8] in result.details, "name the ticket that is no longer open"
+        assert "rail contract set" not in result.details, "a new contract needs a new ticket"
+    finally:
+        intent_module.open_ledger = original  # type: ignore[assignment]
