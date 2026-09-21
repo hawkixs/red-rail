@@ -223,3 +223,43 @@ def test_an_unimplemented_target_is_still_refused_by_name(tmp_path: Path) -> Non
 
     with pytest.raises(DeployError, match="pc-server-systemd"):
         make_target(repo, load_rail_config(repo))
+
+
+# -- what "private" must mean, pinned ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        "0.0.0.0:9204:9204",  # names an address AND publishes everywhere
+        "[::]:9204:9204",  # the IPv6 spelling of the same thing
+        "10.100.0.2:9204:9204",  # an address, but not this machine's
+        "[fd00::4]:9204:9204",  # bracketed IPv6 that is not the bind address
+        "0.0.0.0:9204-9210:9204-9210",  # a range does not hide the wildcard
+        "${FOO}:9204:9204",  # a variable the rail does not write
+        "${BIND_ADDRESS:-0.0.0.0}:9204:9204",  # a default turns the variable into a wildcard
+    ],
+)
+def test_publishing_anywhere_but_the_bind_address_is_refused(mapping: str) -> None:
+    """The rule is equality with `deploy.bind_address`, not the presence of an address:
+    `0.0.0.0` names one and publishes everywhere, which is what the guard exists to stop."""
+    assert published_ports_are_private(_compose(f'    ports:\n      - "{mapping}"\n'), BIND) == [
+        ("app", mapping)
+    ]
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        f"{BIND}:9204:9204",
+        f"{BIND}:9204-9210:9204-9210",  # a port range parses: two dashes, one host address
+        "127.0.0.1:9204:9204",
+        "${BIND_ADDRESS}:9204:9204",  # the rail writes this variable into the .env itself
+        "$BIND_ADDRESS:9204:9204",
+    ],
+)
+def test_the_bind_address_and_the_variable_the_rail_writes_are_accepted(mapping: str) -> None:
+    """Accepting `${BIND_ADDRESS}` keeps the machine's address out of the repository and
+    leaves one source of truth — and it is safe precisely because the rail, not the project,
+    writes that variable's value into the generated `.env`."""
+    assert published_ports_are_private(_compose(f'    ports:\n      - "{mapping}"\n'), BIND) == []

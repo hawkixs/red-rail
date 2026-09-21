@@ -30,6 +30,13 @@ from rail.policy import parameter
 
 LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost"})
 
+# The rail writes BIND_ADDRESS into the `.env` it generates, so a compose file may publish on
+# `${BIND_ADDRESS}` instead of repeating the machine's address: one source of truth, and no
+# machine address committed to the repository. Safe because the value is the rail's to write,
+# not the project's — and matched exactly, so `${BIND_ADDRESS:-0.0.0.0}` is a different string
+# and stays refused, as does any other variable the rail does not control.
+BIND_VARIABLE = frozenset({"${BIND_ADDRESS}", "$BIND_ADDRESS"})
+
 
 def _host_of(mapping: str) -> str | None:
     """The host address of a short-form `ports:` entry, or None when it names none.
@@ -64,7 +71,7 @@ def published_ports_are_private(compose_text: str, bind_address: str) -> list[tu
     if not isinstance(services, dict):
         raise DeployError("the released compose file declares no `services:` mapping")
 
-    allowed = LOOPBACK | {bind_address}
+    allowed = LOOPBACK | BIND_VARIABLE | {bind_address}
     offenders: list[tuple[str, str]] = []
     for name, service in services.items():
         if not isinstance(service, dict):
@@ -122,6 +129,8 @@ class PrivateCompose(ComposeTarget):
             listed = ", ".join(f"{service} → {entry}" for service, entry in offenders)
             raise DeployError(
                 f"the released compose file publishes outside {self.private.bind_address} "
-                f"and loopback: {listed}. Docker bypasses the firewall, so a published port "
-                "must name its host address explicitly"
+                f"and loopback: {listed}. Docker bypasses the firewall, so a published port's "
+                f"host address must EQUAL {self.private.bind_address} (or ${{BIND_ADDRESS}}, "
+                "which the rail writes), not merely be present — 0.0.0.0 names an address and "
+                "publishes everywhere"
             )
