@@ -97,3 +97,35 @@ def test_commits_gate_honours_the_window_override(tmp_path: Path) -> None:
         + "gates:\n  build.commit_window:\n    value: 1\n    reason: fixture\n"
     )
     assert commits(repo).passed
+
+
+def test_lint_gate_reads_the_go_tool_profile_without_running_it(tmp_path: Path) -> None:
+    """Since Go 1.24 the analysers are pinned by `tool` directives in `go.mod`
+    (`go get -tool`), so the repository DECLARES the profile and CI EXECUTES it — the gate
+    stays a pure read, and is far stronger than "go.mod exists". Measured on the red-alerts
+    pilot: staticcheck v0.8.1, govulncheck v1.8.0 resolved by the module, never `@latest`."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    assert lint(go).passed, lint(go).details
+
+    bare = go / "go.mod"
+    bare.write_text("module example.invalid/red-beta\n\ngo 1.26.6\n")
+    result = lint(go)
+    assert not result.passed
+    assert "staticcheck" in result.details and "govulncheck" in result.details
+    assert "go get -tool" in result.details
+
+    bare.write_text(
+        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "tool (\n\thonnef.co/go/tools/cmd/staticcheck\n)\n"
+    )
+    assert "govulncheck" in lint(go).details and not lint(go).passed
+
+
+def test_lint_gate_wants_the_go_profile_wired_into_the_task_runner(tmp_path: Path) -> None:
+    """Declaring the tools and never calling them is a profile on paper. The Makefile is
+    what CI runs, so the gate reads it too — still without executing anything."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    (go / "Makefile").write_text("ci: lint test\nlint:\n\tgo vet ./...\ntest:\n\tgo test ./...\n")
+    result = lint(go)
+    assert not result.passed and "Makefile" in result.details
+    assert "staticcheck" in result.details and "govulncheck" in result.details

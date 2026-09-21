@@ -72,9 +72,55 @@ def lint(repo: Path) -> GateResult:
             False,
             "ruff is not configured ([tool.ruff] in pyproject.toml or ruff.toml)",
         )
-    if (repo / "go.mod").is_file():
-        return GateResult(Stage.BUILD, "lint", True, "go.mod present (go vet is built in)")
-    return GateResult(Stage.BUILD, "lint", False, "go.mod is missing")
+    return _go_profile(repo)
+
+
+# The Go analysers, pinned by `tool` directives in `go.mod` since Go 1.24 (`go get -tool`) so
+# the module resolves one version for the workstation, CI and the release alike — never
+# `@latest`. Measured on the red-alerts pilot: staticcheck v0.8.1, govulncheck v1.8.0.
+GO_TOOLS: tuple[tuple[str, str], ...] = (
+    ("staticcheck", "honnef.co/go/tools/cmd/staticcheck"),
+    ("govulncheck", "golang.org/x/vuln/cmd/govulncheck"),
+)
+
+
+def _go_profile(repo: Path) -> GateResult:
+    """The Go profile as a pure read: `go.mod` DECLARES the analysers, the task runner
+    CALLS them, CI executes it. `go vet` and `gofmt` need no directive — they ship with the
+    toolchain — so only the two pinned tools are checked here."""
+    go_mod = repo / "go.mod"
+    if not go_mod.is_file():
+        return GateResult(Stage.BUILD, "lint", False, "go.mod is missing")
+    declared = go_mod.read_text()
+    undeclared = [name for name, package in GO_TOOLS if package not in declared]
+    if undeclared:
+        return GateResult(
+            Stage.BUILD,
+            "lint",
+            False,
+            f"go.mod declares no tool directive for {', '.join(undeclared)} "
+            f"(`go get -tool {' '.join(p for n, p in GO_TOOLS if n in undeclared)}`)",
+        )
+    makefile = repo / "Makefile"
+    if not makefile.is_file():
+        return GateResult(Stage.BUILD, "lint", False, "Makefile is missing")
+    runner = makefile.read_text()
+    uncalled = [name for name, _ in GO_TOOLS if name not in runner]
+    if uncalled:
+        return GateResult(
+            Stage.BUILD,
+            "lint",
+            False,
+            f"go.mod pins {', '.join(name for name, _ in GO_TOOLS)} but the Makefile never "
+            f"calls {', '.join(uncalled)} — a profile CI does not run is a profile on paper",
+        )
+    return GateResult(
+        Stage.BUILD,
+        "lint",
+        True,
+        f"go vet, gofmt and {', '.join(name for name, _ in GO_TOOLS)} pinned by go.mod "
+        "and called by the Makefile",
+    )
 
 
 def run_gitleaks(repo: Path) -> tuple[int, str] | None:
