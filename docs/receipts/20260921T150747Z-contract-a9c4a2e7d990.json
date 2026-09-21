@@ -1,0 +1,46 @@
+{
+  "digest": "sha256:a9c4a2e7d990fe16f4bb33a258fb83d7f86d90c40c690f332fae9a26c4c2a397",
+  "idempotency_key": "contract:513e109b-1b02-476c-9e31-dbafc07b5b14:1",
+  "issuer": "red",
+  "kind": "contract",
+  "payload": {
+    "contract": {
+      "acceptance_criteria": [
+        "rail check runs without a manifest and returns a gate-by-gate report at the bootstrap floor",
+        "red-alerts is onboarded by hand and passes the gates of its declared tier"
+      ],
+      "acceptance_mode": "explicit",
+      "constraints": [],
+      "deliverables": [
+        {
+          "key": "main",
+          "no_checks_reason": null,
+          "repository": "hawkixs/red-rail",
+          "repository_id": 1369727198,
+          "required_checks": [
+            {
+              "app_slug": "red-rail-reviewer",
+              "kind": "check_run",
+              "name": "red-rail/review",
+              "provider_id": null
+            }
+          ],
+          "review": {
+            "allowed_reviewers": [
+              "red-rail-reviewer[bot]"
+            ],
+            "required_approvals": 1
+          },
+          "target_branch": "main"
+        }
+      ],
+      "objective": "Standardise how existing ReD repositories adopt the rail, and make the rail able to deploy to a machine with no public route",
+      "priority": 0,
+      "schema_version": 1
+    },
+    "reason": "standardisation phase; scope narrowed to two criteria by the operator \u2014 a real deployment with observe.visible and a second onboarded repository depend on red-monitor, red-alerts and brain-v42, so they move to the next phase rather than hold an otherwise delivered one. The six pull requests already merged in this phase stay unbound to any contract: assumed, not discovered later by rail metrics."
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-21T15:07:47.203717Z",
+  "schema_version": 1
+}

@@ -6,4 +6,4 @@ stack: python
 # Phase 2 (ADR-0002 amendment): brain-v42 is the shared, observed ledger of red-rail itself;
 # the receipts under docs/receipts/ are mirrors written before every attestation.
 ledger: brain
-ticket: 22a72dcf-1cf4-4c73-9476-8414da5484ab   # red → red-rail, "Deliver red-rail phase 3"
+ticket: 513e109b-1b02-476c-9e31-dbafc07b5b14   # red → red-rail, "Standardisation phase"
