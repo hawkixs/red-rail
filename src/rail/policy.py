@@ -83,6 +83,9 @@ GATE_DEFAULTS: dict[str, Any] = {
     "deploy.image_repository": "ghcr.io/hawkixs/{project}",  # decision 8faab5a3
     "deploy.platform": "linux/amd64",
     "deploy.healthcheck_timeout_seconds": 120,  # the first deployment waits for its certificate
+    # target `private-compose`: no default on purpose — a target that cannot say which
+    # address it publishes on cannot refuse a compose file that publishes everywhere
+    "deploy.bind_address": None,
     "deploy.compose_path": "deploy/compose.yaml",  # in the project, read at the released commit
     "deploy.remote_timeout_seconds": 900,  # the ssh session (pull + up --wait) is killed after
     # --- observe (spec §6 step 8): the red-monitor server and the agent watching the target ---

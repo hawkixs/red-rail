@@ -30,12 +30,15 @@ stack:
   default: python
 deploy_target:
   type: str
-  choices: [vps-traefik, pc-server-systemd]
+  choices: [vps-traefik, private-compose]
   default: vps-traefik
   when: "{{ tier == 'prod' }}"
+  help: Where it lands — the border VPS behind Traefik, or a machine with no public route
 healthcheck:
   type: str
-  default: "https://{{ project[4:] }}.hawkixs.com/healthz"
+  # a private target has no public route: the rail verifies over the address it is given,
+  # so the default must not send it to the internet
+  default: "{% if deploy_target == 'private-compose' %}http://10.100.0.4:8080/healthz{% else %}https://{{ project[4:] }}.hawkixs.com/healthz{% endif %}"
   when: "{{ tier == 'prod' }}"
 ledger:
   type: str

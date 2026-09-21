@@ -18,7 +18,7 @@ from rail import remotes
 from rail.gates import GateResult, run_gates
 from rail.ledger import Contract, Deliverable, Record, RequiredCheck, ReviewPolicy, open_ledger
 from rail.ledger.file import FileLedger
-from rail.model import LedgerBackend, Stack, Tier
+from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.policy import parameter, stages_for
 
 TEMPLATE_SOURCE = "git@github.com:hawkixs/red-rail.git"
@@ -64,7 +64,14 @@ class NewProject:
         }
         if self.tier is Tier.PROD:
             data["deploy_target"] = self.deploy_target
-            data["healthcheck"] = self.healthcheck or f"https://{self.slug[4:]}.hawkixs.com/healthz"
+            # a private target has no public route, so the default must not send the rail's
+            # verification to the internet — the operator replaces the port, not the shape
+            fallback = (
+                "http://10.100.0.4:8080/healthz"
+                if self.deploy_target == DeployTarget.PRIVATE_COMPOSE
+                else f"https://{self.slug[4:]}.hawkixs.com/healthz"
+            )
+            data["healthcheck"] = self.healthcheck or fallback
         data["ledger"] = self.ledger.value
         if self.ledger is LedgerBackend.BRAIN:
             if not self.ticket:
@@ -160,8 +167,15 @@ def bootstrap_contract(project: NewProject) -> Contract:
     )
     criteria = [f"`rail check` passes at tier {project.tier.value}"]
     if project.tier is Tier.PROD:
+        # the route depends on the shape: a private target is reached over WireGuard, and
+        # promising Traefik there would be a criterion nobody can meet
+        route = (
+            "over its private address"
+            if project.deploy_target == DeployTarget.PRIVATE_COMPOSE
+            else "behind Traefik"
+        )
         criteria.append(
-            "the service answers /healthz, /version and /metrics behind Traefik and "
+            f"the service answers /healthz, /version and /metrics {route} and "
             "/version equals the released digest"
         )
     return Contract(

@@ -428,3 +428,38 @@ def test_render_go_ships_a_resolvable_module_and_a_sync_that_pins_the_analysers(
     # the gate fails on a fresh scaffold and names the way out — `make sync` is that way
     result = lint(dest)
     assert not result.passed and "go get -tool" in result.details
+
+
+def test_render_prod_private_compose_never_points_at_the_public_internet(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """A machine with no public route must not be scaffolded with a public healthcheck: the
+    rail verifies over the address it is given, so the default decides where it looks."""
+    dest = render(
+        _project(
+            template_dir,
+            tmp_path / "red-alerts",
+            slug="red-alerts",
+            tier=Tier.PROD,
+            deploy_target="private-compose",
+        )
+    )
+    manifest = (dest / "rail.yaml").read_text()
+    assert "target: private-compose" in manifest
+    assert "hawkixs.com" not in manifest, "a private target has no public domain"
+    assert "healthcheck: http://10." in manifest
+
+    # and the contract must not promise a route this shape does not have
+    from rail.scaffold import bootstrap_contract
+
+    criteria = bootstrap_contract(
+        _project(
+            template_dir,
+            tmp_path / "unused",
+            slug="red-alerts",
+            tier=Tier.PROD,
+            deploy_target="private-compose",
+        )
+    ).acceptance_criteria
+    assert not any("Traefik" in c for c in criteria), criteria
+    assert any("private address" in c for c in criteria), criteria
