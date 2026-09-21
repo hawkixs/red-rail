@@ -52,6 +52,14 @@ def _slug(ctx: click.Context, param: click.Parameter, value: str) -> str:
 )
 @click.option("--template-ref", default=None, help="red-rail tag to pin (git sources only).")
 @click.option(
+    "--rail-ref",
+    default=None,
+    help=(
+        "Ref the generated CI calls the reusable workflow at (default: resolve the current "
+        "commit of the template's main). Pass a tag or SHA to pin deliberately."
+    ),
+)
+@click.option(
     "--remotes/--no-remotes",
     "publish",
     default=True,
@@ -81,6 +89,7 @@ def command(
     dest: Path | None,
     template: str,
     template_ref: str | None,
+    rail_ref: str | None,
     publish: bool,
     ledger: str,
     ticket: str | None,
@@ -99,6 +108,7 @@ def command(
         dest=(dest or Path.cwd() / slug),
         template=template,
         template_ref=template_ref,
+        rail_ref=rail_ref,
         deploy_target=deploy_target,
         healthcheck=healthcheck,
         ledger=LedgerBackend(ledger),

@@ -14,7 +14,7 @@ from rail.cli import main
 from rail.ledger import RECEIPTS_DIR, RecordKind
 from rail.ledger.file import FileLedger
 from rail.model import LedgerBackend, Stack, Tier
-from rail.scaffold import NewProject, ScaffoldError, new_project, render, upgrade
+from rail.scaffold import ANSWERS_FILE, NewProject, ScaffoldError, new_project, render, upgrade
 from tests.fake_brain import FakeBrain
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +30,15 @@ def template_dir(tmp_path: Path) -> Path:
     shutil.copy(ROOT / "copier.yml", src / "copier.yml")
     shutil.copytree(ROOT / "template", src / "template")
     return src
+
+
+# `resolve_rail_ref` talks to a real remote; the fixture template is a plain directory, and
+# refusing to pin against it is the fail-closed behaviour under test elsewhere.
+FIXTURE_PIN = "f" * 40
+
+
+def _pin(template: str, **kwargs: object) -> str:
+    return FIXTURE_PIN
 
 
 def _project(template: Path, dest: Path, **overrides: object) -> NewProject:
@@ -148,7 +157,7 @@ def test_new_project_publishes_github_only(template_dir: Path, tmp_path: Path) -
         return subprocess.CompletedProcess(args, code, stdout=stdout, stderr="not found")
 
     project = _project(template_dir, tmp_path / "red-probe")
-    results = new_project(project, publish=True, clock=CLOCK, run=run)
+    results = new_project(project, publish=True, clock=CLOCK, run=run, resolve=_pin)
     assert all(r.passed for r in results)
     assert [c[:3] for c in calls if c[0] in ("gh", "glab")] == [
         ["gh", "repo", "view"],
@@ -164,7 +173,7 @@ def test_new_project_publishes_github_only(template_dir: Path, tmp_path: Path) -
 
 def test_new_project_passes_bootstrap_without_remotes(template_dir: Path, tmp_path: Path) -> None:
     project = _project(template_dir, tmp_path / "red-probe")
-    results = new_project(project, publish=False, clock=CLOCK)
+    results = new_project(project, publish=False, clock=CLOCK, resolve=_pin)
     assert all(r.passed for r in results), [r for r in results if not r.passed]
     dest = project.dest
     assert gitrepo.recent_subjects(dest, 1) == ["chore: bootstrap red-probe with the ReD rail"]
@@ -178,12 +187,17 @@ def test_new_project_passes_bootstrap_without_remotes(template_dir: Path, tmp_pa
 def test_new_project_reports_failing_gates(template_dir: Path, tmp_path: Path) -> None:
     (template_dir / "template" / "project" / "Makefile.jinja").unlink()
     with pytest.raises(ScaffoldError, match="hygiene.task_runner"):
-        new_project(_project(template_dir, tmp_path / "red-probe"), publish=False, clock=CLOCK)
+        new_project(
+            _project(template_dir, tmp_path / "red-probe"),
+            publish=False,
+            clock=CLOCK,
+            resolve=_pin,
+        )
 
 
 def test_upgrade_requires_a_versioned_template(template_dir: Path, tmp_path: Path) -> None:
     project = _project(template_dir, tmp_path / "red-probe")
-    new_project(project, publish=False, clock=CLOCK)
+    new_project(project, publish=False, clock=CLOCK, resolve=_pin)
     with pytest.raises(ScaffoldError, match="_commit"):
         upgrade(project.dest)
     (tmp_path / "plain").mkdir()
@@ -199,7 +213,7 @@ def test_upgrade_follows_the_template_tags(template_dir: Path, tmp_path: Path) -
     )
     subprocess.run(["git", "-C", str(template_dir), "tag", "v0.1.0"], check=True)
     project = _project(template_dir, tmp_path / "red-probe", template_ref="v0.1.0")
-    new_project(project, publish=False, clock=CLOCK)
+    new_project(project, publish=False, clock=CLOCK, resolve=_pin)
     assert "_commit: v0.1.0" in (project.dest / ".copier-answers.yml").read_text()
     readme = template_dir / "template" / "project" / "README.md.jinja"
     readme.write_text(readme.read_text() + "\nUpgraded line.\n")
@@ -224,6 +238,8 @@ def test_cli_new_and_upgrade(template_dir: Path, tmp_path: Path) -> None:
             str(tmp_path / "red-probe"),
             "--template",
             str(template_dir),
+            "--rail-ref",
+            FIXTURE_PIN,
             "--no-remotes",
         ],
     )
@@ -316,7 +332,7 @@ def test_a_prod_scaffold_is_verified_at_the_bootstrap_floor(
     template_dir: Path, tmp_path: Path
 ) -> None:
     project = _project(template_dir, tmp_path / "red-probe", tier=Tier.PROD)
-    results = new_project(project, publish=False, clock=CLOCK)
+    results = new_project(project, publish=False, clock=CLOCK, resolve=_pin)
     assert all(r.passed for r in results), [r for r in results if not r.passed]
     assert {r.stage.value for r in results} == {"hygiene", "intent", "design"}
     contract = FileLedger(project.dest / RECEIPTS_DIR).list("red-probe", kind=RecordKind.CONTRACT)
@@ -342,7 +358,7 @@ def test_a_bootstrap_contract_needs_no_check_and_no_approval(
     template_dir: Path, tmp_path: Path
 ) -> None:
     project = _project(template_dir, tmp_path / "red-probe")
-    new_project(project, publish=False, clock=CLOCK)
+    new_project(project, publish=False, clock=CLOCK, resolve=_pin)
     contract = FileLedger(project.dest / RECEIPTS_DIR).list("red-probe", kind=RecordKind.CONTRACT)
     deliverable = contract[0].payload["contract"]["deliverables"][0]
     assert deliverable["required_checks"] == [] and deliverable["no_checks_reason"]
@@ -374,6 +390,7 @@ def test_brain_mode_records_the_contract_after_the_remotes_and_mirrors_it(
         clock=CLOCK,
         client=BrainClient.in_memory(brain, agent="rail new"),
         run=run,
+        resolve=_pin,
     )
     assert all(r.passed for r in results)
     assert brain.tickets[ticket].revisions, "the contract is set in brain"
@@ -506,3 +523,99 @@ def test_a_private_target_refuses_to_invent_an_address(template_dir: Path, tmp_p
     )
     with pytest.raises(ScaffoldError, match="--healthcheck"):
         _ = project.answers
+
+
+def test_render_pins_the_reusable_workflow_to_a_resolved_sha(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """`@main` means the gates guarding a repository change without a commit in it — this
+    rail's main moved eleven times in one day. The pin is an explicit answer, recorded in
+    `.copier-answers.yml`, so `rail upgrade` bumps it as a reviewable line."""
+    sha = "a" * 40
+    dest = render(_project(template_dir, tmp_path / "red-beta", slug="red-beta", rail_ref=sha))
+
+    workflow = (dest / ".github" / "workflows" / "continuous-integration.yml").read_text()
+    assert f"rail-ci.yml@{sha}" in workflow
+    assert "@main" not in workflow
+    assert sha in (dest / ".copier-answers.yml").read_text()
+
+
+def test_render_without_a_pin_still_calls_main(template_dir: Path, tmp_path: Path) -> None:
+    """A human running `copier copy` directly, and every project already scaffolded, keep
+    working: pinning is what `rail new` does, not what the template imposes."""
+    dest = render(_project(template_dir, tmp_path / "red-beta", slug="red-beta"))
+    workflow = (dest / ".github" / "workflows" / "continuous-integration.yml").read_text()
+    assert "rail-ci.yml@main" in workflow
+
+
+def test_resolving_the_template_sha_never_falls_back_to_a_branch(tmp_path: Path) -> None:
+    """A pin that quietly becomes a moving branch is worse than no pin: it reads as pinned.
+    `git describe` output is refused for the same reason — `v0.4.0-44-g4c257be` resolves
+    locally but is neither a tag nor a branch on the remote, so GitHub cannot use it."""
+    from rail.scaffold import resolve_rail_ref
+
+    def ls_remote(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args, 0, stdout=f"{'b' * 40}\trefs/heads/main\n", stderr=""
+        )
+
+    assert resolve_rail_ref("git@github.com:hawkixs/red-rail.git", run=ls_remote) == "b" * 40
+
+    def refuses(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 128, stdout="", stderr="repository not found")
+
+    with pytest.raises(ScaffoldError, match="could not resolve"):
+        resolve_rail_ref("git@github.com:hawkixs/absent.git", run=refuses)
+
+    def describes(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, stdout="v0.4.0-44-g4c257be\trefs/heads/main\n")
+
+    with pytest.raises(ScaffoldError, match="could not resolve"):
+        resolve_rail_ref("git@github.com:hawkixs/red-rail.git", run=describes)
+
+
+def test_upgrade_rebumps_the_pin_so_the_change_is_a_reviewable_line(tmp_path: Path) -> None:
+    """The bump lands in the diff of an upgrade, beside the template drift it already
+    resorbs — one explicit gesture rather than a silent effect. A project that never
+    upgrades keeps the gates it was scaffolded with; one that upgrades takes the current."""
+    from rail.scaffold import upgrade
+
+    repo = tmp_path / "red-beta"
+    (repo / ".github" / "workflows").mkdir(parents=True)
+    old, new = "a" * 40, "c" * 40
+    workflow = repo / ".github" / "workflows" / "continuous-integration.yml"
+    workflow.write_text(f"jobs:\n  rail:\n    uses: x/y/.github/workflows/rail-ci.yml@{old}\n")
+    (repo / ANSWERS_FILE).write_text(
+        f"_commit: v0.4.0\n_src_path: git@github.com:hawkixs/red-rail.git\nrail_ref: {old}\n"
+    )
+
+    seen: dict[str, object] = {}
+
+    def update(dest: Path, **kwargs: object) -> None:
+        seen.update(kwargs)
+        (repo / ANSWERS_FILE).write_text(
+            f"_commit: v0.5.0\n_src_path: git@github.com:hawkixs/red-rail.git\nrail_ref: {new}\n"
+        )
+        workflow.write_text(f"jobs:\n  rail:\n    uses: x/y/.github/workflows/rail-ci.yml@{new}\n")
+
+    upgrade(repo, update=update, resolve=lambda template, **kw: new)
+
+    assert seen["data"] == {"rail_ref": new}, "the new pin is handed to copier as an answer"
+    assert f"@{new}" in workflow.read_text() and old not in workflow.read_text()
+
+
+def test_new_project_resolves_the_pin_before_rendering(template_dir: Path, tmp_path: Path) -> None:
+    """`rail new` pins; the template only carries what it is handed. A project scaffolded
+    today therefore records which gates guarded it, in its own tree."""
+    from rail.scaffold import new_project
+
+    sha = "d" * 40
+    project = _project(template_dir, tmp_path / "red-beta", slug="red-beta")
+    new_project(
+        project,
+        publish=False,
+        run=lambda *a, **k: subprocess.CompletedProcess(a[0] if a else [], 0, stdout="", stderr=""),
+        resolve=lambda template, **kw: sha,
+    )
+    workflow = project.dest / ".github" / "workflows" / "continuous-integration.yml"
+    assert f"rail-ci.yml@{sha}" in workflow.read_text()

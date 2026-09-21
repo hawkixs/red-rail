@@ -28,6 +28,14 @@ stack:
   type: str
   choices: [python, go, docs]
   default: python
+rail_ref:
+  type: str
+  default: main
+  help: >-
+    Ref of hawkixs/red-rail the reusable CI workflow is called at. `rail new` and
+    `rail upgrade` resolve a commit SHA here, so the gates guarding this repository
+    change only when a commit in this repository says so.
+
 deploy_target:
   type: str
   choices: [vps-traefik, private-compose, pc-server-systemd]
