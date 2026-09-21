@@ -592,11 +592,20 @@ def test_intent_refuses_a_contract_whose_ticket_is_closed(tmp_path: Path) -> Non
     try:
         assert intent_contract(repo).passed, "an open ticket is an intention"
 
-        brain.tickets[ticket].closed = True
-        result = intent_contract(repo)
-        assert not result.passed, result.details
-        assert "closed" in result.details
-        assert ticket[:8] in result.details, "name the ticket that is no longer open"
-        assert "rail contract set" not in result.details, "a new contract needs a new ticket"
+        # brain's raw ticket status, not a boolean: `wontfix` and `acked` are terminal for
+        # delivery evidence too (pg_delivery_evidence._TERMINAL_STATUSES), and matching
+        # `closed` alone left the gate green on both — the exact failure it exists to close
+        for terminal in ("closed", "wontfix", "acked"):
+            brain.tickets[ticket].status = terminal
+            result = intent_contract(repo)
+            assert not result.passed, f"{terminal}: {result.details}"
+            assert terminal in result.details, "name the status, do not assert acceptance"
+            assert ticket[:8] in result.details, "name the ticket that is no longer open"
+            assert "rail contract set" not in result.details, "a new contract needs a ticket"
+
+        # a ticket being worked on is not terminal
+        for live in ("open", "in_progress", "resolved"):
+            brain.tickets[ticket].status = live
+            assert intent_contract(repo).passed, live
     finally:
         intent_module.open_ledger = original  # type: ignore[assignment]
