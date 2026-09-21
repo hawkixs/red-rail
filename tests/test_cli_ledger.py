@@ -627,5 +627,5 @@ def test_contract_set_shows_the_contract_and_asks_before_writing(tmp_path: Path)
     assert len(list((repo / RECEIPTS_DIR).glob("*.json"))) == 1
 
     # `--yes` is the same path without the question, for a script
-    (repo / RECEIPTS_DIR).glob("*.json")
     assert CliRunner().invoke(main, [*args, "--yes", "--key", "c2"]).exit_code == 0
+    assert len(list((repo / RECEIPTS_DIR).glob("*.json"))) == 2

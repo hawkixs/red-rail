@@ -14,6 +14,28 @@ import pytest
 from rail.contract_guard import Unwritable, refuse_unwritable
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "deploy on 10.100.0.4 behind the mesh",
+        "deploy on 10.100.0.4.",  # a sentence ending in an address is the natural way to write one
+        "reach 10.100.0.4, then the proxy",
+        "(10.100.0.4)",
+        "10.100.0.4 is the target",
+    ],
+)
+def test_an_address_is_refused_wherever_it_sits_in_a_sentence(text: str) -> None:
+    """A guard bypassed by a full stop guards nothing: the most natural way to write an
+    address is at the end of a sentence."""
+    with pytest.raises(Unwritable, match=r"10\.100\.0\.4"):
+        refuse_unwritable([text])
+
+
+def test_a_longer_dotted_run_is_not_an_address() -> None:
+    """Five groups is not an address, and must not be reported as one."""
+    refuse_unwritable(["the build id is 10.100.0.4.5 and it is not an address"])
+
+
 def test_a_literal_address_is_refused() -> None:
     """The operator's standing rule is that no address belongs in a spec. A contract is a
     stronger case: a spec can be edited, a contract revision cannot."""

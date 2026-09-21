@@ -17,10 +17,11 @@ import ipaddress
 import re
 from collections.abc import Iterable
 
-# Four dotted decimal groups, with boundaries that a version number cannot satisfy: `1.26.8`
-# has three groups, and a digest has no dots. The value is then parsed rather than pattern-
-# matched, so `999.1.1.1` is not mistaken for an address.
-_DOTTED = re.compile(r"(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?![\w.])")
+# Four dotted decimal groups. The trailing guard rejects a FIFTH group (`10.0.0.1.5` is not an
+# address) while allowing a full stop — a sentence ending in an address is the natural way to
+# write one, and a guard a full stop bypasses guards nothing. The value is then parsed rather
+# than pattern-matched, so `999.1.1.1` is four numbers and `1.26.8` is a version.
+_DOTTED = re.compile(r"(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?!\.?\d)")
 
 # Credential shapes that are unambiguous: each is a published prefix, not a guess about
 # entropy. A heuristic on randomness would refuse legitimate text, which is worse than
