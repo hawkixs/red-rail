@@ -47,9 +47,16 @@ comments, test names. The conversation with the operator stays in French.
   container) for `observe.visible`.
 - `src/rail/release.py` — stage 7: builds and pushes the image to GHCR by digest, tags both
   remotes, attests `released`.
-- `src/rail/deploy/` — `vps_traefik.py` (the target as data: host, project directory, the
-  remote script run under `flock`) and `flow.py` (forward / rollback / drill and the
-  attestation sequences they write — ADR-0004).
+- `src/rail/deploy/` — `compose.py` (what every compose target does identically: the lock
+  on the target, the `releases/<version>` layout and `current` symlink, the compose file
+  read at the released commit, the digest-pinned pull, and the apply / verify / `/version`
+  sequence; a target supplies only the `.env` it writes and the origin it verifies
+  against), `vps_traefik.py` (Traefik's routing and the public route), `private_compose.py`
+  (a machine with no public route: verification over the address of `deploy.healthcheck`,
+  `deploy.bind_address` with no default, and a refusal — before the first ssh — of a
+  released compose file that would publish outside that address, `network_mode: host`
+  included, because Docker bypasses the firewall) and `flow.py` (forward / rollback / drill,
+  the target chosen from the manifest, and the attestation sequences they write — ADR-0004).
 - `src/rail/ledger/` — the `Ledger` protocol, `FileLedger` (`docs/receipts/*.json`, append-only,
   digest + idempotency key, fails closed on a tampered receipt) and `BrainLedger`
   (`ledger/brain.py`: brain-v42 is the authority, the receipts are mirrors written BEFORE the

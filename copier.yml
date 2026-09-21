@@ -30,7 +30,7 @@ stack:
   default: python
 deploy_target:
   type: str
-  choices: [vps-traefik, private-compose]
+  choices: [vps-traefik, private-compose, pc-server-systemd]
   default: vps-traefik
   when: "{{ tier == 'prod' }}"
   help: Where it lands — the border VPS behind Traefik, or a machine with no public route

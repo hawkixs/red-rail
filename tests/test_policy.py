@@ -124,6 +124,9 @@ def test_deploy_and_observe_defaults_are_versioned_here() -> None:
     assert GATE_DEFAULTS["deploy.platform"] == "linux/amd64"
     assert GATE_DEFAULTS["deploy.healthcheck_timeout_seconds"] == 120
     assert GATE_DEFAULTS["deploy.compose_path"] == "deploy/compose.yaml"
+    # no default on purpose: a private target that cannot say where it publishes cannot
+    # refuse a compose file that publishes everywhere, so its absence must be an error
+    assert GATE_DEFAULTS["deploy.bind_address"] is None
     assert GATE_DEFAULTS["deploy.remote_timeout_seconds"] == 900
     assert GATE_DEFAULTS["observe.monitor_url"] == "http://10.100.0.2:8081"
     assert GATE_DEFAULTS["observe.monitor_agent"] == "vps"

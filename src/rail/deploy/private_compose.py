@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from rail.deploy import Artefact, DeployError
+from rail.deploy import Artefact, DeployError, domain_of
 from rail.deploy.compose import ComposeTarget, common_env, env_lines
 from rail.model import RailConfig
 from rail.policy import parameter
@@ -76,11 +76,27 @@ def published_ports_are_private(compose_text: str, bind_address: str) -> list[tu
     for name, service in services.items():
         if not isinstance(service, dict):
             continue
-        for entry in service.get("ports") or []:
+
+        # Host networking is the way to publish that never touches `ports:`: the container
+        # shares the host's network namespace and binds every interface directly, outside
+        # Docker's NAT. A guard reading only `ports:` is bypassed by it completely.
+        if str(service.get("network_mode", "")) == "host":
+            offenders.append((str(name), "network_mode: host"))
+            continue
+
+        ports = service.get("ports") or []
+        if isinstance(ports, str) or not isinstance(ports, list):
+            raise DeployError(
+                f"service {name}: `ports:` must be a list, not {type(ports).__name__} — "
+                "a scalar would be inspected character by character and find nothing"
+            )
+        for entry in ports:
             if isinstance(entry, dict):
                 if "published" not in entry:
-                    continue  # no host port: nothing is published
-                if str(entry.get("host_ip", "")) not in allowed:
+                    # not "nothing is published": Docker picks an ephemeral host port and
+                    # publishes it on every interface (measured: 0.0.0.0:32768->8080/tcp)
+                    offenders.append((str(name), f"target {entry.get('target')}, no published"))
+                elif str(entry.get("host_ip", "")) not in allowed:
                     offenders.append((str(name), str(entry["published"])))
                 continue
             text = str(entry)
@@ -109,14 +125,16 @@ class PrivateCompose(ComposeTarget):
     def __init__(self, repo: Path, cfg: RailConfig, **kwargs: Any) -> None:
         super().__init__(repo, cfg, **kwargs)
         self.private = Parameters.read(repo)
-        split = urlsplit(self.healthcheck)
-        # `deploy.healthcheck` is validated against `^https?://`, so netloc is present
-        self.domain = split.netloc
+        # `Field(pattern=r"^https?://")` is match-at-start, so `https://` passes validation:
+        # the host has to be checked here, exactly as `vps-traefik` checks it. Without this
+        # the failure surfaces only after the healthcheck timeout, once ssh has already
+        # changed the machine, and an empty domain reaches the attestation.
+        self.domain = domain_of(self.healthcheck)
 
     @property
     def origin(self) -> str:
         split = urlsplit(self.healthcheck)
-        return f"{split.scheme}://{split.netloc}"
+        return f"{split.scheme}://{split.netloc}"  # netloc, not hostname: the port matters
 
     def env_file(self, artefact: Artefact) -> str:
         return env_lines(

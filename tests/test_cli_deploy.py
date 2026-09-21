@@ -318,3 +318,46 @@ def test_a_ledger_refusal_mid_sequence_exits_2(
     out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
     assert out.exit_code == 2 and "the ledger refused deployed: key reused" in out.output
     assert target.applied == [D1]
+
+
+def test_the_flows_write_the_same_attestations_whatever_the_target_shape(
+    tmp_path: Path, target: FakeTarget
+) -> None:
+    """The plan's parity requirement: forward, rollback and drill must not branch on the
+    target. Driven here against a `private-compose` manifest — same fake target, same
+    sequences — so a future flow that special-cases a shape shows up as a diff."""
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    manifest = (
+        (repo / "rail.yaml")
+        .read_text()
+        .replace("  target: vps-traefik\n", "  target: private-compose\n")
+    )
+    manifest = "\n".join(
+        "  healthcheck: http://10.100.0.4:9204/healthz"
+        if line.strip().startswith("healthcheck:")
+        else line
+        for line in manifest.splitlines()
+    )
+    (repo / "rail.yaml").write_text(manifest + "\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "chore: move to the private target")
+
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"]
+        ).exit_code
+        == 0
+    )
+    assert runner.invoke(main, ["deploy", "--repo", str(repo), "--yes"]).exit_code == 0
+    assert runner.invoke(main, ["drill", "--repo", str(repo), "--yes"]).exit_code == 0
+
+    assert [k for k, _ in _kinds(repo)] == [
+        "deployed",
+        "deployed",
+        "incident_detected",
+        "rolled_back",
+        "restored",
+        "deployed",
+    ]
+    assert target.applied == [D1, D2, D1, D2]

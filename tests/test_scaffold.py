@@ -463,3 +463,28 @@ def test_render_prod_private_compose_never_points_at_the_public_internet(
     ).acceptance_criteria
     assert not any("Traefik" in c for c in criteria), criteria
     assert any("private address" in c for c in criteria), criteria
+
+
+def test_every_deploy_target_the_cli_offers_is_a_copier_choice() -> None:
+    """`rail new --deploy-target` offers every `DeployTarget`; copier must accept them all,
+    or the command fails inside copier after the operator has already answered."""
+    import yaml
+
+    from rail.model import DeployTarget
+
+    questions = yaml.safe_load((ROOT / "copier.yml").read_text())
+    assert set(questions["deploy_target"]["choices"]) == {t.value for t in DeployTarget}
+
+
+def test_the_healthcheck_default_follows_the_target_in_the_template_itself() -> None:
+    """`rail new` always passes a healthcheck, so copier's own default is only reached by a
+    human running `copier copy` directly — and nothing exercised it. Render the expression."""
+    import yaml
+    from jinja2.sandbox import SandboxedEnvironment
+
+    questions = yaml.safe_load((ROOT / "copier.yml").read_text())
+    template = SandboxedEnvironment().from_string(questions["healthcheck"]["default"])
+    private = template.render(deploy_target="private-compose", project="red-alerts")
+    public = template.render(deploy_target="vps-traefik", project="red-alerts")
+    assert private.startswith("http://10.") and "hawkixs.com" not in private
+    assert public == "https://alerts.hawkixs.com/healthz"

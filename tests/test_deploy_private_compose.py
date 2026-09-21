@@ -163,16 +163,34 @@ def test_a_public_compose_is_refused_before_the_first_ssh(tmp_path: Path) -> Non
 
 
 def test_a_missing_bind_address_is_an_error_not_a_fallback(tmp_path: Path) -> None:
+    """Rebuilt from the helper rather than filtered line by line: a gate is three lines, and
+    dropping two of them leaves an orphan `value:` that corrupts the manifest — the test
+    would then pass because nothing loads, not because the parameter is missing."""
     repo = _private_repo(tmp_path, SAFE)
-    manifest = (repo / "rail.yaml").read_text()
-    cleaned = "\n".join(
-        line
-        for line in manifest.splitlines()
-        if "bind_address" not in line and "publishes on its WireGuard" not in line
+    write_manifest(
+        repo,
+        project="red-alerts",
+        tier="prod",
+        gates={"deploy.ssh_host": ("red-base", "red-alerts lives on red-base")},
+        deploy=True,
     )
-    (repo / "rail.yaml").write_text(cleaned + "\n")
+    manifest = (
+        (repo / "rail.yaml")
+        .read_text()
+        .replace("  target: vps-traefik\n", "  target: private-compose\n")
+    )
+    manifest = "\n".join(
+        f"  healthcheck: {PRIVATE}" if line.strip().startswith("healthcheck:") else line
+        for line in manifest.splitlines()
+    )
+    (repo / "rail.yaml").write_text(manifest + "\n")
+
+    # the manifest must still LOAD — otherwise the test proves nothing about the parameter
+    cfg = load_rail_config(repo)
+    assert "deploy.bind_address" not in cfg.gates
+
     with pytest.raises(DeployError, match="deploy.bind_address"):
-        PrivateCompose(repo, load_rail_config(repo), run=RecordingHost())
+        PrivateCompose(repo, cfg, run=RecordingHost())
 
 
 def test_the_deployment_verifies_over_the_private_origin(tmp_path: Path) -> None:
@@ -263,3 +281,60 @@ def test_the_bind_address_and_the_variable_the_rail_writes_are_accepted(mapping:
     leaves one source of truth — and it is safe precisely because the rail, not the project,
     writes that variable's value into the generated `.env`."""
     assert published_ports_are_private(_compose(f'    ports:\n      - "{mapping}"\n'), BIND) == []
+
+
+# -- the ways to publish that are not a `ports:` entry -------------------------------------
+
+
+def test_host_networking_bypasses_port_mapping_entirely() -> None:
+    """`network_mode: host` puts the container in the host's network namespace: it binds every
+    interface directly, outside Docker's NAT, and needs no `ports:` at all. A guard that only
+    reads `ports:` is fully bypassed by the normal way to use host networking."""
+    text = "services:\n  app:\n    image: x\n    network_mode: host\n"
+    assert published_ports_are_private(text, BIND) == [("app", "network_mode: host")]
+
+
+def test_host_networking_is_refused_even_with_a_compliant_port() -> None:
+    text = (
+        "services:\n  app:\n    image: x\n    network_mode: host\n"
+        f'    ports:\n      - "{BIND}:9204:9204"\n'
+    )
+    assert published_ports_are_private(text, BIND) == [("app", "network_mode: host")]
+
+
+def test_other_network_modes_are_not_publishing() -> None:
+    for mode in ("bridge", "none", "default"):
+        text = f"services:\n  app:\n    image: x\n    network_mode: {mode}\n"
+        assert published_ports_are_private(text, BIND) == [], mode
+
+
+def test_the_long_form_without_published_takes_an_ephemeral_port_on_every_interface() -> None:
+    """Verified under real Docker: `ports: [{target: 8080}]` yields
+    `0.0.0.0:32768->8080/tcp, [::]:32768->8080/tcp`. Omitting `published` does not mean
+    "nothing is published" — it means "Docker picks the port, and publishes it everywhere"."""
+    text = "services:\n  app:\n    image: x\n    ports:\n      - target: 9204\n"
+    assert published_ports_are_private(text, BIND) == [("app", "target 9204, no published")]
+
+
+def test_a_scalar_ports_value_is_refused_rather_than_iterated_by_character() -> None:
+    """`ports: "9204:9204"` is malformed compose; iterating the string would test each
+    character and find no offender — failing open on bad input again."""
+    text = 'services:\n  app:\n    image: x\n    ports: "9204:9204"\n'
+    with pytest.raises(DeployError, match="ports"):
+        published_ports_are_private(text, BIND)
+
+
+def test_a_healthcheck_without_a_host_is_refused_at_construction(tmp_path: Path) -> None:
+    """`Field(pattern=r"^https?://")` is match-at-start, not fully anchored, so `https://`
+    passes validation — the comment claiming netloc must be present was simply false.
+    `VpsTraefik` already fails fast on this through `domain_of`; both shapes must, or the
+    failure surfaces only after the whole healthcheck timeout, once ssh has already changed
+    the machine."""
+    repo = _private_repo(tmp_path, SAFE)
+    manifest = "\n".join(
+        "  healthcheck: https://" if line.strip().startswith("healthcheck:") else line
+        for line in (repo / "rail.yaml").read_text().splitlines()
+    )
+    (repo / "rail.yaml").write_text(manifest + "\n")
+    with pytest.raises(DeployError, match="has no host"):
+        PrivateCompose(repo, load_rail_config(repo), run=RecordingHost())
