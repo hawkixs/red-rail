@@ -75,3 +75,17 @@ def test_a_container_job_trusts_the_workspace_before_running_git() -> None:
                 if "uv run" in s.get("run", "") or "rail" in s.get("run", "")
             )
             assert trust[0] < first_git_user, f"{name}/{job_name}: workspace trusted too late"
+
+
+def test_rail_ci_sets_up_a_pinned_go_for_the_go_stack() -> None:
+    """`inputs.stack` was declared and never used, so a Go project depended on whatever Go
+    the runner happened to preinstall — and a `red-ci` self-hosted runner has none at all."""
+    wf = _load("rail-ci.yml")
+    go = [s for s in _steps(wf) if "setup-go" in s.get("uses", "")]
+    assert len(go) == 1, "exactly one Go setup step"
+    step = go[0]
+    assert step["if"] == "inputs.stack == 'go'", "only the Go stack pays for it"
+    # 1.26.5 carries three stdlib advisories reachable from ListenAndServe
+    assert step["with"]["go-version"] == "1.26.6"
+    assert step["with"]["check-latest"] is False, "pinned, never the latest patch of the day"
+    assert step["with"]["cache"] is False, "no go.sum is shipped, so there is nothing to key on"

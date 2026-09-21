@@ -69,6 +69,15 @@ MAKEFILE = (
     "check:\n\trail check\nci: lint test check\n"
 )
 
+# A Go project's task runner calls the analysers its go.mod pins — `build.lint` reads both.
+GO_MAKEFILE = (
+    ".PHONY: lint test vuln check ci\n"
+    "lint:\n\tgo vet ./...\n\tgo tool staticcheck ./...\n"
+    "test:\n\tgo test -race -count=1 ./...\n"
+    "vuln:\n\tgo tool govulncheck ./...\n"
+    "check:\n\trail check\nci: lint test vuln check\n"
+)
+
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
@@ -144,8 +153,15 @@ def conforming_tree(root: Path, name: str, tier: str, *, stack: str = "python") 
         (repo / "tests").mkdir()
         (repo / "tests" / "test_smoke.py").write_text("def test_smoke():\n    assert True\n")
     elif stack == "go":
-        (repo / "go.mod").write_text(f"module example.invalid/{name}\n\ngo 1.22\n")
+        (repo / "go.mod").write_text(
+            f"module example.invalid/{name}\n\ngo 1.26.6\n\n"
+            "tool (\n"
+            "\tgolang.org/x/vuln/cmd/govulncheck\n"
+            "\thonnef.co/go/tools/cmd/staticcheck\n"
+            ")\n"
+        )
         (repo / "main_test.go").write_text("package main\n")
+        (repo / "Makefile").write_text(GO_MAKEFILE)
     commit_all(repo, "chore: bootstrap the fixture")
     return repo
 

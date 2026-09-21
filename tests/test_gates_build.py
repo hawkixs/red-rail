@@ -97,3 +97,116 @@ def test_commits_gate_honours_the_window_override(tmp_path: Path) -> None:
         + "gates:\n  build.commit_window:\n    value: 1\n    reason: fixture\n"
     )
     assert commits(repo).passed
+
+
+def test_lint_gate_reads_the_go_tool_profile_without_running_it(tmp_path: Path) -> None:
+    """Since Go 1.24 the analysers are pinned by `tool` directives in `go.mod`
+    (`go get -tool`), so the repository DECLARES the profile and CI EXECUTES it — the gate
+    stays a pure read, and is far stronger than "go.mod exists". Measured on the red-alerts
+    pilot: staticcheck v0.8.1, govulncheck v1.8.0 resolved by the module, never `@latest`."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    assert lint(go).passed, lint(go).details
+
+    bare = go / "go.mod"
+    bare.write_text("module example.invalid/red-beta\n\ngo 1.26.6\n")
+    result = lint(go)
+    assert not result.passed
+    assert "staticcheck" in result.details and "govulncheck" in result.details
+    assert "go get -tool" in result.details
+
+    bare.write_text(
+        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "tool (\n\thonnef.co/go/tools/cmd/staticcheck\n)\n"
+    )
+    assert "govulncheck" in lint(go).details and not lint(go).passed
+
+
+def test_lint_gate_wants_the_go_profile_wired_into_the_task_runner(tmp_path: Path) -> None:
+    """Declaring the tools and never calling them is a profile on paper. The Makefile is
+    what CI runs, so the gate reads it too — still without executing anything."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    (go / "Makefile").write_text("ci: lint test\nlint:\n\tgo vet ./...\ntest:\n\tgo test ./...\n")
+    result = lint(go)
+    assert not result.passed and "Makefile" in result.details
+    assert "staticcheck" in result.details and "govulncheck" in result.details
+
+
+def test_lint_gate_is_not_satisfied_by_commented_out_text(tmp_path: Path) -> None:
+    """Substring containment over whole files let dead text pass: a commented-out recipe
+    runs nothing, and a `.PHONY` line naming a tool is not a call. The gate reads what go
+    and make actually act on."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+
+    (go / "Makefile").write_text(
+        ".PHONY: staticcheck govulncheck ci\n"
+        "ci: lint\n"
+        "lint:\n"
+        "\tgo vet ./...\n"
+        "\t# go tool staticcheck ./...  # TODO re-enable\n"
+        "\t# go tool govulncheck ./...\n"
+    )
+    result = lint(go)
+    assert not result.passed, result.details
+    assert "staticcheck" in result.details and "govulncheck" in result.details
+
+    (go / "go.mod").write_text(
+        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "// tool (\n"
+        "// \tgolang.org/x/vuln/cmd/govulncheck\n"
+        "// \thonnef.co/go/tools/cmd/staticcheck\n"
+        "// )\n"
+    )
+    assert not lint(go).passed and "go get -tool" in lint(go).details
+
+
+def test_lint_gate_reports_a_missing_makefile_for_a_go_repository(tmp_path: Path) -> None:
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    (go / "Makefile").unlink()
+    result = lint(go)
+    assert not result.passed and "Makefile is missing" in result.details
+
+
+def test_lint_gate_wants_the_tools_invoked_not_merely_mentioned(tmp_path: Path) -> None:
+    """The template's own `sync` target runs `go get -tool …/staticcheck@v0.8.1`, so the bare
+    name is always present in the recipes: matching it would let anyone delete the real
+    `go tool staticcheck` call and still pass. The invocation is what counts."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    (go / "Makefile").write_text(
+        ".PHONY: sync lint ci\n"
+        "sync:\n"
+        "\tgo get -tool honnef.co/go/tools/cmd/staticcheck@v0.8.1\n"
+        "\tgo get -tool golang.org/x/vuln/cmd/govulncheck@v1.8.0\n"
+        "lint:\n"
+        "\tgo vet ./...\n"
+        "ci: lint\n"
+    )
+    result = lint(go)
+    assert not result.passed, result.details
+    assert "staticcheck" in result.details and "govulncheck" in result.details
+
+
+def test_lint_gate_wants_a_tool_directive_not_a_bare_require(tmp_path: Path) -> None:
+    """A package path that no longer sits under a `tool` directive is a dependency, not a
+    declared analyser: `go tool <name>` would not resolve. Dropping the `tool (` and `)`
+    lines and leaving the paths behind must not satisfy the gate."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    (go / "go.mod").write_text(
+        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "require (\n"
+        "\tgolang.org/x/vuln/cmd/govulncheck v1.8.0 // indirect\n"
+        "\thonnef.co/go/tools/cmd/staticcheck v0.8.1 // indirect\n"
+        ")\n"
+    )
+    result = lint(go)
+    assert not result.passed and "go get -tool" in result.details
+
+
+def test_lint_gate_accepts_a_single_line_tool_directive(tmp_path: Path) -> None:
+    """`tool <package>` without parentheses is the other legal form."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    (go / "go.mod").write_text(
+        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "tool golang.org/x/vuln/cmd/govulncheck\n"
+        "tool honnef.co/go/tools/cmd/staticcheck\n"
+    )
+    assert lint(go).passed, lint(go).details

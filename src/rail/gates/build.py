@@ -72,9 +72,103 @@ def lint(repo: Path) -> GateResult:
             False,
             "ruff is not configured ([tool.ruff] in pyproject.toml or ruff.toml)",
         )
-    if (repo / "go.mod").is_file():
-        return GateResult(Stage.BUILD, "lint", True, "go.mod present (go vet is built in)")
-    return GateResult(Stage.BUILD, "lint", False, "go.mod is missing")
+    return _go_profile(repo)
+
+
+# The Go analysers, pinned by `tool` directives in `go.mod` since Go 1.24 (`go get -tool`) so
+# the module resolves one version for the workstation, CI and the release alike — never
+# `@latest`. Measured on the red-alerts pilot: staticcheck v0.8.1, govulncheck v1.8.0.
+GO_TOOLS: tuple[tuple[str, str], ...] = (
+    ("staticcheck", "honnef.co/go/tools/cmd/staticcheck"),
+    ("govulncheck", "golang.org/x/vuln/cmd/govulncheck"),
+)
+
+
+def _live_lines(text: str, *, comment: str) -> str:
+    """`text` with commented-out content removed, so dead text never satisfies the gate: a
+    `# go tool staticcheck ./...  # TODO re-enable` runs nothing and must not count as a
+    call, and neither must a commented-out `tool (…)` block."""
+    kept = []
+    for line in text.splitlines():
+        head = line.split(comment, 1)[0]
+        if head.strip():
+            kept.append(head)
+    return "\n".join(kept)
+
+
+def _recipe_lines(makefile: str) -> str:
+    """Only what make actually runs: recipe lines are TAB-indented, and `#` starts a comment.
+    A target named `staticcheck` that runs nothing, or a `.PHONY` listing it, is not a call."""
+    return _live_lines(
+        "\n".join(line for line in makefile.splitlines() if line.startswith("\t")), comment="#"
+    )
+
+
+def tool_directives(go_mod: str) -> set[str]:
+    """The packages under a `tool` directive, in either legal form — `tool <package>` and a
+    parenthesised `tool ( … )` block. Read as a directive rather than searched as text: a
+    package left behind in `require` after the directive is gone is a dependency, not a
+    declared analyser, and `go tool <name>` would not resolve."""
+    packages: set[str] = set()
+    in_block = False
+    for line in _live_lines(go_mod, comment="//").splitlines():
+        entry = line.strip()
+        if in_block:
+            if entry.startswith(")"):
+                in_block = False
+            elif entry:
+                packages.add(entry.split()[0])
+            continue
+        if entry == "tool (" or entry.startswith("tool ("):
+            in_block = True
+            rest = entry[len("tool (") :].strip()
+            if rest and not rest.startswith(")"):
+                packages.add(rest.split()[0])
+        elif entry.startswith("tool "):
+            packages.add(entry[len("tool ") :].strip().split()[0])
+    return packages
+
+
+def _go_profile(repo: Path) -> GateResult:
+    """The Go profile as a pure read: `go.mod` DECLARES the analysers, the task runner
+    CALLS them, CI executes it. `go vet` and `gofmt` need no directive — they ship with the
+    toolchain — so only the two pinned tools are checked here."""
+    go_mod = repo / "go.mod"
+    if not go_mod.is_file():
+        return GateResult(Stage.BUILD, "lint", False, "go.mod is missing")
+    declared = tool_directives(go_mod.read_text())
+    undeclared = [name for name, package in GO_TOOLS if package not in declared]
+    if undeclared:
+        return GateResult(
+            Stage.BUILD,
+            "lint",
+            False,
+            f"go.mod declares no tool directive for {', '.join(undeclared)} "
+            f"(`go get -tool {' '.join(p for n, p in GO_TOOLS if n in undeclared)}`)",
+        )
+    makefile = repo / "Makefile"
+    if not makefile.is_file():
+        return GateResult(Stage.BUILD, "lint", False, "Makefile is missing")
+    runner = _recipe_lines(makefile.read_text())
+    # the invocation, not the bare name: the template's own `sync` target runs
+    # `go get -tool …/staticcheck@v0.8.1`, so the name alone is always present and matching
+    # it would let anyone delete the real call and still pass
+    uncalled = [name for name, _ in GO_TOOLS if f"go tool {name}" not in runner]
+    if uncalled:
+        return GateResult(
+            Stage.BUILD,
+            "lint",
+            False,
+            f"go.mod pins {', '.join(name for name, _ in GO_TOOLS)} but the Makefile never "
+            f"calls {', '.join(uncalled)} — a profile CI does not run is a profile on paper",
+        )
+    return GateResult(
+        Stage.BUILD,
+        "lint",
+        True,
+        f"{', '.join(name for name, _ in GO_TOOLS)} pinned by go.mod and called by the "
+        "Makefile (gofmt and go vet ship with the toolchain and are not checked here)",
+    )
 
 
 def run_gitleaks(repo: Path) -> tuple[int, str] | None:

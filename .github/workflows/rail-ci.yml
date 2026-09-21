@@ -53,6 +53,21 @@ jobs:
           version: "0.11.29"
           checksum: "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
 
+      # Pinned, never the runner's preinstalled Go: a `red-ci` self-hosted runner has no Go
+      # toolchain at all, so relying on what ubuntu-latest happens to ship only works by
+      # accident. 1.26.6 and not 1.26.5 — govulncheck reports three stdlib advisories on
+      # 1.26.5 reachable from ListenAndServe, one of them through encoding/asn1 on the TLS
+      # path (measured on the red-alerts pilot, 2026-09-21).
+      - name: Set up Go
+        if: inputs.stack == 'go'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26.6"
+          check-latest: false
+          # nothing to cache: the template ships no go.sum, and `make sync` is what writes
+          # one. `cache: true` would only warn that it found no dependency file to key on.
+          cache: false
+
       - name: Install gitleaks (pinned, checksum verified)
         env:
           GITLEAKS_VERSION: "8.30.1"

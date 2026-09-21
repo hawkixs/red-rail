@@ -1,6 +1,6 @@
 # {{ project }} task runner. Every target is what CI runs, nothing more.
 
-.PHONY: sync lint test check ci serve image
+.PHONY: sync lint test check ci serve image{% if stack == 'go' %} vuln{% endif %}
 
 RAIL_FLAGS ?=
 
@@ -27,18 +27,30 @@ image:
 	docker build --build-arg VERSION=dev --build-arg GIT_SHA=$$(git rev-parse HEAD) -t {{ project }}:dev .
 {% endif -%}
 {% elif stack == 'go' -%}
-## Download the modules
+## Download the modules, then pin the analysers into go.mod and go.sum.
+## `go get -tool` writes BOTH the `tool` directive and its `require` — a `tool` block alone
+## carries no version and cannot resolve, so the template ships neither and this target is
+## what makes `build.lint` pass. Idempotent: re-running with the same versions is a no-op.
 sync:
 	go mod download
+	go get -tool honnef.co/go/tools/cmd/staticcheck@v0.8.1
+	go get -tool golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
-## Vet and format check
+## Format check, vet and staticcheck (pinned by go.mod, not `@latest`)
 lint:
-	go vet ./...
 	test -z "$$(gofmt -l .)"
+	go vet ./...
+	go tool staticcheck ./...
 
-## Run the test suite
+## Run the test suite. `-count=1` is not a preference: `go test` caches a package's result
+## from the inputs it can observe, so a guard that shells out is served from cache and stops
+## guarding — a cached green is more dangerous than no test at all.
 test:
-	go test ./...
+	go test -race -count=1 ./...
+
+## Known vulnerabilities reachable from this module's call graph
+vuln:
+	go tool govulncheck ./...
 {% else -%}
 ## Nothing to install for a documentation project
 sync:
@@ -57,4 +69,4 @@ check:
 	rail check $(RAIL_FLAGS)
 
 ## What CI runs, in order
-ci: lint test check
+ci: lint test {% if stack == 'go' %}vuln {% endif %}check
