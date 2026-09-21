@@ -233,3 +233,52 @@ def test_errors_are_explicit_and_bounded() -> None:
     )
     with pytest.raises(GitHubError, match="too large"):
         app.diff("hawkixs/red-rail", 7)
+
+
+def test_diff_falls_back_to_the_file_list_when_github_refuses_a_large_one() -> None:
+    """GitHub caps the unified diff at 20 000 lines and answers 406. The first real external
+    repository hit it on its first pull request — a rewrite whose bulk is the deletion of the
+    previous implementation. Refusing to review is not an option the rail can take: the
+    verdict gate is fail-closed, so a reviewer that cannot read a large change blocks a
+    legitimate one for ever."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.url.path}?{request.url.params}")
+        if request.url.path.endswith("/pulls/2") and "diff" in request.headers["Accept"]:
+            return httpx.Response(
+                406, json={"message": "Sorry, the diff exceeded the maximum number of lines"}
+            )
+        if request.url.path.endswith("/pulls/2/files"):
+            page = request.url.params.get("page", "1")
+            if page == "1":
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "filename": "main.go",
+                            "status": "added",
+                            "patch": "@@ -0,0 +1 @@\n+package main",
+                        },
+                        {"filename": "logo.png", "status": "added"},  # binary: no patch
+                    ],
+                )
+            return httpx.Response(200, json=[])
+        raise AssertionError(request.url.path)
+
+    def with_token(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return httpx.Response(200, json=TOKEN)
+        return handler(request)
+
+    client = GitHubApp(
+        app_id=1, installation_id=2, private_key_pem=PEM, transport=httpx.MockTransport(with_token)
+    )
+    diff = client.diff("hawkixs/red-alerts", 2)
+
+    assert "diff --git a/main.go b/main.go" in diff
+    assert "+package main" in diff
+    # a file whose patch GitHub omits must be named, not silently dropped: the reviewer has
+    # to know it changed even though it cannot read how
+    assert "logo.png" in diff and "no patch" in diff
+    assert any("/files" in c for c in calls), "the fallback actually asked for the file list"
