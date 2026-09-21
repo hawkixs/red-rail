@@ -98,6 +98,7 @@ class Ticket:
     bindings: list[dict[str, Any]] = field(default_factory=list)
     integration_receipt: dict[str, Any] | None = None
     fulfillment_receipt: dict[str, Any] | None = None
+    status: str = "open"  # brain's raw ticket status; {wontfix, closed, acked} are terminal
 
     def participant(self, project: str) -> bool:
         return project in (self.from_project, self.to_project)
@@ -181,10 +182,10 @@ class FakeBrain:
                 "assessment_id": "a" * 64,
                 "assessment_version": ticket.assessment_version,
                 "assessed_at": datetime.now(UTC).isoformat(),
-                "coordination_status": "open",
+                "coordination_status": ticket.status,
                 "delivery_stage": "integrated" if ticket.integration_receipt else "proposed",
                 "observation_health": "fresh",
-                "acceptance_state": "pending",
+                "acceptance_state": "accepted" if ticket.status == "closed" else "pending",
                 "requirements_satisfied": ticket.integration_receipt is not None,
                 "integration_receipt_eligible": False,
                 "completion_eligible_now": False,

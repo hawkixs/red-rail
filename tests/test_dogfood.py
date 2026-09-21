@@ -13,7 +13,9 @@ from rail.cli import main
 from rail.model import LedgerBackend, Tier, load_rail_config
 
 ROOT = Path(__file__).resolve().parents[1]
-TICKET = "22a72dcf-1cf4-4c73-9476-8414da5484ab"  # red → red-rail, "Deliver red-rail phase 3"
+# Changes with every phase: a ticket is terminal once its phase is accepted, and
+#  now refuses a closed one rather than scoring a finished phase.
+TICKET = "513e109b-1b02-476c-9e31-dbafc07b5b14"  # red → red-rail, standardisation phase
 
 
 def test_manifest_declares_dev_on_the_brain_ledger_without_exceptions() -> None:

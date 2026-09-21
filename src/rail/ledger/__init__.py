@@ -285,7 +285,23 @@ class Record(BaseModel):
         return dict(self.payload)
 
 
+# What brain treats as terminal for delivery evidence — mirrored from
+# `repositories/pg_delivery_evidence._TERMINAL_STATUSES`, not guessed. `resolved` is NOT
+# among them: a resolved ticket still awaits the requester's confirmation. Matching `closed`
+# alone left a ticket ended by `wontfix` or `acked` covering new work, which is the very
+# thing the intent gate exists to refuse.
+TERMINAL_TICKET_STATUSES = frozenset({"wontfix", "closed", "acked"})
+
+
 class Ledger(Protocol):
+    def coordination_status(self) -> str | None:
+        """Brain's raw ticket status for a ledger whose contract lives on a ticket, None for
+        one that has no such notion. Brain's own enum is `open`, `in_progress`, `resolved`,
+        `wontfix`, `closed`, `acked`; `TERMINAL_TICKET_STATUSES` says which of them end a
+        delivery. The status is returned verbatim so a caller reports what brain said rather
+        than asserting a disposition it never read."""
+        ...
+
     def contract_set(
         self, project: str, contract: Contract, *, reason: str, issuer: str, idempotency_key: str
     ) -> Record: ...

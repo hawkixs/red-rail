@@ -47,6 +47,10 @@ class FileLedger:
 
     # -- protocol -------------------------------------------------------------------------
 
+    def coordination_status(self) -> str | None:
+        """Receipts carry no ticket, so this ledger has no disposition to report."""
+        return None
+
     def contract_set(
         self, project: str, contract: Contract, *, reason: str, issuer: str, idempotency_key: str
     ) -> Record:
