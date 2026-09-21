@@ -17,7 +17,13 @@ CLOCK = lambda: datetime(2026, 9, 15, 8, 0, tzinfo=UTC)  # noqa: E731
 CONTRACT = Contract(
     objective="ship red-alpha",
     acceptance_criteria=["rail check passes"],
-    deliverables=[Deliverable(key="main", repository="hawkixs/red-alpha")],
+    deliverables=[
+        Deliverable(
+            key="main",
+            repository="hawkixs/red-alpha",
+            no_checks_reason="fixture: no check declared",
+        )
+    ],
 )
 
 

@@ -33,6 +33,8 @@ def test_contract_set_records_a_contract_from_the_canonical_remote(tmp_path: Pat
             "deployed once",
             "--reason",
             "bootstrap",
+            "--no-checks-reason",
+            "fixture: no check declared",
             "--json",
         ],
     )
@@ -46,7 +48,7 @@ def test_contract_set_records_a_contract_from_the_canonical_remote(tmp_path: Pat
             "repository_id": None,
             "target_branch": "main",
             "required_checks": [],
-            "no_checks_reason": None,
+            "no_checks_reason": "fixture: no check declared",
             "review": {"required_approvals": 1, "allowed_reviewers": []},
         }
     ]
@@ -71,6 +73,8 @@ def test_contract_set_is_idempotent_by_key(tmp_path: Path) -> None:
         "x",
         "--reason",
         "r",
+        "--no-checks-reason",
+        "fixture: no check declared",
         "--key",
         "c1",
     ]
@@ -85,7 +89,19 @@ def test_contract_set_needs_a_deliverable_when_no_github_remote(tmp_path: Path) 
     repo = _repo(tmp_path)
     git(repo, "remote", "remove", "origin")
     out = CliRunner().invoke(
-        main, ["contract", "set", "--repo", str(repo), "--objective", "x", "--reason", "r"]
+        main,
+        [
+            "contract",
+            "set",
+            "--repo",
+            str(repo),
+            "--objective",
+            "x",
+            "--reason",
+            "r",
+            "--no-checks-reason",
+            "fixture: no check declared",
+        ],
     )
     assert out.exit_code == 2 and "--deliverable" in out.output
     out = CliRunner().invoke(
@@ -99,6 +115,8 @@ def test_contract_set_needs_a_deliverable_when_no_github_remote(tmp_path: Path) 
             "x",
             "--reason",
             "r",
+            "--no-checks-reason",
+            "fixture: no check declared",
             "--deliverable",
             "hawkixs/other:release",
         ],
@@ -314,6 +332,8 @@ def test_contract_set_accepts_priority_and_acceptance_mode(tmp_path: Path) -> No
             "x",
             "--reason",
             "r",
+            "--no-checks-reason",
+            "fixture: no check declared",
             "--priority",
             "7",
             "--acceptance-mode",
@@ -398,7 +418,14 @@ def test_contract_key_names_the_ticket_and_the_next_revision_in_brain_mode(tmp_p
     brain.add_ticket("red", "red-alpha", "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f")
     ledger = open_ledger(repo, client=BrainClient.in_memory(brain, agent="operator"))
     first = Contract(
-        objective="v1", deliverables=[Deliverable(key="main", repository="hawkixs/red-alpha")]
+        objective="v1",
+        deliverables=[
+            Deliverable(
+                key="main",
+                repository="hawkixs/red-alpha",
+                no_checks_reason="fixture: no check declared",
+            )
+        ],
     )
     record = ledger.contract_set("red-alpha", first, reason="r", issuer="op", idempotency_key="k1")
     assert record.idempotency_key == "contract:04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f:1"
@@ -411,3 +438,66 @@ def test_contract_key_names_the_ticket_and_the_next_revision_in_brain_mode(tmp_p
         next_contract_key(FileLedger(tmp_path / "empty"), "red-alpha", None)
         == "contract:red-alpha:1"
     )
+
+
+def test_contract_set_names_the_missing_flag_instead_of_refusing_late(tmp_path: Path) -> None:
+    """A deliverable with no required check must say why. Without `--no-checks-reason` the
+    command stops before the ledger and names the flag; brain answered `invalid_arguments:
+    delivery arguments are invalid` without naming the field, which cost a pilot half an
+    hour of reading `deploy/flow.py` and another project's receipt."""
+    repo = _repo(tmp_path)
+    out = CliRunner().invoke(
+        main,
+        ["contract", "set", "--repo", str(repo), "--objective", "x", "--reason", "r"],
+    )
+    assert out.exit_code == 2, out.output
+    assert "--no-checks-reason" in out.output and "--required-check" in out.output
+    assert not list((repo / RECEIPTS_DIR).glob("*.json"))
+
+
+def test_contract_set_records_the_declared_absence_of_checks(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    out = CliRunner().invoke(
+        main,
+        [
+            "contract",
+            "set",
+            "--repo",
+            str(repo),
+            "--objective",
+            "x",
+            "--reason",
+            "r",
+            "--no-checks-reason",
+            "tier bootstrap: no pull request is reviewed before the design stage",
+            "--json",
+        ],
+    )
+    assert out.exit_code == 0, out.output
+    deliverable = json.loads(out.output)["payload"]["contract"]["deliverables"][0]
+    assert deliverable["required_checks"] == []
+    assert deliverable["no_checks_reason"].startswith("tier bootstrap")
+
+
+def test_contract_set_with_a_required_check_needs_no_reason(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    out = CliRunner().invoke(
+        main,
+        [
+            "contract",
+            "set",
+            "--repo",
+            str(repo),
+            "--objective",
+            "x",
+            "--reason",
+            "r",
+            "--required-check",
+            "check_run:red-rail/review@red-rail-reviewer",
+            "--json",
+        ],
+    )
+    assert out.exit_code == 0, out.output
+    deliverable = json.loads(out.output)["payload"]["contract"]["deliverables"][0]
+    assert deliverable["no_checks_reason"] is None
+    assert deliverable["required_checks"][0]["app_slug"] == "red-rail-reviewer"

@@ -164,7 +164,13 @@ def with_evidence(repo: Path, *, through: str, clock: Callable[[], datetime] | N
     contract = Contract(
         objective=f"ship {name}",
         acceptance_criteria=["rail check passes"],
-        deliverables=[Deliverable(key="main", repository=f"hawkixs/{name}")],
+        deliverables=[
+            Deliverable(
+                key="main",
+                repository=f"hawkixs/{name}",
+                no_checks_reason="fixture: no check declared",
+            )
+        ],
     )
     ledger.contract_set(name, contract, reason="bootstrap", issuer="op", idempotency_key="c1")
     if through == "design":

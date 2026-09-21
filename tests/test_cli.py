@@ -28,7 +28,13 @@ def _bootstrap_repo(tmp_path: Path) -> Path:
         "red-alpha",
         Contract(
             objective="fixture",
-            deliverables=[Deliverable(key="main", repository="hawkixs/red-alpha")],
+            deliverables=[
+                Deliverable(
+                    key="main",
+                    repository="hawkixs/red-alpha",
+                    no_checks_reason="fixture: no check declared",
+                )
+            ],
         ),
         reason="bootstrap",
         issuer="op",
@@ -45,7 +51,13 @@ def _dev_repo(tmp_path: Path) -> Path:
         "red-beta",
         Contract(
             objective="fixture",
-            deliverables=[Deliverable(key="main", repository="hawkixs/red-beta")],
+            deliverables=[
+                Deliverable(
+                    key="main",
+                    repository="hawkixs/red-beta",
+                    no_checks_reason="fixture: no check declared",
+                )
+            ],
         ),
         reason="bootstrap",
         issuer="op",

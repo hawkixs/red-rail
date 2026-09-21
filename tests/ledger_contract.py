@@ -17,7 +17,13 @@ from rail.ledger import (
 CONTRACT = Contract(
     objective="ship the probe",
     acceptance_criteria=["/healthz answers 200"],
-    deliverables=[Deliverable(key="probe", repository="hawkixs/red-probe")],
+    deliverables=[
+        Deliverable(
+            key="probe",
+            repository="hawkixs/red-probe",
+            no_checks_reason="fixture: no check declared",
+        )
+    ],
 )
 PR = PullRequestRef(repository="hawkixs/red-probe", number=7, head_sha="a" * 40)
 

@@ -31,7 +31,14 @@ T0 = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
 CONTRACT = Contract(
     objective="ship the probe",
     acceptance_criteria=["/healthz answers 200"],
-    deliverables=[Deliverable(key="probe", repository="hawkixs/red-probe", repository_id=4242)],
+    deliverables=[
+        Deliverable(
+            key="probe",
+            repository="hawkixs/red-probe",
+            repository_id=4242,
+            no_checks_reason="fixture: no check declared",
+        )
+    ],
 )
 
 
@@ -444,7 +451,13 @@ def test_server_enriched_fields_do_not_defeat_content_idempotency(tmp_path: Path
     ledger, brain, ticket = _ledger(tmp_path)
     bare = Contract(
         objective="ship the probe",
-        deliverables=[Deliverable(key="probe", repository="hawkixs/red-probe")],
+        deliverables=[
+            Deliverable(
+                key="probe",
+                repository="hawkixs/red-probe",
+                no_checks_reason="fixture: no check declared",
+            )
+        ],
     )
     first = ledger.contract_set(
         "red-probe", bare, reason="bootstrap", issuer="op", idempotency_key="c0"

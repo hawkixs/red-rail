@@ -181,6 +181,15 @@ class Deliverable(BaseModel):
     no_checks_reason: str | None = Field(default=None, min_length=1, max_length=2000)
     review: ReviewPolicy = Field(default_factory=ReviewPolicy)
 
+    @model_validator(mode="after")
+    def _explicit_check_policy(self) -> Deliverable:
+        """Mirrors brain-v42 (`models/delivery.py`): no required check is a declared
+        exception, not a default. Enforced here too so a `file` ledger never stores a
+        contract `brain` would refuse — the wall must not wait for the switch."""
+        if not self.required_checks and self.no_checks_reason is None:
+            raise ValueError("no_checks_reason is required when required_checks is empty")
+        return self
+
 
 class Contract(BaseModel):
     """Mirrors the `contract` argument of `brain_delivery_contract_set`, so phase 2 maps 1:1."""

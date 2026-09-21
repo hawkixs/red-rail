@@ -57,6 +57,7 @@ def parse_deliverable(
     *,
     required_checks: list[RequiredCheck] | None = None,
     review: ReviewPolicy | None = None,
+    no_checks_reason: str | None = None,
 ) -> Deliverable:
     """`owner/name[:key]` → Deliverable on `main`, with the checks and the review policy every
     deliverable of this contract shares."""
@@ -65,6 +66,7 @@ def parse_deliverable(
         key=key or "main",
         repository=repository,
         required_checks=list(required_checks or []),
+        no_checks_reason=no_checks_reason,
         review=review or ReviewPolicy(),
     )
 
@@ -110,6 +112,10 @@ def command() -> None:
     "check_run:red-rail/review@red-rail-reviewer.",
 )
 @click.option(
+    "--no-checks-reason",
+    help="Why this contract requires no check — mandatory when --required-check is absent.",
+)
+@click.option(
     "--allowed-reviewer",
     "allowed_reviewers",
     multiple=True,
@@ -137,6 +143,7 @@ def set_(
     issuer: str,
     idempotency_key: str | None,
     required_checks: tuple[str, ...],
+    no_checks_reason: str | None,
     allowed_reviewers: tuple[str, ...],
     required_approvals: int,
     priority: int,
@@ -145,6 +152,19 @@ def set_(
 ) -> None:
     """Create or amend the project's delivery contract in the ledger."""
     checks = [parse_required_check(spec) for spec in required_checks]
+    if not checks and not no_checks_reason:
+        # brain refuses this contract with `invalid_arguments` without naming the field;
+        # stop before the ledger and name the flag instead (decision bc679157: a command
+        # tells a repository what awaits it).
+        raise click.UsageError(
+            "a deliverable with no required check must say why: pass --no-checks-reason "
+            '"<reason>", or declare a check with --required-check KIND:NAME@APP_SLUG '
+            "(e.g. check_run:red-rail/review@red-rail-reviewer)."
+        )
+    if checks and no_checks_reason:
+        raise click.UsageError(
+            "--no-checks-reason contradicts --required-check: pass one or the other."
+        )
     review = ReviewPolicy(
         required_approvals=required_approvals, allowed_reviewers=list(allowed_reviewers)
     )
@@ -161,7 +181,10 @@ def set_(
             acceptance_criteria=list(criteria),
             constraints=list(constraints),
             deliverables=[
-                parse_deliverable(d, required_checks=checks, review=review) for d in deliverables
+                parse_deliverable(
+                    d, required_checks=checks, review=review, no_checks_reason=no_checks_reason
+                )
+                for d in deliverables
             ],
             priority=priority,
             acceptance_mode=acceptance_mode,

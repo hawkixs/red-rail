@@ -98,7 +98,14 @@ def test_run_gates_all_pass_on_conforming_repo(tmp_path: Path) -> None:
     FileLedger(repo / RECEIPTS_DIR).contract_set(
         "red-alpha",
         Contract(
-            objective="x", deliverables=[Deliverable(key="m", repository="hawkixs/red-alpha")]
+            objective="x",
+            deliverables=[
+                Deliverable(
+                    key="m",
+                    repository="hawkixs/red-alpha",
+                    no_checks_reason="fixture: no check declared",
+                )
+            ],
         ),
         reason="bootstrap",
         issuer="op",
