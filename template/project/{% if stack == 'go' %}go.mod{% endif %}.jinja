@@ -1,10 +1,3 @@
 module github.com/hawkixs/{{ project }}
 
 go 1.26.6
-
-// Pinned by the module, never `@latest`: the workstation, CI and the release resolve the
-// same analysers. `build.lint` reads these directives — see `go get -tool`.
-tool (
-	golang.org/x/vuln/cmd/govulncheck
-	honnef.co/go/tools/cmd/staticcheck
-)

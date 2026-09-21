@@ -27,9 +27,14 @@ image:
 	docker build --build-arg VERSION=dev --build-arg GIT_SHA=$$(git rev-parse HEAD) -t {{ project }}:dev .
 {% endif -%}
 {% elif stack == 'go' -%}
-## Download the modules and the analysers go.mod pins
+## Download the modules, then pin the analysers into go.mod and go.sum.
+## `go get -tool` writes BOTH the `tool` directive and its `require` — a `tool` block alone
+## carries no version and cannot resolve, so the template ships neither and this target is
+## what makes `build.lint` pass. Idempotent: re-running with the same versions is a no-op.
 sync:
 	go mod download
+	go get -tool honnef.co/go/tools/cmd/staticcheck@v0.8.1
+	go get -tool golang.org/x/vuln/cmd/govulncheck@v1.8.0
 	go mod download tool
 
 ## Format check, vet and staticcheck (pinned by go.mod, not `@latest`)

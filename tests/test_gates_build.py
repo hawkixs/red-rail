@@ -129,3 +129,38 @@ def test_lint_gate_wants_the_go_profile_wired_into_the_task_runner(tmp_path: Pat
     result = lint(go)
     assert not result.passed and "Makefile" in result.details
     assert "staticcheck" in result.details and "govulncheck" in result.details
+
+
+def test_lint_gate_is_not_satisfied_by_commented_out_text(tmp_path: Path) -> None:
+    """Substring containment over whole files let dead text pass: a commented-out recipe
+    runs nothing, and a `.PHONY` line naming a tool is not a call. The gate reads what go
+    and make actually act on."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+
+    (go / "Makefile").write_text(
+        ".PHONY: staticcheck govulncheck ci\n"
+        "ci: lint\n"
+        "lint:\n"
+        "\tgo vet ./...\n"
+        "\t# go tool staticcheck ./...  # TODO re-enable\n"
+        "\t# go tool govulncheck ./...\n"
+    )
+    result = lint(go)
+    assert not result.passed, result.details
+    assert "staticcheck" in result.details and "govulncheck" in result.details
+
+    (go / "go.mod").write_text(
+        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "// tool (\n"
+        "// \tgolang.org/x/vuln/cmd/govulncheck\n"
+        "// \thonnef.co/go/tools/cmd/staticcheck\n"
+        "// )\n"
+    )
+    assert not lint(go).passed and "go get -tool" in lint(go).details
+
+
+def test_lint_gate_reports_a_missing_makefile_for_a_go_repository(tmp_path: Path) -> None:
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    (go / "Makefile").unlink()
+    result = lint(go)
+    assert not result.passed and "Makefile is missing" in result.details

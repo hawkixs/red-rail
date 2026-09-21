@@ -388,27 +388,34 @@ def test_brain_mode_records_the_contract_after_the_remotes_and_mirrors_it(
     assert calls == []  # publish=False: nothing pushed
 
 
-def test_render_go_declares_the_analysers_the_lint_gate_reads(
+def test_render_go_ships_a_resolvable_module_and_a_sync_that_pins_the_analysers(
     template_dir: Path, tmp_path: Path
 ) -> None:
-    """The Go template was never rendered by a test, so a broken jinja conditional went
-    unnoticed. What a scaffolded Go project owes `build.lint`: `go.mod` pins staticcheck and
-    govulncheck by `tool` directive, and the Makefile calls them — declared here, executed by
-    CI. Versions measured on the red-alerts pilot (2026-09-21)."""
+    """A `tool` directive carries no version — `go get -tool` writes it together with its
+    `require`, and a `tool` block alone cannot resolve (`go.dev/ref/mod`). The template
+    therefore ships neither, and `make sync` is what pins the analysers into go.mod and
+    go.sum. Until it has run, `build.lint` fails and names the command — the gate telling
+    the repository what awaits it.
+
+    Before this, the Go template was rendered by no test at all, so a broken jinja
+    conditional went unnoticed. Versions measured on the red-alerts pilot (2026-09-21)."""
     from rail.gates.build import lint
 
     dest = render(_project(template_dir, tmp_path / "red-beta", slug="red-beta", stack=Stack.GO))
 
     go_mod = (dest / "go.mod").read_text()
     assert "go 1.26.6" in go_mod  # not 1.26.5: three stdlib advisories reachable from serving
-    assert "honnef.co/go/tools/cmd/staticcheck" in go_mod
-    assert "golang.org/x/vuln/cmd/govulncheck" in go_mod
+    # no unresolvable `tool` block: it would break `make sync`, `make lint` and `make vuln`
+    # on the very first run of every scaffolded Go project
+    assert "tool (" not in go_mod and "require" not in go_mod
 
     makefile = (dest / "Makefile").read_text()
+    assert "go get -tool honnef.co/go/tools/cmd/staticcheck@v0.8.1" in makefile
+    assert "go get -tool golang.org/x/vuln/cmd/govulncheck@v1.8.0" in makefile
     assert "go tool staticcheck ./..." in makefile
     assert "go tool govulncheck ./..." in makefile
-    # a cached green is worse than no test: `go test` serves a package from cache on inputs it
-    # can observe, so a guard that shells out stops guarding
+    # a cached green is worse than no test: `go test` serves a package from cache on inputs
+    # it can observe, so a guard that shells out stops guarding
     assert "go test -race -count=1 ./..." in makefile
     assert "ci: lint test vuln check" in makefile
 
@@ -418,5 +425,6 @@ def test_render_go_declares_the_analysers_the_lint_gate_reads(
         "stack: go" in (dest / ".github" / "workflows" / "continuous-integration.yml").read_text()
     )
 
+    # the gate fails on a fresh scaffold and names the way out — `make sync` is that way
     result = lint(dest)
-    assert result.passed, result.details
+    assert not result.passed and "go get -tool" in result.details

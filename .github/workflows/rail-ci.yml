@@ -64,6 +64,9 @@ jobs:
         with:
           go-version: "1.26.6"
           check-latest: false
+          # nothing to cache: the template ships no go.sum, and `make sync` is what writes
+          # one. `cache: true` would only warn that it found no dependency file to key on.
+          cache: false
 
       - name: Install gitleaks (pinned, checksum verified)
         env:

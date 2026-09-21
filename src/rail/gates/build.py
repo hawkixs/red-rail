@@ -84,6 +84,26 @@ GO_TOOLS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _live_lines(text: str, *, comment: str) -> str:
+    """`text` with commented-out content removed, so dead text never satisfies the gate: a
+    `# go tool staticcheck ./...  # TODO re-enable` runs nothing and must not count as a
+    call, and neither must a commented-out `tool (…)` block."""
+    kept = []
+    for line in text.splitlines():
+        head = line.split(comment, 1)[0]
+        if head.strip():
+            kept.append(head)
+    return "\n".join(kept)
+
+
+def _recipe_lines(makefile: str) -> str:
+    """Only what make actually runs: recipe lines are TAB-indented, and `#` starts a comment.
+    A target named `staticcheck` that runs nothing, or a `.PHONY` listing it, is not a call."""
+    return _live_lines(
+        "\n".join(line for line in makefile.splitlines() if line.startswith("\t")), comment="#"
+    )
+
+
 def _go_profile(repo: Path) -> GateResult:
     """The Go profile as a pure read: `go.mod` DECLARES the analysers, the task runner
     CALLS them, CI executes it. `go vet` and `gofmt` need no directive — they ship with the
@@ -91,7 +111,7 @@ def _go_profile(repo: Path) -> GateResult:
     go_mod = repo / "go.mod"
     if not go_mod.is_file():
         return GateResult(Stage.BUILD, "lint", False, "go.mod is missing")
-    declared = go_mod.read_text()
+    declared = _live_lines(go_mod.read_text(), comment="//")
     undeclared = [name for name, package in GO_TOOLS if package not in declared]
     if undeclared:
         return GateResult(
@@ -104,7 +124,7 @@ def _go_profile(repo: Path) -> GateResult:
     makefile = repo / "Makefile"
     if not makefile.is_file():
         return GateResult(Stage.BUILD, "lint", False, "Makefile is missing")
-    runner = makefile.read_text()
+    runner = _recipe_lines(makefile.read_text())
     uncalled = [name for name, _ in GO_TOOLS if name not in runner]
     if uncalled:
         return GateResult(
@@ -118,8 +138,8 @@ def _go_profile(repo: Path) -> GateResult:
         Stage.BUILD,
         "lint",
         True,
-        f"go vet, gofmt and {', '.join(name for name, _ in GO_TOOLS)} pinned by go.mod "
-        "and called by the Makefile",
+        f"{', '.join(name for name, _ in GO_TOOLS)} pinned by go.mod and called by the "
+        "Makefile (gofmt and go vet ship with the toolchain and are not checked here)",
     )
 
 
