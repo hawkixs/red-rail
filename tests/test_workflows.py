@@ -5,7 +5,8 @@ from pathlib import Path
 
 import yaml
 
-WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github" / "workflows"
 PINNED = re.compile(r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
 
 
@@ -89,3 +90,33 @@ def test_rail_ci_sets_up_a_pinned_go_for_the_go_stack() -> None:
     assert step["with"]["go-version"] == "1.26.6"
     assert step["with"]["check-latest"] is False, "pinned, never the latest patch of the day"
     assert step["with"]["cache"] is False, "no go.sum is shipped, so there is nothing to key on"
+
+
+def test_the_template_never_inherits_every_secret() -> None:
+    """`secrets: inherit` hands the called workflow everything the repository holds, while
+    `rail-ci` declares exactly one optional secret. Nothing leaked today because the pilot
+    had no repository secrets — which is precisely why it was the moment to fix it: the day
+    someone adds one to an onboarded repository, nobody re-reads this file. Omitting the
+    key entirely leaves `secrets.RAIL_READ_TOKEN` empty, and the workflow already falls
+    back to `github.token` (red-rail is public, so no token is needed to check it out)."""
+    import yaml
+
+    template = (
+        ROOT / "template" / "project" / ".github" / "workflows"
+    ) / "continuous-integration.yml.jinja"
+    text = template.read_text()
+
+    # the reusable workflow still declares that one secret, and still declares it optional
+    call = _load("rail-ci.yml")["on"]["workflow_call"]
+    assert set(call["secrets"]) == {"RAIL_READ_TOKEN"}
+    assert call["secrets"]["RAIL_READ_TOKEN"]["required"] is False
+
+    rendered = (
+        text.replace("{{ stack }}", "go").replace("{% raw %}", "").replace("{% endraw %}", "")
+    )
+    job = yaml.safe_load(rendered)["jobs"]["rail"]
+    assert job["with"]["stack"] == "go"
+    # the parsed call, not the spelling: a comment explaining why inheritance is wrong would
+    # fail a text search for it, and what matters is what the workflow is handed
+    assert job.get("secrets") != "inherit", "hand over a declared secret, not the whole box"
+    assert "secrets" not in job, "no secret is needed at all: the fallback is github.token"

@@ -19,4 +19,7 @@ jobs:
     uses: hawkixs/red-rail/.github/workflows/rail-ci.yml@main
     with:
       stack: {{ stack }}
-    secrets: inherit
+    # No `secrets: inherit`: that hands over everything the repository holds, while rail-ci
+    # declares one optional secret. Omitted entirely, `RAIL_READ_TOKEN` resolves to empty and
+    # the workflow falls back to `github.token` — red-rail is public, so checking it out
+    # needs no token at all.
