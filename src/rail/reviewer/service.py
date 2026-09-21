@@ -24,6 +24,7 @@ from rail.ledger.file import receipt_filename
 from rail.reviewer.github import GitHubError, PullRequest
 from rail.reviewer.judges import JudgeReply, judge
 from rail.reviewer.policy import ReviewPolicy, producer_provider
+from rail.reviewer.split import oversized, split_diff
 from rail.reviewer.verdict import Finding, ReviewVerdict
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
@@ -388,11 +389,58 @@ def _review_started(
     else:
         diff, notes = github.diff(pr.repository, pr.number), ""
         light = policy.mode_for(pr, docs_only=docs_only(diff, policy)) == "light"
-    truncated = len(diff) > policy.max_diff_chars
     producer = producer_provider(github.commit_messages(pr.repository, pr.number))
     chain = policy.chain_for(producer=producer)
     criteria = _criteria(ledger, project)
     common = dict(criteria=criteria, run_judge=run_judge, root=root, failures=failures, notes=notes)
+
+    # A change larger than one judge can hold is read in bounded pieces, cut only between
+    # files. The old behaviour handed over `diff[:budget]` and recorded that it had: measured
+    # on the first external pull request, 21% of the change, ruled `approve`. Only a file too
+    # large to bound on its own still counts as truncated.
+    chunks = split_diff(diff, budget=policy.max_diff_chars)
+    unbounded = oversized(chunks, budget=policy.max_diff_chars)
+    truncated = bool(unbounded)
+    if len(chunks) > 1:
+        replies = []
+        for index, chunk in enumerate(chunks, start=1):
+            part = f"{notes}\n\n_Part {index} of {len(chunks)} of this change._".strip()
+            replies.extend(
+                _judge_chain(
+                    pr,
+                    chunk,
+                    policy,
+                    chain,
+                    tier="deep",
+                    wanted=1,
+                    **{**common, "notes": part},
+                )
+            )
+        mode = "deep"
+        verdict = (
+            _merge(replies, mode, truncated)
+            if any(r.verdict for r in replies)
+            else ReviewVerdict(
+                verdict="request_changes",
+                summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
+                findings=[],
+                mode=mode,
+                providers=(),
+                diff_truncated=truncated,
+            )
+        )
+        return _publish(
+            pr,
+            check,
+            verdict,
+            verdict.verdict,
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            failures=failures,
+        )
     if light:
         replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=1, **common)
     else:
