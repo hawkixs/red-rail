@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans-parallel` to dispatch tasks in batches via TeamCreate.
 
 **Goal:** Deliver phase 1 of the design spec [docs/specs/2026-09-14-red-rail-design.md](../specs/2026-09-14-red-rail-design.md) §8: every gate as a pure function, `rail check` scored against the declared tier, the `Ledger` protocol with `FileLedger`, `rail attest` / `rail contract set` / `rail metrics` (four DORA + conformance) without brain, `rail audit` producing the repository × stage matrix over the 24 ReD projects, a copier template with `rail new` / `rail upgrade`, a reusable `rail-ci.yml`, and facade skills — then red-rail dogfooded at tier `dev` on a file ledger.
-**Test command:** `cd /home/hawixs/hawkixs_infra/git_repo/ReD_v1/projects/red-rail && make lint test`
+**Test command:** `cd <ReD_ROOT>/ReD_v1/projects/red-rail && make lint test`
 **Tech Stack:** Python 3.12, uv, Click 8, Pydantic 2, PyYAML, copier 9.18, pytest, ruff; git ≥ 2.28 and gitleaks 8.30 on the host.
 
 **Branch:** all tasks commit on `feat/phase-1-rail-without-network`, created from `main@d7a11a9`; this plan is its first commit. CI on that branch is expected red between Batch 3 and Batch 5 (new gates arrive before red-rail's own receipts do); the PR is opened after Batch 5 with `make ci` green.
