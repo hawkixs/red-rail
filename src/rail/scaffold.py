@@ -18,7 +18,7 @@ from rail import remotes
 from rail.gates import GateResult, run_gates
 from rail.ledger import Contract, Deliverable, Record, RequiredCheck, ReviewPolicy, open_ledger
 from rail.ledger.file import FileLedger
-from rail.model import LedgerBackend, Stack, Tier
+from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.policy import parameter, stages_for
 
 TEMPLATE_SOURCE = "git@github.com:hawkixs/red-rail.git"
@@ -64,6 +64,14 @@ class NewProject:
         }
         if self.tier is Tier.PROD:
             data["deploy_target"] = self.deploy_target
+            # A private target has no public route and no guessable default: the address is
+            # something the operator states, never something the scaffold assumes — and no
+            # machine address belongs in this repository.
+            if self.deploy_target == DeployTarget.PRIVATE_COMPOSE and not self.healthcheck:
+                raise ScaffoldError(
+                    "target private-compose has no default healthcheck: pass --healthcheck "
+                    "with the address the service answers on"
+                )
             data["healthcheck"] = self.healthcheck or f"https://{self.slug[4:]}.hawkixs.com/healthz"
         data["ledger"] = self.ledger.value
         if self.ledger is LedgerBackend.BRAIN:
@@ -160,8 +168,15 @@ def bootstrap_contract(project: NewProject) -> Contract:
     )
     criteria = [f"`rail check` passes at tier {project.tier.value}"]
     if project.tier is Tier.PROD:
+        # the route depends on the shape: a private target is reached over WireGuard, and
+        # promising Traefik there would be a criterion nobody can meet
+        route = (
+            "over its private address"
+            if project.deploy_target == DeployTarget.PRIVATE_COMPOSE
+            else "behind Traefik"
+        )
         criteria.append(
-            "the service answers /healthz, /version and /metrics behind Traefik and "
+            f"the service answers /healthz, /version and /metrics {route} and "
             "/version equals the released digest"
         )
     return Contract(

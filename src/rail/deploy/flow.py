@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step
 from rail.ledger import (
@@ -32,14 +32,20 @@ class Target(Protocol):
 
 
 def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
-    if cfg.deploy is None or cfg.deploy.target is not DeployTarget.VPS_TRAEFIK:
-        name = cfg.deploy.target.value if cfg.deploy else "none"
-        raise DeployError(
-            f"deploy target {name} is not implemented in this rail (vps-traefik only)"
-        )
+    """The manifest names the shape; the flows never branch on it again."""
+    from rail.deploy.private_compose import PrivateCompose
     from rail.deploy.vps_traefik import VpsTraefik
 
-    return VpsTraefik(repo, cfg, **kwargs)
+    implemented: dict[DeployTarget, type] = {
+        DeployTarget.VPS_TRAEFIK: VpsTraefik,
+        DeployTarget.PRIVATE_COMPOSE: PrivateCompose,
+    }
+    shape = implemented.get(cfg.deploy.target) if cfg.deploy else None
+    if shape is None:
+        name = cfg.deploy.target.value if cfg.deploy else "none"
+        known = ", ".join(sorted(t.value for t in implemented))
+        raise DeployError(f"deploy target {name} is not implemented in this rail ({known})")
+    return cast("Target", shape(repo, cfg, **kwargs))
 
 
 @dataclass

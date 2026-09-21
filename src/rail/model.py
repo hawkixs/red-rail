@@ -40,6 +40,7 @@ class LedgerBackend(StrEnum):
 
 class DeployTarget(StrEnum):
     VPS_TRAEFIK = "vps-traefik"
+    PRIVATE_COMPOSE = "private-compose"
     PC_SERVER_SYSTEMD = "pc-server-systemd"
 
 
