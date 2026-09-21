@@ -154,7 +154,7 @@ def conforming_tree(root: Path, name: str, tier: str, *, stack: str = "python") 
         (repo / "tests" / "test_smoke.py").write_text("def test_smoke():\n    assert True\n")
     elif stack == "go":
         (repo / "go.mod").write_text(
-            f"module example.invalid/{name}\n\ngo 1.26.6\n\n"
+            f"module example.invalid/{name}\n\ngo 1.26.8\n\n"
             "tool (\n"
             "\tgolang.org/x/vuln/cmd/govulncheck\n"
             "\thonnef.co/go/tools/cmd/staticcheck\n"

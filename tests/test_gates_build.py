@@ -108,14 +108,14 @@ def test_lint_gate_reads_the_go_tool_profile_without_running_it(tmp_path: Path) 
     assert lint(go).passed, lint(go).details
 
     bare = go / "go.mod"
-    bare.write_text("module example.invalid/red-beta\n\ngo 1.26.6\n")
+    bare.write_text("module example.invalid/red-beta\n\ngo 1.26.8\n")
     result = lint(go)
     assert not result.passed
     assert "staticcheck" in result.details and "govulncheck" in result.details
     assert "go get -tool" in result.details
 
     bare.write_text(
-        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "module example.invalid/red-beta\n\ngo 1.26.8\n\n"
         "tool (\n\thonnef.co/go/tools/cmd/staticcheck\n)\n"
     )
     assert "govulncheck" in lint(go).details and not lint(go).passed
@@ -150,7 +150,7 @@ def test_lint_gate_is_not_satisfied_by_commented_out_text(tmp_path: Path) -> Non
     assert "staticcheck" in result.details and "govulncheck" in result.details
 
     (go / "go.mod").write_text(
-        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "module example.invalid/red-beta\n\ngo 1.26.8\n\n"
         "// tool (\n"
         "// \tgolang.org/x/vuln/cmd/govulncheck\n"
         "// \thonnef.co/go/tools/cmd/staticcheck\n"
@@ -191,7 +191,7 @@ def test_lint_gate_wants_a_tool_directive_not_a_bare_require(tmp_path: Path) -> 
     lines and leaving the paths behind must not satisfy the gate."""
     go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
     (go / "go.mod").write_text(
-        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "module example.invalid/red-beta\n\ngo 1.26.8\n\n"
         "require (\n"
         "\tgolang.org/x/vuln/cmd/govulncheck v1.8.0 // indirect\n"
         "\thonnef.co/go/tools/cmd/staticcheck v0.8.1 // indirect\n"
@@ -205,7 +205,7 @@ def test_lint_gate_accepts_a_single_line_tool_directive(tmp_path: Path) -> None:
     """`tool <package>` without parentheses is the other legal form."""
     go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
     (go / "go.mod").write_text(
-        "module example.invalid/red-beta\n\ngo 1.26.6\n\n"
+        "module example.invalid/red-beta\n\ngo 1.26.8\n\n"
         "tool golang.org/x/vuln/cmd/govulncheck\n"
         "tool honnef.co/go/tools/cmd/staticcheck\n"
     )
