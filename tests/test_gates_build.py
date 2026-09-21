@@ -210,3 +210,40 @@ def test_lint_gate_accepts_a_single_line_tool_directive(tmp_path: Path) -> None:
         "tool honnef.co/go/tools/cmd/staticcheck\n"
     )
     assert lint(go).passed, lint(go).details
+
+
+@pytest.mark.parametrize(
+    "recipe",
+    [
+        "\tgo tool staticcheck ./...\n\tgo tool govulncheck ./...\n",
+        "\t$(GO) tool staticcheck ./...\n\t$(GO) tool govulncheck ./...\n",
+        "\t${GO} tool staticcheck ./...\n\t${GO} tool govulncheck ./...\n",
+        "\t$(GOCMD) tool staticcheck ./...\n\t$(GOCMD) tool govulncheck ./...\n",
+    ],
+)
+def test_lint_gate_accepts_a_parameterised_toolchain(tmp_path: Path, recipe: str) -> None:
+    """`GO ?= go` is the ordinary Makefile idiom, and on a host with no Go toolchain it is
+    not a preference: red-alerts runs `make GO=./scripts/go ci`, a wrapper that executes Go
+    in the release image. Matching `go tool <name>` literally rejected the parameterised
+    form and accepted only the hard-coded one."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    (go / "Makefile").write_text(f".PHONY: lint ci\nlint:\n\tgo vet ./...\n{recipe}ci: lint\n")
+    assert lint(go).passed, lint(go).details
+
+
+def test_lint_gate_still_refuses_an_installation_line(tmp_path: Path) -> None:
+    """Dropping the `go` prefix must not reopen the hole the independent reviewer found.
+    It cannot, structurally: after `-tool`, `go get` takes a MODULE PATH, never the bare
+    name, so `tool <name>` on a word boundary can never match an installation line."""
+    go = conforming_tree(tmp_path / "go", "red-beta", "dev", stack="go")
+    (go / "Makefile").write_text(
+        ".PHONY: sync lint ci\n"
+        "sync:\n"
+        "\tgo get -tool honnef.co/go/tools/cmd/staticcheck@v0.8.1\n"
+        "\tgo get -tool golang.org/x/vuln/cmd/govulncheck@v1.8.0\n"
+        "lint:\n\tgo vet ./...\n"
+        "ci: sync lint\n"
+    )
+    result = lint(go)
+    assert not result.passed, result.details
+    assert "staticcheck" in result.details and "govulncheck" in result.details
