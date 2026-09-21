@@ -156,6 +156,10 @@ class RequiredCheck(BaseModel):
     app_slug: str | None = Field(default=None, min_length=1, max_length=200)
     provider_id: int | None = Field(default=None, gt=0)
 
+    def selector(self) -> tuple[str, str, str | None, int | None]:
+        """What brain compares two required checks by (`models/delivery.py`)."""
+        return (self.kind, self.name, self.app_slug, self.provider_id)
+
     @model_validator(mode="after")
     def _publisher_named(self) -> RequiredCheck:
         if self.app_slug is None and self.provider_id is None:
@@ -180,6 +184,19 @@ class Deliverable(BaseModel):
     required_checks: list[RequiredCheck] = Field(default_factory=list, max_length=100)
     no_checks_reason: str | None = Field(default=None, min_length=1, max_length=2000)
     review: ReviewPolicy = Field(default_factory=ReviewPolicy)
+
+    @model_validator(mode="after")
+    def _explicit_check_policy(self) -> Deliverable:
+        """Mirrors brain-v42's method of the same name (`models/delivery.py`), BOTH halves:
+        no required check is a declared exception rather than a default, and a selector may
+        not be listed twice. Enforced here so a `file` ledger never stores a contract
+        `brain` would refuse — the wall must not wait for the switch."""
+        if not self.required_checks and self.no_checks_reason is None:
+            raise ValueError("no_checks_reason is required when required_checks is empty")
+        selectors = [check.selector() for check in self.required_checks]
+        if len(selectors) != len(set(selectors)):
+            raise ValueError("duplicate required check selector")
+        return self
 
 
 class Contract(BaseModel):

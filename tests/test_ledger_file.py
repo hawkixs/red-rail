@@ -207,11 +207,16 @@ def test_unattested_carries_the_receipt_and_the_cause(tmp_path: Path) -> None:
 def test_contract_and_deliverable_carry_the_brain_fields() -> None:
     from rail.ledger import Contract, Deliverable
 
-    contract = Contract(objective="x", deliverables=[Deliverable(key="k", repository="a/b")])
+    contract = Contract(
+        objective="x",
+        deliverables=[
+            Deliverable(key="k", repository="a/b", no_checks_reason="fixture: no check declared")
+        ],
+    )
     dumped = contract.model_dump(mode="json")
     assert dumped["priority"] == 0 and dumped["acceptance_mode"] == "explicit"
     assert dumped["deliverables"][0]["repository_id"] is None
-    assert dumped["deliverables"][0]["no_checks_reason"] is None
+    assert dumped["deliverables"][0]["no_checks_reason"] == "fixture: no check declared"
     with pytest.raises(ValidationError):
         Contract.model_validate({**dumped, "acceptance_mode": "later"})
 
@@ -234,3 +239,47 @@ def test_open_ledger_brain_without_the_extra_is_unavailable_not_a_traceback(
     )
     with pytest.raises(LedgerUnavailable, match="uv sync --extra brain"):
         open_ledger(tmp_path)
+
+
+def test_deliverable_without_a_required_check_must_say_why() -> None:
+    """brain-v42 refuses a deliverable that has neither a required check nor a reason
+    (`models/delivery.py`: "no_checks_reason is required when required_checks is empty").
+    The mirror enforces it too, so a `file` ledger never stores a contract `brain` would
+    refuse — the wall must not wait for the switch to `ledger: brain`."""
+    from rail.ledger import Deliverable, RequiredCheck
+
+    with pytest.raises(ValidationError, match="no_checks_reason"):
+        Deliverable(key="main", repository="hawkixs/red-alpha")
+
+    declared = Deliverable(
+        key="main", repository="hawkixs/red-alpha", no_checks_reason="tier bootstrap: no PR yet"
+    )
+    assert declared.no_checks_reason == "tier bootstrap: no PR yet"
+
+    checked = Deliverable(
+        key="main",
+        repository="hawkixs/red-alpha",
+        required_checks=[RequiredCheck(name="red-rail/review", app_slug="red-rail-reviewer")],
+    )
+    assert checked.no_checks_reason is None
+
+
+def test_deliverable_refuses_the_same_required_check_twice() -> None:
+    """The second half of brain-v42's `_explicit_check_policy`, which the mirror first
+    omitted: two identical selectors are a contract brain refuses."""
+    from rail.ledger import Deliverable, RequiredCheck
+
+    check = RequiredCheck(name="ci", app_slug="red-rail-reviewer")
+    with pytest.raises(ValidationError, match="duplicate required check selector"):
+        Deliverable(key="main", repository="hawkixs/red-alpha", required_checks=[check, check])
+
+    # a different publisher for the same name is a different selector, and stays legal
+    other = RequiredCheck(name="ci", app_slug="someone-else")
+    assert (
+        len(
+            Deliverable(
+                key="main", repository="hawkixs/red-alpha", required_checks=[check, other]
+            ).required_checks
+        )
+        == 2
+    )

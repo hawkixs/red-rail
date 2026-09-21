@@ -47,7 +47,14 @@ def _history(tmp_path: Path) -> Path:
     _ledger_at(repo, T0).contract_set(
         "red-alpha",
         Contract(
-            objective="x", deliverables=[Deliverable(key="m", repository="hawkixs/red-alpha")]
+            objective="x",
+            deliverables=[
+                Deliverable(
+                    key="m",
+                    repository="hawkixs/red-alpha",
+                    no_checks_reason="fixture: no check declared",
+                )
+            ],
         ),
         reason="bootstrap",
         issuer="op",

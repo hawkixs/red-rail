@@ -114,7 +114,13 @@ def _repo(tmp_path: Path) -> tuple[Path, FileLedger]:
         Contract(
             objective="x",
             acceptance_criteria=["tests pass"],
-            deliverables=[Deliverable(key="main", repository="hawkixs/red-alpha")],
+            deliverables=[
+                Deliverable(
+                    key="main",
+                    repository="hawkixs/red-alpha",
+                    no_checks_reason="fixture: no check declared",
+                )
+            ],
         ),
         reason="bootstrap",
         issuer="op",
