@@ -4,9 +4,10 @@ checked at its tier, then published — the 15-step kickstart runbook `a050e6ec`
 
 from __future__ import annotations
 
+import re
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ class NewProject:
     template: str = TEMPLATE_SOURCE
     template_ref: str | None = None
     deploy_target: str = "vps-traefik"
+    rail_ref: str | None = None  # commit SHA the reusable CI workflow is called at
     healthcheck: str | None = None
     ledger: LedgerBackend = LedgerBackend.FILE
     ticket: str | None = None
@@ -73,6 +75,8 @@ class NewProject:
                     "with the address the service answers on"
                 )
             data["healthcheck"] = self.healthcheck or f"https://{self.slug[4:]}.hawkixs.com/healthz"
+        if self.rail_ref:
+            data["rail_ref"] = self.rail_ref
         data["ledger"] = self.ledger.value
         if self.ledger is LedgerBackend.BRAIN:
             if not self.ticket:
@@ -106,6 +110,34 @@ Nothing beyond the bootstrap: no feature is designed here.
 
 `rail check` passes at tier `{tier}` on a fresh clone.
 """
+
+
+SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def resolve_rail_ref(
+    template: str, *, run: Callable[..., Any] = subprocess.run, branch: str = "main"
+) -> str:
+    """The commit SHA the reusable workflow should be called at.
+
+    Never falls back to a branch: a pin that quietly becomes a moving ref is worse than no
+    pin, because it reads as pinned. Anything that is not a 40-character SHA is refused —
+    copier's own `_commit` is `git describe` output (`v0.4.0-44-g4c257be`), which git
+    resolves locally but GitHub does not, being neither a tag nor a branch on the remote."""
+    done = run(
+        [GIT, "ls-remote", template, f"refs/heads/{branch}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    first = (done.stdout or "").split("\t", 1)[0].strip() if done.returncode == 0 else ""
+    if not SHA.match(first):
+        detail = (done.stderr or done.stdout or "").strip()[:200] or "no matching ref"
+        raise ScaffoldError(
+            f"could not resolve {template}@{branch} to a commit SHA: {detail}. The CI "
+            "workflow pin must be a SHA GitHub can use, never a branch or a describe"
+        )
+    return first
 
 
 def render(project: NewProject, *, copy: Callable[..., Any] = copier.run_copy) -> Path:
@@ -248,7 +280,12 @@ def new_project(
     run: remotes.Runner = subprocess.run,
     clock: Callable[[], datetime] | None = None,
     client: Any = None,
+    resolve: Callable[..., str] = resolve_rail_ref,
 ) -> list[GateResult]:
+    # resolved before rendering and never after: a tree that exists with `@main` in it, even
+    # briefly, is a tree someone can commit
+    if not project.rail_ref:
+        project = replace(project, rail_ref=resolve(project.template))
     render(project, copy=copy)
     write_bootstrap_spec(project)
     if project.ledger is LedgerBackend.FILE:
@@ -273,8 +310,17 @@ def new_project(
     return results
 
 
-def upgrade(repo: Path, *, update: Callable[..., Any] = copier.run_update) -> str:
-    """`copier update` towards the template's latest tag; returns the new `_commit`."""
+def upgrade(
+    repo: Path,
+    *,
+    update: Callable[..., Any] = copier.run_update,
+    resolve: Callable[..., str] = resolve_rail_ref,
+) -> str:
+    """`copier update` towards the template's latest tag; returns the new `_commit`.
+
+    Re-resolves the CI workflow pin at the same time, so a gate change reaches a repository
+    as a reviewable line in this command's diff rather than as an effect of `@main` moving
+    under it."""
     answers = repo / ANSWERS_FILE
     if not answers.is_file():
         raise ScaffoldError(f"{ANSWERS_FILE} missing: not scaffolded by copier")
@@ -284,5 +330,13 @@ def upgrade(repo: Path, *, update: Callable[..., Any] = copier.run_update) -> st
             f"{ANSWERS_FILE} has no _src_path/_commit: the template was not versioned; "
             "re-scaffold from a tagged red-rail before upgrading"
         )
-    update(repo, defaults=True, overwrite=True, skip_answered=True, quiet=True, unsafe=False)
+    update(
+        repo,
+        data={"rail_ref": resolve(str(data["_src_path"]))},
+        defaults=True,
+        overwrite=True,
+        skip_answered=True,
+        quiet=True,
+        unsafe=False,
+    )
     return str((yaml.safe_load(answers.read_text()) or {}).get("_commit", ""))

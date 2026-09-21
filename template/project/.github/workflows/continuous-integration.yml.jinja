@@ -16,7 +16,7 @@ concurrency:
 jobs:
   rail:
     # The reusable rail workflow: the project's `make ci`, then `rail check --ci --json`.
-    uses: hawkixs/red-rail/.github/workflows/rail-ci.yml@main
+    uses: hawkixs/red-rail/.github/workflows/rail-ci.yml@{{ rail_ref }}
     with:
       stack: {{ stack }}
     # No `secrets: inherit`: that hands over everything the repository holds, while rail-ci
