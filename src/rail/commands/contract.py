@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from rail import gitrepo
 from rail.commands._options import json_option, repo_option
 from rail.commands.attest import echo_record
+from rail.contract_guard import Unwritable, refuse_unwritable
 from rail.ledger import (
     Contract,
     Deliverable,
@@ -85,6 +86,24 @@ def next_contract_key(ledger: Any, project: str, ticket: UUID | str | None) -> s
     return f"contract:{subject}:{max(numbers, default=0) + 1}"
 
 
+def _preview(
+    objective: str, criteria: tuple[str, ...], constraints: tuple[str, ...], reason: str
+) -> str:
+    """What is about to be frozen, shown before it is — one keystroke against a text nobody
+    will be able to correct, only amend."""
+    lines = [
+        "",
+        "This contract revision cannot be corrected once written, only amended — the text",
+        "below stays in the repository's history and in brain.",
+        "",
+        f"  objective:  {objective}",
+    ]
+    lines += [f"  criterion:  {c}" for c in criteria]
+    lines += [f"  constraint: {c}" for c in constraints]
+    lines += [f"  reason:     {reason}", ""]
+    return "\n".join(lines)
+
+
 @click.group("contract")
 def command() -> None:
     """Delivery contracts (stage 1, intent)."""
@@ -132,6 +151,9 @@ def command() -> None:
         "How `fulfilled` is reached: an explicit brain_delivery_accept (default) or automatically."
     ),
 )
+@click.option(
+    "--yes", is_flag=True, help="Skip the confirmation (a script; a person should read it)."
+)
 @json_option
 def set_(
     repo: Path,
@@ -148,6 +170,7 @@ def set_(
     required_approvals: int,
     priority: int,
     acceptance_mode: str,
+    yes: bool,
     as_json: bool,
 ) -> None:
     """Create or amend the project's delivery contract in the ledger."""
@@ -170,6 +193,13 @@ def set_(
         raise click.UsageError(
             "--no-checks-reason contradicts --required-check: pass one or the other."
         )
+    # Refused before the write, not in a later audit: a contract revision cannot be
+    # corrected, only amended, and the faulty one stays in history — in this repository and
+    # in brain.
+    try:
+        refuse_unwritable([objective], criteria=criteria, constraints=constraints)
+    except Unwritable as exc:
+        raise click.UsageError(str(exc)) from exc
     review = ReviewPolicy(
         required_approvals=required_approvals, allowed_reviewers=list(allowed_reviewers)
     )
@@ -178,6 +208,9 @@ def set_(
         if slug is None:
             raise click.UsageError("no GitHub remote found; pass --deliverable owner/name[:key]")
         deliverables = (slug,)
+    if not yes and not as_json:
+        click.echo(_preview(objective, criteria, constraints, reason))
+        click.confirm("Write this contract?", abort=True)
     try:
         cfg = load_rail_config(repo)
         ledger = open_ledger(repo)
