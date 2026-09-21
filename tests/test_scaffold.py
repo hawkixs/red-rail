@@ -433,8 +433,9 @@ def test_render_go_ships_a_resolvable_module_and_a_sync_that_pins_the_analysers(
 def test_render_prod_private_compose_never_points_at_the_public_internet(
     template_dir: Path, tmp_path: Path
 ) -> None:
-    """A machine with no public route must not be scaffolded with a public healthcheck: the
-    rail verifies over the address it is given, so the default decides where it looks."""
+    """A host with no public route must not be scaffolded with a public healthcheck, and has
+    no guessable default either — the address is stated by the operator, never assumed by the
+    scaffold, and no machine address is written down in this repository."""
     dest = render(
         _project(
             template_dir,
@@ -442,12 +443,13 @@ def test_render_prod_private_compose_never_points_at_the_public_internet(
             slug="red-alerts",
             tier=Tier.PROD,
             deploy_target="private-compose",
+            healthcheck="http://192.0.2.10:9204/healthz",
         )
     )
     manifest = (dest / "rail.yaml").read_text()
     assert "target: private-compose" in manifest
     assert "hawkixs.com" not in manifest, "a private target has no public domain"
-    assert "healthcheck: http://10." in manifest
+    assert "healthcheck: http://192.0.2." in manifest
 
     # and the contract must not promise a route this shape does not have
     from rail.scaffold import bootstrap_contract
@@ -459,6 +461,7 @@ def test_render_prod_private_compose_never_points_at_the_public_internet(
             slug="red-alerts",
             tier=Tier.PROD,
             deploy_target="private-compose",
+            healthcheck="http://192.0.2.10:9204/healthz",
         )
     ).acceptance_criteria
     assert not any("Traefik" in c for c in criteria), criteria
@@ -486,5 +489,18 @@ def test_the_healthcheck_default_follows_the_target_in_the_template_itself() -> 
     template = SandboxedEnvironment().from_string(questions["healthcheck"]["default"])
     private = template.render(deploy_target="private-compose", project="red-alerts")
     public = template.render(deploy_target="vps-traefik", project="red-alerts")
-    assert private.startswith("http://10.") and "hawkixs.com" not in private
+    assert private == "", "a private target has no guessable default address"
     assert public == "https://alerts.hawkixs.com/healthz"
+
+
+def test_a_private_target_refuses_to_invent_an_address(template_dir: Path, tmp_path: Path) -> None:
+    """No machine address lives in this repository, so there is nothing to fall back to."""
+    project = _project(
+        template_dir,
+        tmp_path / "red-alerts",
+        slug="red-alerts",
+        tier=Tier.PROD,
+        deploy_target="private-compose",
+    )
+    with pytest.raises(ScaffoldError, match="--healthcheck"):
+        _ = project.answers

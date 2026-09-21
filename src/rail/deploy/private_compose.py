@@ -1,17 +1,17 @@
-"""Target `private-compose`: a machine with no public route — red-base today, the home server
-tomorrow. Same layout, same lock, same digest-pinned artefact as `vps-traefik`; what changes is
-that there is no reverse proxy to configure and no public domain to ask.
+"""Target `private-compose`: a host with no public route. Same layout, same lock, same
+digest-pinned artefact as `vps-traefik`; what changes is that there is no reverse proxy to
+configure and no public domain to ask.
 
 The verification keeps the scheme, host and port of the declared `deploy.healthcheck`, so a
-service reachable only over WireGuard is checked over WireGuard.
+service reachable only over a private network is checked over that network.
 
-And one property this shape must hold that the border VPS never needed: **Docker bypasses the
-firewall**. A `-p 8080:8080` publishes on every interface whatever ufw says. The machine
-defends itself — the daemon is pinned to its private address, `DOCKER-USER` drops on the public
-interface — but both defences live in its configuration, where the rail cannot see them and a
-later change can remove them without a trace. So the target reads the compose file it is about
-to deploy and refuses one that would publish where the firewall is not the thing standing in
-the way.
+And one property this shape must hold that a public-facing host never needed: **Docker bypasses
+the host firewall**. A `-p 8080:8080` publishes on every interface whatever the packet filter
+says. A private host is normally hardened against this at the daemon and filter level, but those
+defences live in the machine's own configuration, where the rail cannot see them and a later
+change can remove them without a trace. So the target reads the compose file it is about to
+deploy and refuses one that would publish where the firewall is not the thing standing in the
+way.
 """
 
 from __future__ import annotations

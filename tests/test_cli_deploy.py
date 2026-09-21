@@ -333,7 +333,7 @@ def test_the_flows_write_the_same_attestations_whatever_the_target_shape(
         .replace("  target: vps-traefik\n", "  target: private-compose\n")
     )
     manifest = "\n".join(
-        "  healthcheck: http://10.100.0.4:9204/healthz"
+        "  healthcheck: http://192.0.2.10:9204/healthz"
         if line.strip().startswith("healthcheck:")
         else line
         for line in manifest.splitlines()

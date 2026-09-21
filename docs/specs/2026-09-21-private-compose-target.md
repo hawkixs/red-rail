@@ -4,7 +4,7 @@ Status: proposed — 2026-09-21
 
 ## Problem
 
-red-base (OVH VPS-4, `10.100.0.4`) is the first machine where the rail can be the only door
+The ecosystem's private service host is the first machine where the rail can be the only door
 from the start, and the operator requires it: everything deployed there goes through red-rail,
 without exception, and the requirement must be *verifiable, not declarative* (decision
 `5dd6da0e`). Two projects are queued behind it — red-alerts, rewritten in Go as the pilot, and
@@ -19,26 +19,26 @@ the requirement forbids. It is coupled to the border VPS in two ways that do not
 move:
 
 - it writes Traefik routing into the deployment's `.env` (`TRAEFIK_NETWORK`,
-  `TRAEFIK_CERT_RESOLVER`, `DOMAIN`), and red-base runs no Traefik;
+  `TRAEFIK_CERT_RESOLVER`, `DOMAIN`), and a private host runs no reverse proxy;
 - it verifies the result **through the public route** — `GET https://<domain>/healthz`, then
-  `GET https://<domain>/version` compared to the artefact. red-base has no public port by
-  construction. That is the point of the machine, not an omission.
+  `GET https://<domain>/version` compared to the artefact. A private host has no public port
+  by construction. That is the point of the machine, not an omission.
 
 Overriding `deploy.ssh_host` reaches the machine and changes nothing about either: the
 verification would still ask the internet about a service the internet cannot see.
 
-There is a third problem the border VPS never had. **Docker bypasses ufw**: a `-p 8080:8080`
-in a compose file publishes on every interface, including the public one, whatever the
-firewall says. red-base defends against this twice already (`daemon.json` pins the daemon's
-address, the `DOCKER-USER` chain drops on the public interface), but both defences live in the
-machine's configuration, where the rail cannot see them and a future change can silently
-remove them. A deployment that publishes publicly would satisfy every gate the rail has today.
+There is a third problem the border VPS never had. **Docker bypasses the host firewall**: a
+`-p 8080:8080` in a compose file publishes on every interface, including any public one,
+whatever the firewall says. A private host is normally hardened against this at the daemon and
+packet-filter level, but those defences live in the machine's own configuration, where the rail
+cannot see them and a future change can silently remove them. A deployment that publishes
+publicly would satisfy every gate the rail has today.
 
 ## Decisions
 
 1. **A new target named for its shape, not for the machine: `private-compose`.** The property
-   that defines it is "compose, no public route, verification over the private address". red-base
-   satisfies it; the home server will satisfy it too. Naming it `red-base` would produce one
+   that defines it is "compose, no public route, verification over the private address". More than
+   one machine in the ecosystem satisfies it. Naming a target after a machine would produce one
    module per machine sharing almost all of their code, with the standing question of which copy
    to fix. The machine stays what it already is — the `deploy.ssh_host` parameter, overridden per
    project in `rail.yaml` with its mandatory reason.
@@ -53,8 +53,8 @@ remove them. A deployment that publishes publicly would satisfy every gate the r
 
 3. **Verification uses the origin of `deploy.healthcheck` itself.** `vps-traefik` derives
    `https://<domain>` from the healthcheck's hostname; `private-compose` keeps the scheme, host
-   and port it was given, so `http://10.100.0.4:9100/healthz` is followed by
-   `http://10.100.0.4:9100/version`. The `/version` contract is unchanged — HTTP 200, a JSON
+   and port it was given, so a private healthcheck URL is followed by
+   the `/version` path on the same origin. The `/version` contract is unchanged — HTTP 200, a JSON
    object with `project`, `version`, `git_sha`, `image_digest`, the last three compared strictly
    against the artefact. `rail.http` already accepts `http://` and does not filter private
    addresses, and `deploy.healthcheck` already validates against `^https?://`.
@@ -63,7 +63,7 @@ remove them. A deployment that publishes publicly would satisfy every gate the r
    is written to the machine, every published port of the released compose file must carry an
    explicit host address, and that address must be the target's `deploy.bind_address` or a
    loopback. A bare `"8080:8080"` is refused by name — service and port — and nothing is
-   deployed. This is what turns "red-base has no public port" from a property of the machine's
+   deployed. This is what turns "the host has no public port" from a property of the machine's
    configuration into a property the rail checks on every deployment, which is what the operator
    asked for. It is also the strongest argument that this is a distinct shape and not a
    parameterisation of the existing one.
@@ -74,8 +74,8 @@ remove them. A deployment that publishes publicly would satisfy every gate the r
    `deploy.cert_resolver` are read only by `vps-traefik` and gain no meaning here.
 
 6. **`observe.monitor_agent` is declared per project.** `observe.visible` compares the digest
-   red-monitor reports with the one the ledger says is live; on red-base that means an agent
-   named for the machine rather than the default `vps`. The inverted witness is already in the
+   red-monitor reports with the one the ledger says is live; on a private host that means an
+   agent named for that machine rather than the default. The inverted witness is already in the
    scope of `5dd6da0e`, so this is a prerequisite already planned, not a new one.
 
 ## Non-goals

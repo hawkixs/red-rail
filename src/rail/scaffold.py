@@ -64,14 +64,15 @@ class NewProject:
         }
         if self.tier is Tier.PROD:
             data["deploy_target"] = self.deploy_target
-            # a private target has no public route, so the default must not send the rail's
-            # verification to the internet — the operator replaces the port, not the shape
-            fallback = (
-                "http://10.100.0.4:8080/healthz"
-                if self.deploy_target == DeployTarget.PRIVATE_COMPOSE
-                else f"https://{self.slug[4:]}.hawkixs.com/healthz"
-            )
-            data["healthcheck"] = self.healthcheck or fallback
+            # A private target has no public route and no guessable default: the address is
+            # something the operator states, never something the scaffold assumes — and no
+            # machine address belongs in this repository.
+            if self.deploy_target == DeployTarget.PRIVATE_COMPOSE and not self.healthcheck:
+                raise ScaffoldError(
+                    "target private-compose has no default healthcheck: pass --healthcheck "
+                    "with the address the service answers on"
+                )
+            data["healthcheck"] = self.healthcheck or f"https://{self.slug[4:]}.hawkixs.com/healthz"
         data["ledger"] = self.ledger.value
         if self.ledger is LedgerBackend.BRAIN:
             if not self.ticket:

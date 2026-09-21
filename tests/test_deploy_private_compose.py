@@ -8,7 +8,7 @@ import pytest
 from rail.deploy import DeployError
 from rail.deploy.private_compose import published_ports_are_private
 
-BIND = "10.100.0.4"
+BIND = "192.0.2.10"  # RFC 5737 TEST-NET-1: a documentation address, never a real host
 
 
 def _compose(ports: str) -> str:
@@ -30,8 +30,8 @@ def test_an_explicit_private_address_is_accepted(tmp_path: Path) -> None:
 
 
 def test_another_host_address_is_refused(tmp_path: Path) -> None:
-    text = _compose('    ports:\n      - "10.100.0.9:8080:8080"\n')
-    assert published_ports_are_private(text, BIND) == [("app", "10.100.0.9:8080:8080")]
+    text = _compose('    ports:\n      - "192.0.2.99:8080:8080"\n')
+    assert published_ports_are_private(text, BIND) == [("app", "192.0.2.99:8080:8080")]
 
 
 def test_the_long_form_is_read_as_well_as_the_short_one(tmp_path: Path) -> None:
@@ -251,7 +251,7 @@ def test_an_unimplemented_target_is_still_refused_by_name(tmp_path: Path) -> Non
     [
         "0.0.0.0:9204:9204",  # names an address AND publishes everywhere
         "[::]:9204:9204",  # the IPv6 spelling of the same thing
-        "10.100.0.2:9204:9204",  # an address, but not this machine's
+        "192.0.2.99:9204:9204",  # an address, but not this machine's
         "[fd00::4]:9204:9204",  # bracketed IPv6 that is not the bind address
         "0.0.0.0:9204-9210:9204-9210",  # a range does not hide the wildcard
         "${FOO}:9204:9204",  # a variable the rail does not write
