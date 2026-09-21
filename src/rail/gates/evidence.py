@@ -72,6 +72,15 @@ def verdict(repo: Path) -> GateResult:
             return f"verdict is {data.get('verdict')!r}"
         if record.issuer != expected:
             return f"issued by {record.issuer!r}, not {expected!r}"
+        if data.get("diff_truncated"):
+            # The reviewer records this when it cut the diff at `max_diff_chars`, and says
+            # so in the review body too. A verdict that covers part of the change is not a
+            # verdict on the change: read literally, it approves what happened to fit.
+            return (
+                "the reviewer saw only part of the change (diff_truncated) — split the pull "
+                "request, or raise `max_diff_chars` in the reviewer's configuration, then "
+                "review it again"
+            )
         return None
 
     return _on_history(Stage.REVIEW, "verdict", repo, AttestationKind.REVIEW_VERDICT, accept)[0]
