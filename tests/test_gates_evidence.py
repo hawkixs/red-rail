@@ -305,3 +305,39 @@ def test_visible_names_a_deployed_record_without_digest(
     )
     result = visible(repo)
     assert not result.passed and "carries no digest" in result.details
+
+
+def test_verdict_refuses_a_review_that_did_not_see_the_whole_change(tmp_path: Path) -> None:
+    """The reviewer truncates a diff past `max_diff_chars`, records `diff_truncated: true`
+    and even writes it into the review body — and the gate read none of it. Measured on the
+    first external pull request: `verdict: approve, diff_truncated: true` on a Python→Go
+    rewrite, with the reviewer's own summary saying the Go code was not visible. The gate
+    that carries "verifiable, not declarative" was satisfied by a verdict that declares it
+    did not read what it was asked to read.
+
+    The field exists because truncation is a fact that counts. If it were not meant to
+    affect the verdict it would not need to be in the receipt."""
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    head = gitrepo.head_sha(repo)
+    ledger = _ledger(repo)
+    ledger.attest(
+        "red-beta",
+        AttestationKind.REVIEW_VERDICT,
+        {"sha": head, "independent": True, "verdict": "approve", "diff_truncated": True},
+        issuer="red-rail-reviewer",
+        idempotency_key="v-truncated",
+    )
+    result = verdict(repo)
+    assert not result.passed, result.details
+    assert "truncated" in result.details
+    assert "part of the change" in result.details or "did not see" in result.details
+
+    # the same verdict on a whole diff is what the gate is for
+    ledger.attest(
+        "red-beta",
+        AttestationKind.REVIEW_VERDICT,
+        {"sha": head, "independent": True, "verdict": "approve", "diff_truncated": False},
+        issuer="red-rail-reviewer",
+        idempotency_key="v-whole",
+    )
+    assert verdict(repo).passed, verdict(repo).details

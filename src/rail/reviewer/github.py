@@ -18,6 +18,7 @@ API_VERSION = "2022-11-28"
 JSON = "application/vnd.github+json"
 DIFF = "application/vnd.github.diff"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_FILE_PAGES = 30  # GitHub lists at most 3000 files on a pull request, 100 per page
 TIMEOUT_SECONDS = 10.0
 RENEW_MARGIN = timedelta(seconds=60)
 ReviewEvent = Literal["APPROVE", "REQUEST_CHANGES", "COMMENT"]
@@ -177,9 +178,48 @@ class GitHubApp:
         return _pull(repository, self._request("GET", f"/repos/{repository}/pulls/{number}"))
 
     def diff(self, repository: str, number: int) -> str:
-        return str(
-            self._request("GET", f"/repos/{repository}/pulls/{number}", accept=DIFF, raw=True)
-        )
+        """The unified diff, reassembled from the file list when GitHub refuses it.
+
+        GitHub caps the diff media type at 20 000 lines and answers 406 past it. Refusing to
+        review is not a choice the rail can make — `review.verdict` is fail-closed, so a
+        reviewer that cannot read a large change blocks a legitimate one for ever, and a
+        rewrite is exactly the change that most deserves reading."""
+        try:
+            return str(
+                self._request("GET", f"/repos/{repository}/pulls/{number}", accept=DIFF, raw=True)
+            )
+        except GitHubError as exc:
+            if "406" not in str(exc):
+                raise
+            return self._diff_from_files(repository, number)
+
+    def _diff_from_files(self, repository: str, number: int) -> str:
+        """Per-file patches, stitched back into something a reader can read. A file whose
+        patch GitHub omits (binary, or too large on its own) is NAMED rather than dropped:
+        the reviewer must know it changed even when it cannot see how."""
+        chunks: list[str] = []
+        for page in range(1, MAX_FILE_PAGES + 1):
+            listed = self._request(
+                "GET",
+                f"/repos/{repository}/pulls/{number}/files",
+                params={"per_page": "100", "page": str(page)},
+            )
+            if not isinstance(listed, list) or not listed:
+                break
+            for entry in listed:
+                name = str(entry.get("filename", "?"))
+                header = f"diff --git a/{name} b/{name}"
+                patch = entry.get("patch")
+                status = str(entry.get("status", "modified"))
+                if patch:
+                    chunks.append(f"{header}\n{patch}")
+                else:
+                    chunks.append(f"{header}\n# {status}, no patch available from GitHub")
+            if len(listed) < 100:
+                break
+        if not chunks:
+            raise GitHubError(f"pull request {repository}#{number}: no file list to review")
+        return "\n".join(chunks) + "\n"
 
     def compare_diff(self, repository: str, base_sha: str, head_sha: str) -> str:
         """The changes between two commits of the repository as a diff (`GitHubError` when
