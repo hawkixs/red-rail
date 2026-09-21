@@ -104,6 +104,31 @@ def _recipe_lines(makefile: str) -> str:
     )
 
 
+def tool_directives(go_mod: str) -> set[str]:
+    """The packages under a `tool` directive, in either legal form — `tool <package>` and a
+    parenthesised `tool ( … )` block. Read as a directive rather than searched as text: a
+    package left behind in `require` after the directive is gone is a dependency, not a
+    declared analyser, and `go tool <name>` would not resolve."""
+    packages: set[str] = set()
+    in_block = False
+    for line in _live_lines(go_mod, comment="//").splitlines():
+        entry = line.strip()
+        if in_block:
+            if entry.startswith(")"):
+                in_block = False
+            elif entry:
+                packages.add(entry.split()[0])
+            continue
+        if entry == "tool (" or entry.startswith("tool ("):
+            in_block = True
+            rest = entry[len("tool (") :].strip()
+            if rest and not rest.startswith(")"):
+                packages.add(rest.split()[0])
+        elif entry.startswith("tool "):
+            packages.add(entry[len("tool ") :].strip().split()[0])
+    return packages
+
+
 def _go_profile(repo: Path) -> GateResult:
     """The Go profile as a pure read: `go.mod` DECLARES the analysers, the task runner
     CALLS them, CI executes it. `go vet` and `gofmt` need no directive — they ship with the
@@ -111,7 +136,7 @@ def _go_profile(repo: Path) -> GateResult:
     go_mod = repo / "go.mod"
     if not go_mod.is_file():
         return GateResult(Stage.BUILD, "lint", False, "go.mod is missing")
-    declared = _live_lines(go_mod.read_text(), comment="//")
+    declared = tool_directives(go_mod.read_text())
     undeclared = [name for name, package in GO_TOOLS if package not in declared]
     if undeclared:
         return GateResult(
@@ -125,7 +150,10 @@ def _go_profile(repo: Path) -> GateResult:
     if not makefile.is_file():
         return GateResult(Stage.BUILD, "lint", False, "Makefile is missing")
     runner = _recipe_lines(makefile.read_text())
-    uncalled = [name for name, _ in GO_TOOLS if name not in runner]
+    # the invocation, not the bare name: the template's own `sync` target runs
+    # `go get -tool …/staticcheck@v0.8.1`, so the name alone is always present and matching
+    # it would let anyone delete the real call and still pass
+    uncalled = [name for name, _ in GO_TOOLS if f"go tool {name}" not in runner]
     if uncalled:
         return GateResult(
             Stage.BUILD,
