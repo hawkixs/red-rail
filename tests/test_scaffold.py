@@ -404,7 +404,9 @@ def test_render_go_ships_a_resolvable_module_and_a_sync_that_pins_the_analysers(
     dest = render(_project(template_dir, tmp_path / "red-beta", slug="red-beta", stack=Stack.GO))
 
     go_mod = (dest / "go.mod").read_text()
-    assert "go 1.26.6" in go_mod  # not 1.26.5: three stdlib advisories reachable from serving
+    # not 1.26.5: it carries stdlib advisories reachable from a serving path (how many
+    # depends on the code scanned, not on the release)
+    assert "go 1.26.8" in go_mod
     # no unresolvable `tool` block: it would break `make sync`, `make lint` and `make vuln`
     # on the very first run of every scaffolded Go project
     assert "tool (" not in go_mod and "require" not in go_mod

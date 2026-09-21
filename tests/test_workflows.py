@@ -86,8 +86,10 @@ def test_rail_ci_sets_up_a_pinned_go_for_the_go_stack() -> None:
     assert len(go) == 1, "exactly one Go setup step"
     step = go[0]
     assert step["if"] == "inputs.stack == 'go'", "only the Go stack pays for it"
-    # 1.26.5 carries three stdlib advisories reachable from ListenAndServe
-    assert step["with"]["go-version"] == "1.26.6"
+    # the patch level matters: 1.26.5 carries stdlib advisories govulncheck reports as
+    # reachable from a serving path. The count belongs to the scanned code, not to the
+    # release — two ReD repositories measured three and six against the same one.
+    assert step["with"]["go-version"] == "1.26.8"
     assert step["with"]["check-latest"] is False, "pinned, never the latest patch of the day"
     assert step["with"]["cache"] is False, "no go.sum is shipped, so there is nothing to key on"
 
