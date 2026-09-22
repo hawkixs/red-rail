@@ -172,25 +172,34 @@ red-rail/
 ## Working principles
 
 ### Workflow
-- Brainstorm → spec → plan → implement, with the skills: `sdd-brainstorm`, `writing-plans-parallel`
-  / `sdd-plan`, `executing-plans-parallel` / `sdd-implement`. Never the built-in plan mode.
+- Brainstorm → spec → plan → implement, with the skills: `superpowers:brainstorming`,
+  `superpowers:writing-plans` / `writing-plans-parallel`, `superpowers:executing-plans` /
+  `executing-plans-parallel`. Never the built-in plan mode.
 - If it derails mid-way, **stop and re-plan immediately**.
 - TDD: write the failing test first, watch it fail, implement the minimum.
 
-### Quality pipeline before every commit
+### Quality pipeline
 ```
+BEFORE writing code
+  → superpowers:test-driven-development  (test first, watch it fail)
+
 implementation done
-  → /tdd-write-tests                    (missing tests)
-  → /reflexion-reflect                  (non-trivial change only)
-  → /code-review-review-local-changes   (multi-agent review)
-  → /git-commit                         (conventional commit, English)
+  → /reflexion-reflect                   (non-trivial change only)
+  → /code-review-review-local-changes    (multi-agent review, confidence-filtered)
+  → /git-commit                          (conventional commit, English)
 ```
-Skip the review for docs-only commits.
+Skip the review for docs-only commits. For a deep bug, `superpowers:systematic-debugging`
+traces symptom to root cause — never fix only the symptom.
 
 ### Subagents and workflows
 - Offload research, exploration and parallel analysis to subagents; one task per subagent.
 - Every Workflow `agent()` carries an explicit tier (`wf-scan` / `red-researcher` /
   `red-implementer` / `red-reviewer` / `wf-judge` / `wf-design`); never an implicit Fable agent.
+- **Every subagent prompt names its perimeter**: a concrete path or glob, an explicit budget,
+  or an explicit output contract. Cost tracks the number of subagents spawned and the size
+  each one accumulates, not session length — a spawn writes a new cache prefix at 1.25–2× the
+  input price. Name the files you already know instead of asking an agent to find them.
+  Enforced by the `tiering_gate.py` hook; escape hatch `tiering: allow-unscoped <why>`.
 
 ### Verification before "done"
 - Never declare a task done without proof: run the tests, read the summary line, capture the
