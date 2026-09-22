@@ -563,3 +563,38 @@ def test_a_judge_that_had_to_cut_its_piece_makes_the_merged_verdict_truncated(
     # (tests/test_gates_evidence.py), which is the whole point of not lying here.
     records = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
     assert records[-1].data["diff_truncated"] is True
+
+
+def test_a_large_docs_only_change_is_still_read_light_when_it_is_split(tmp_path: Path) -> None:
+    """`light` is computed once, from the change; the chunked path used to hardcode
+    `tier="deep"` and `mode="deep"` and never look at it. A docs-only pull request big enough
+    to be split therefore woke the deep models on every piece — the exact cost the light tier
+    exists to avoid — and the receipt claimed a depth the review never had."""
+    repo, ledger = _repo(tmp_path)
+
+    def one(name: str, lines: int) -> str:
+        return f"diff --git a/{name} b/{name}\n" + "".join(f"+l{i}\n" for i in range(lines))
+
+    whole = one("docs/a.md", 400) + one("docs/b.md", 400) + one("docs/c.md", 400)
+    github = FakeGitHub(diff_text=whole, messages=["docs: plain"])
+    policy = default_policy().model_copy(update={"max_diff_chars": len(one("docs/a.md", 400)) + 20})
+    tiers: list[str] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        tiers.append(tier)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        replace(PR, additions=1200),
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+
+    assert len(tiers) == 3, "still one judge per bounded piece"
+    assert set(tiers) == {"light"}, "a docs-only change does not wake the deep models"
+    assert outcome.verdict.mode == "light", "the receipt must state the depth actually used"

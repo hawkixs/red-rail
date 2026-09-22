@@ -398,6 +398,12 @@ def _review_started(
     chain = policy.chain_for(producer=producer)
     criteria = _criteria(ledger, project)
     common = dict(criteria=criteria, run_judge=run_judge, root=root, failures=failures, notes=notes)
+    # One depth for the whole review, computed once from the change. The chunked path below
+    # used to hardcode `deep` and never read `light`, so a docs-only pull request big enough
+    # to be split woke the deep models on every piece — the cost the light tier exists to
+    # avoid — and attested a depth the review never had.
+    tier = "light" if light else "deep"
+    mode = "incremental" if delta is not None else tier
 
     # A change larger than one judge can hold is read in bounded pieces, cut only between
     # files. The old behaviour handed over `diff[:budget]` and recorded that it had: measured
@@ -416,12 +422,11 @@ def _review_started(
                     chunk,
                     policy,
                     chain,
-                    tier="deep",
+                    tier=tier,
                     wanted=1,
                     **{**common, "notes": part},
                 )
             )
-        mode = "deep"
         verdict = (
             _merge(replies, mode, truncated)
             if any(r.verdict for r in replies)
@@ -457,7 +462,6 @@ def _review_started(
             deep_chain = tuple(p for p in chain if p not in used) or chain
             deep = _judge_chain(pr, diff, policy, deep_chain, tier="deep", wanted=1, **common)
             replies = deep or replies  # the deep judge's verdict wins
-    mode = "incremental" if delta is not None else ("light" if light else "deep")
     if not any(r.verdict for r in replies):
         verdict = ReviewVerdict(
             verdict="request_changes",
