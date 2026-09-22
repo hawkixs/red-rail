@@ -24,6 +24,7 @@ from rail.ledger.file import receipt_filename
 from rail.reviewer.github import GitHubError, PullRequest
 from rail.reviewer.judges import JudgeReply, judge
 from rail.reviewer.policy import ReviewPolicy, producer_provider
+from rail.reviewer.split import oversized, split_diff
 from rail.reviewer.verdict import Finding, ReviewVerdict
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
@@ -152,6 +153,11 @@ def _notes(pr: PullRequest, previous: Record, *, github: GitHubLike) -> str:
 
 
 def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdict:
+    """`truncated` is only what the caller knows BEFORE judging: a file whose own patch cannot
+    be bounded. The judges know the rest — `judge()` bounds its prompt in UTF-8 bytes and
+    shrinks the diff again when a provider takes it in argv, so a piece that fitted the split
+    budget in characters can still reach the model cut. Only its reply records that. A merged
+    verdict is truncated when ANY piece was, or the receipt claims a whole change was read."""
     verdicts = [r.verdict for r in replies if r.verdict is not None]
     decision = (
         "request_changes" if any(v.verdict == "request_changes" for v in verdicts) else "approve"
@@ -166,7 +172,7 @@ def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdi
         findings=findings[:100],
         mode=mode,
         providers=tuple(r.provider for r in replies if r.verdict),
-        diff_truncated=truncated,
+        diff_truncated=truncated or any(v.diff_truncated for v in verdicts),
     )
 
 
@@ -388,11 +394,63 @@ def _review_started(
     else:
         diff, notes = github.diff(pr.repository, pr.number), ""
         light = policy.mode_for(pr, docs_only=docs_only(diff, policy)) == "light"
-    truncated = len(diff) > policy.max_diff_chars
     producer = producer_provider(github.commit_messages(pr.repository, pr.number))
     chain = policy.chain_for(producer=producer)
     criteria = _criteria(ledger, project)
     common = dict(criteria=criteria, run_judge=run_judge, root=root, failures=failures, notes=notes)
+    # One depth for the whole review, computed once from the change. The chunked path below
+    # used to hardcode `deep` and never read `light`, so a docs-only pull request big enough
+    # to be split woke the deep models on every piece — the cost the light tier exists to
+    # avoid — and attested a depth the review never had.
+    tier = "light" if light else "deep"
+    mode = "incremental" if delta is not None else tier
+
+    # A change larger than one judge can hold is read in bounded pieces, cut only between
+    # files. The old behaviour handed over `diff[:budget]` and recorded that it had: measured
+    # on the first external pull request, 21% of the change, ruled `approve`. Only a file too
+    # large to bound on its own still counts as truncated.
+    chunks = split_diff(diff, budget=policy.max_diff_chars)
+    unbounded = oversized(chunks, budget=policy.max_diff_chars)
+    truncated = bool(unbounded)
+    if len(chunks) > 1:
+        replies = []
+        for index, chunk in enumerate(chunks, start=1):
+            part = f"{notes}\n\n_Part {index} of {len(chunks)} of this change._".strip()
+            replies.extend(
+                _judge_chain(
+                    pr,
+                    chunk,
+                    policy,
+                    chain,
+                    tier=tier,
+                    wanted=1,
+                    **{**common, "notes": part},
+                )
+            )
+        verdict = (
+            _merge(replies, mode, truncated)
+            if any(r.verdict for r in replies)
+            else ReviewVerdict(
+                verdict="request_changes",
+                summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
+                findings=[],
+                mode=mode,
+                providers=(),
+                diff_truncated=truncated,
+            )
+        )
+        return _publish(
+            pr,
+            check,
+            verdict,
+            verdict.verdict,
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            failures=failures,
+        )
     if light:
         replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=1, **common)
     else:
@@ -404,7 +462,6 @@ def _review_started(
             deep_chain = tuple(p for p in chain if p not in used) or chain
             deep = _judge_chain(pr, diff, policy, deep_chain, tier="deep", wanted=1, **common)
             replies = deep or replies  # the deep judge's verdict wins
-    mode = "incremental" if delta is not None else ("light" if light else "deep")
     if not any(r.verdict for r in replies):
         verdict = ReviewVerdict(
             verdict="request_changes",

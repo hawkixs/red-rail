@@ -478,3 +478,123 @@ def test_the_pass_budget_fails_the_check_without_a_judge_until_relabelled(tmp_pa
         run_judge=run_judge,
     )
     assert calls and outcome.verdict.mode == "light"
+
+
+def test_a_change_larger_than_the_budget_is_read_in_pieces_not_cut(tmp_path: Path) -> None:
+    """Measured on the first external pull request: 972 686 characters of diff against a
+    200 000 budget, so the judge ruled `approve` on 21% of the change and the gate went
+    green. Every file now reaches a judge, and nothing claims to be truncated when it is
+    not — raising the budget would have removed the flag without adding the reading."""
+    repo, ledger = _repo(tmp_path)
+
+    def one(name: str, lines: int) -> str:
+        return f"diff --git a/{name} b/{name}\n" + "".join(f"+l{i}\n" for i in range(lines))
+
+    whole = one("a.go", 400) + one("b.go", 400) + one("c.go", 400)
+    github = FakeGitHub(diff_text=whole, messages=["chore: plain"])
+    policy = default_policy().model_copy(update={"max_diff_chars": len(one("a.go", 400)) + 20})
+    seen: list[str] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        seen.append(diff)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        replace(PR, additions=1200),
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+
+    assert len(seen) == 3, "one judge per bounded piece"
+    assert "".join(seen) == whole, "every byte of the change reached a judge"
+    assert outcome.verdict.diff_truncated is False, "nothing was cut, so nothing is truncated"
+    assert outcome.verdict.verdict == "approve"
+
+    records = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+    assert records[-1].data["diff_truncated"] is False
+
+
+def test_a_judge_that_had_to_cut_its_piece_makes_the_merged_verdict_truncated(
+    tmp_path: Path,
+) -> None:
+    """Splitting bounds a piece in CHARACTERS; `judge()` bounds the prompt in UTF-8 BYTES and
+    shrinks the diff again when a provider takes its prompt in argv. So a piece that fitted
+    the split budget can still reach the model cut in half, and only the judge knows it. The
+    merged verdict has to take the judges' word, not the caller's arithmetic — otherwise the
+    receipt says `diff_truncated: false` about a review of half the code, which is the defect
+    the split was written to remove."""
+    repo, ledger = _repo(tmp_path)
+
+    def one(name: str, lines: int) -> str:
+        return f"diff --git a/{name} b/{name}\n" + "".join(f"+l{i}\n" for i in range(lines))
+
+    whole = one("a.go", 400) + one("b.go", 400) + one("c.go", 400)
+    github = FakeGitHub(diff_text=whole, messages=["chore: plain"])
+    policy = default_policy().model_copy(update={"max_diff_chars": len(one("a.go", 400)) + 20})
+    seen: list[str] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        seen.append(diff)
+        reply = approve(provider, tier)
+        if len(seen) != 2:  # the second piece is the one its judge could not hold
+            return reply
+        return replace(reply, verdict=reply.verdict.model_copy(update={"diff_truncated": True}))
+
+    outcome = review_pull(
+        replace(PR, additions=1200),
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+
+    assert len(seen) == 3, "the change was still read in three pieces"
+    assert outcome.verdict.diff_truncated is True, "one judge cut its piece: the verdict is cut"
+
+    # The receipt is what `review.verdict` reads: a truncated one is refused by the gate
+    # (tests/test_gates_evidence.py), which is the whole point of not lying here.
+    records = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+    assert records[-1].data["diff_truncated"] is True
+
+
+def test_a_large_docs_only_change_is_still_read_light_when_it_is_split(tmp_path: Path) -> None:
+    """`light` is computed once, from the change; the chunked path used to hardcode
+    `tier="deep"` and `mode="deep"` and never look at it. A docs-only pull request big enough
+    to be split therefore woke the deep models on every piece — the exact cost the light tier
+    exists to avoid — and the receipt claimed a depth the review never had."""
+    repo, ledger = _repo(tmp_path)
+
+    def one(name: str, lines: int) -> str:
+        return f"diff --git a/{name} b/{name}\n" + "".join(f"+l{i}\n" for i in range(lines))
+
+    whole = one("docs/a.md", 400) + one("docs/b.md", 400) + one("docs/c.md", 400)
+    github = FakeGitHub(diff_text=whole, messages=["docs: plain"])
+    policy = default_policy().model_copy(update={"max_diff_chars": len(one("docs/a.md", 400)) + 20})
+    tiers: list[str] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        tiers.append(tier)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        replace(PR, additions=1200),
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+
+    assert len(tiers) == 3, "still one judge per bounded piece"
+    assert set(tiers) == {"light"}, "a docs-only change does not wake the deep models"
+    assert outcome.verdict.mode == "light", "the receipt must state the depth actually used"
