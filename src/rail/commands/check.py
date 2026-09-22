@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import click
@@ -13,6 +14,13 @@ from rail.model import try_load_rail_config
 from rail.policy import applicable_stages, declared_tier
 
 VERDICTS = {"pass": "PASS", "fail": "FAIL", "skip": "SKIP", "exception": "EXC ", "need": "NEED"}
+# CI skips the review on the brain ledger; a green job that does not say so reads as a
+# reviewed change (red-alerts#2 merged an unreviewed head on exactly that green)
+REVIEW_GATE = "review.verdict"
+REVIEW_ELSEWHERE = (
+    "the independent reviewer judges the pull request on the host, and this run proves nothing "
+    "about it"
+)
 
 
 def _verdict(result: GateResult) -> str:
@@ -43,6 +51,7 @@ def report(
         "ci": ci,
         "stages": [s.value for s in stages],
         "passed": all(r.passed for r in results),
+        "not_evaluated": [r.gate_id for r in results if r.skipped],
         "gates": [r.to_dict() for r in results],
         "needs_declaration": [r.gate_id for r in results if r.needs],
     }
@@ -82,7 +91,18 @@ def command(stage: str | None, repo: Path, as_json: bool, ci: bool, everything: 
             click.echo(f"{_verdict(r)}  {r.gate_id:<22} {r.details}")
         counted = [r for r in results if not r.skipped]
         summary = f"passed {sum(r.passed for r in counted)}/{len(counted)}"
-        if payload["needs_declaration"]:
-            summary += f" — needs a declaration: {', '.join(payload['needs_declaration'])}"
-        click.echo(summary)
+        suffixes = [
+            f"{label}: {', '.join(ids)}"
+            for label, ids in (
+                ("not evaluated here", payload["not_evaluated"]),
+                ("needs a declaration", payload["needs_declaration"]),
+            )
+            if ids
+        ]
+        click.echo(f"{summary} — {'; '.join(suffixes)}" if suffixes else summary)
+        if REVIEW_GATE in payload["not_evaluated"]:
+            click.echo(f"review not evaluated here: {REVIEW_ELSEWHERE}")
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                # a workflow command: GitHub shows it as an annotation on the pull request
+                click.echo(f"::notice title=Review not evaluated here::{REVIEW_ELSEWHERE}")
     raise SystemExit(0 if payload["passed"] else 1)

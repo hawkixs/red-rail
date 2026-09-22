@@ -76,4 +76,9 @@ jobs:
         run: uv run pytest -q
 
       - name: Rail check (dogfooding, CI scope)
+        # text first: it names what this run did not evaluate, the review included, and
+        # annotates the pull request with it
+        run: uv run rail check --ci
+
+      - name: Rail check (machine-readable)
         run: uv run rail check --ci --json

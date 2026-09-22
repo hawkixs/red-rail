@@ -148,6 +148,60 @@ def test_check_ci_skips_workstation_gates(tmp_path: Path) -> None:
     assert skipped == ["remotes", "roster_entry"]
 
 
+def test_check_ci_names_what_it_did_not_evaluate(tmp_path: Path) -> None:
+    """A skipped gate is not a passed gate: the run names the gates it did not evaluate, in
+    text and in JSON, instead of a bare count that reads as all green."""
+    repo = _bootstrap_repo(tmp_path)
+
+    out = CliRunner().invoke(main, ["check", "--repo", str(repo), "--ci"])
+
+    assert out.exit_code == 0, out.output
+    assert "not evaluated here: hygiene.remotes, hygiene.roster_entry" in out.output
+    out = CliRunner().invoke(main, ["check", "--repo", str(repo), "--ci", "--json"])
+    assert json.loads(out.output)["not_evaluated"] == ["hygiene.remotes", "hygiene.roster_entry"]
+
+
+def _brain_dev_repo(tmp_path: Path) -> Path:
+    """Tier dev on the brain ledger: under `--ci` the ledger gates, review.verdict among them,
+    are not evaluated — CI holds no ledger credential."""
+    repo = _dev_repo(tmp_path)
+    (repo / "rail.yaml").write_text(
+        (repo / "rail.yaml").read_text()
+        + "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+    )
+    return repo
+
+
+def test_check_ci_says_the_review_is_not_evaluated_here(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A green CI job that does not say it skipped the review reads as a reviewed change:
+    red-alerts#2 merged an unreviewed head on exactly that green. The run says so, and under
+    GitHub Actions it says so as an annotation on the pull request, where the green is read."""
+    repo = _brain_dev_repo(tmp_path)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    out = CliRunner().invoke(main, ["check", "--repo", str(repo), "--ci"])
+
+    assert "review not evaluated here" in out.output
+    assert "::notice" not in out.output
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    out = CliRunner().invoke(main, ["check", "--repo", str(repo), "--ci"])
+    assert "::notice title=Review not evaluated here::" in out.output
+
+
+def test_check_ci_json_stays_json_under_github_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--json` is the contract for machines: no annotation leaks into it."""
+    repo = _brain_dev_repo(tmp_path)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    out = CliRunner().invoke(main, ["check", "--repo", str(repo), "--ci", "--json"])
+
+    assert "review.verdict" in json.loads(out.output)["not_evaluated"]
+
+
 def test_check_shows_declared_exceptions(tmp_path: Path) -> None:
     repo = _dev_repo(tmp_path)
     (repo / "rail.yaml").write_text(
@@ -170,6 +224,26 @@ def test_check_tags_a_needed_declaration_and_lists_it(tmp_path: Path) -> None:
     )
     assert data["needs_declaration"] == ["build.tests", "build.lint"]
     assert data["passed"] is False
+
+
+def test_check_joins_what_it_did_not_evaluate_and_what_needs_a_declaration(
+    tmp_path: Path,
+) -> None:
+    """One summary line carries both suffixes, joined by `; ` (spec of ticket 2cbbdd22, section
+    3): without a manifest, `--ci` skips the workstation gates while `build.*` need `stack:`."""
+    repo = init_repo(tmp_path / "bare", remotes=False)
+    args = ["check", "--all", "--ci", "--repo", str(repo)]
+    data = json.loads(CliRunner().invoke(main, [*args, "--json"]).output)
+    skipped, needs = data["not_evaluated"], data["needs_declaration"]
+    assert skipped and needs, "the fixture must exercise both suffixes"
+
+    out = CliRunner().invoke(main, args)
+
+    assert out.exit_code == 1
+    summary = next(line for line in out.output.splitlines() if line.startswith("passed "))
+    assert summary.endswith(
+        f" — not evaluated here: {', '.join(skipped)}; needs a declaration: {', '.join(needs)}"
+    )
 
 
 def _verdict_lines(output: str) -> list[str]:
