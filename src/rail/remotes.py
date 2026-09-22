@@ -5,10 +5,11 @@ is declared, nowhere else."""
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -33,13 +34,20 @@ _ABSENT = re.compile(r"not found|could not resolve|404", re.IGNORECASE)
 
 
 def _run(
-    args: list[str], *, run: Runner, cwd: Path | None = None, env: dict[str, str] | None = None
+    args: list[str],
+    *,
+    run: Runner,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     kwargs: dict[str, Any] = {"capture_output": True, "text": True, "check": False}
     if cwd is not None:
         kwargs["cwd"] = str(cwd)
     if env is not None:
         kwargs["env"] = env
+    if stdin is not None:
+        kwargs["input"] = stdin
     try:
         return run(args, **kwargs)
     except (FileNotFoundError, OSError) as exc:
@@ -53,8 +61,9 @@ def _ok(
     what: str,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
+    stdin: str | None = None,
 ) -> str:
-    done = _run(args, run=run, cwd=cwd, env=env)
+    done = _run(args, run=run, cwd=cwd, env=env, stdin=stdin)
     if done.returncode != 0:
         detail = (done.stderr or done.stdout).strip()
         raise RemoteError(f"{what} failed (exit {done.returncode}): {detail}")
@@ -175,6 +184,47 @@ def github_repository_id(slug: str, *, run: Runner = subprocess.run) -> int:
         return int(out.strip())
     except ValueError as exc:
         raise RemoteError(f"gh api repos/{slug}: not an id: {out!r}") from exc
+
+
+def app_id(slug: str, *, run: Runner = subprocess.run) -> int:
+    """The numeric id of the GitHub App `slug`, resolved from its public page — no App identity
+    is wired in code."""
+    out = _ok(["gh", "api", f"apps/{slug}", "--jq", ".id"], run=run, what=f"gh api apps/{slug}")
+    try:
+        return int(out.strip())
+    except ValueError as exc:
+        raise RemoteError(f"gh api apps/{slug}: not an id: {out!r}") from exc
+
+
+def protect_main(
+    slug: str, checks: Sequence[tuple[str, str]], *, run: Runner = subprocess.run
+) -> None:
+    """Require `checks` — `(check name, slug of the App that publishes it)` — on `main`, each
+    pinned to its App so a same-named check from another App never satisfies it (decision
+    a3846910). Admins are not bound: merging on judgment stays the operator's gesture. Not
+    strict: a main that moves forces no extra review pass. Every step here runs after the
+    repository was created and pushed, so any refusal says main is left unprotected."""
+    repository = f"{CANONICAL_OWNER}/{slug}"
+    try:
+        pinned = [{"context": name, "app_id": app_id(app, run=run)} for name, app in checks]
+        body = {
+            "required_status_checks": {"strict": False, "checks": pinned},
+            "enforce_admins": False,
+            "required_pull_request_reviews": None,
+            "restrictions": None,
+        }
+        _ok(
+            ["gh", "api", "-X", "PUT", f"repos/{repository}/branches/main/protection"]
+            + ["--input", "-"],
+            run=run,
+            what="gh api branch protection",
+            stdin=json.dumps(body),
+        )
+    except RemoteError as exc:
+        raise RemoteError(
+            f"{exc} — {repository} is created and pushed, but main is NOT protected: put the "
+            "protection on before the first pull request"
+        ) from exc
 
 
 def publish(
