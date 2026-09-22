@@ -181,6 +181,18 @@ def _go_profile(repo: Path) -> GateResult:
     )
 
 
+# What a leak actually costs, said by the gate rather than discovered. `gitleaks git` reads
+# the history through every ref, so the commit — not the file — is the thing to remove, and a
+# rewrite that stops at the working tree leaves it reachable from `origin/*`. Measured on
+# red-alerts (2026-09-21): ~20 minutes on a FALSE positive, most of it spent finding out that
+# `rail check` stayed red on a commit `git branch --contains` no longer found.
+LEAK_REMEDY = (
+    "scanned across history and every ref, so editing the file at HEAD is not enough: "
+    "rewrite the commits, then force-push, or the leak stays reachable from origin/*. "
+    "Rotate the secret either way — pushed once is compromised"
+)
+
+
 def run_gitleaks(repo: Path) -> tuple[int, str] | None:
     """(exit code, last output line); None when gitleaks is not installed.
     Exit 0 = clean, 2 = leaks (`--exit-code 2`), anything else = gitleaks itself failed."""
@@ -207,7 +219,9 @@ def secrets(repo: Path) -> GateResult:
     if code == 0:
         return GateResult(Stage.BUILD, "secrets", True, "gitleaks: no leaks found")
     if code == 2:
-        return GateResult(Stage.BUILD, "secrets", False, f"gitleaks found leaks: {last}")
+        return GateResult(
+            Stage.BUILD, "secrets", False, f"gitleaks found leaks: {last} — {LEAK_REMEDY}"
+        )
     return GateResult(Stage.BUILD, "secrets", False, f"gitleaks failed (exit {code}): {last}")
 
 
