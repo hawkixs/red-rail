@@ -27,30 +27,38 @@ image:
 	docker build --build-arg VERSION=dev --build-arg GIT_SHA=$$(git rev-parse HEAD) -t {{ project }}:dev .
 {% endif -%}
 {% elif stack == 'go' -%}
+## The one way every target reaches the toolchain. On a host with no Go installed,
+## `make GO=<wrapper> ci` runs all of them through the wrapper — a container, for instance.
+GO ?= go
+
 ## Download the modules, then pin the analysers into go.mod and go.sum.
 ## `go get -tool` writes BOTH the `tool` directive and its `require` — a `tool` block alone
 ## carries no version and cannot resolve, so the template ships neither and this target is
 ## what makes `build.lint` pass. Idempotent: re-running with the same versions is a no-op.
 sync:
-	go mod download
-	go get -tool honnef.co/go/tools/cmd/staticcheck@v0.8.1
-	go get -tool golang.org/x/vuln/cmd/govulncheck@v1.8.0
+	$(GO) mod download
+	$(GO) get -tool honnef.co/go/tools/cmd/staticcheck@v0.8.1
+	$(GO) get -tool golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
-## Format check, vet and staticcheck (pinned by go.mod, not `@latest`)
+## Format, vet and staticcheck (pinned by go.mod, not `@latest`). `$(GO) fmt` rewrites the
+## files it lists, and a listed file fails the target. Its exit status is read before its
+## list: a formatter that cannot run lists nothing, and an empty list must not pass for a
+## formatted tree.
 lint:
-	test -z "$$(gofmt -l .)"
-	go vet ./...
-	go tool staticcheck ./...
+	@out="$$($(GO) fmt ./...)" || exit 1; \
+	if [ -n "$$out" ]; then echo "reformatted by $(GO) fmt, commit the result:"; echo "$$out"; exit 1; fi
+	$(GO) vet ./...
+	$(GO) tool staticcheck ./...
 
 ## Run the test suite. `-count=1` is not a preference: `go test` caches a package's result
 ## from the inputs it can observe, so a guard that shells out is served from cache and stops
 ## guarding — a cached green is more dangerous than no test at all.
 test:
-	go test -race -count=1 ./...
+	$(GO) test -race -count=1 ./...
 
 ## Known vulnerabilities reachable from this module's call graph
 vuln:
-	go tool govulncheck ./...
+	$(GO) tool govulncheck ./...
 {% else -%}
 ## Nothing to install for a documentation project
 sync:

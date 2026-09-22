@@ -429,13 +429,13 @@ def test_render_go_ships_a_resolvable_module_and_a_sync_that_pins_the_analysers(
     assert "tool (" not in go_mod and "require" not in go_mod
 
     makefile = (dest / "Makefile").read_text()
-    assert "go get -tool honnef.co/go/tools/cmd/staticcheck@v0.8.1" in makefile
-    assert "go get -tool golang.org/x/vuln/cmd/govulncheck@v1.8.0" in makefile
-    assert "go tool staticcheck ./..." in makefile
-    assert "go tool govulncheck ./..." in makefile
+    assert "$(GO) get -tool honnef.co/go/tools/cmd/staticcheck@v0.8.1" in makefile
+    assert "$(GO) get -tool golang.org/x/vuln/cmd/govulncheck@v1.8.0" in makefile
+    assert "$(GO) tool staticcheck ./..." in makefile
+    assert "$(GO) tool govulncheck ./..." in makefile
     # a cached green is worse than no test: `go test` serves a package from cache on inputs
     # it can observe, so a guard that shells out stops guarding
-    assert "go test -race -count=1 ./..." in makefile
+    assert "$(GO) test -race -count=1 ./..." in makefile
     assert "ci: lint test vuln check" in makefile
 
     assert (dest / "main.go").is_file() and (dest / "main_test.go").is_file()

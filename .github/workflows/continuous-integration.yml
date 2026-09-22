@@ -24,11 +24,12 @@ jobs:
       image: python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
     steps:
-      - name: Install git and curl (slim image)
+      - name: Install git, curl and make (slim image)
+        # make: the go template's Makefile is exercised by the tests, not read
         run: |
           set -euo pipefail
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends git curl ca-certificates >/dev/null
+          apt-get install -y -qq --no-install-recommends git curl ca-certificates make >/dev/null
 
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
