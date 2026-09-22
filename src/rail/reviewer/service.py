@@ -153,6 +153,11 @@ def _notes(pr: PullRequest, previous: Record, *, github: GitHubLike) -> str:
 
 
 def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdict:
+    """`truncated` is only what the caller knows BEFORE judging: a file whose own patch cannot
+    be bounded. The judges know the rest — `judge()` bounds its prompt in UTF-8 bytes and
+    shrinks the diff again when a provider takes it in argv, so a piece that fitted the split
+    budget in characters can still reach the model cut. Only its reply records that. A merged
+    verdict is truncated when ANY piece was, or the receipt claims a whole change was read."""
     verdicts = [r.verdict for r in replies if r.verdict is not None]
     decision = (
         "request_changes" if any(v.verdict == "request_changes" for v in verdicts) else "approve"
@@ -167,7 +172,7 @@ def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdi
         findings=findings[:100],
         mode=mode,
         providers=tuple(r.provider for r in replies if r.verdict),
-        diff_truncated=truncated,
+        diff_truncated=truncated or any(v.diff_truncated for v in verdicts),
     )
 
 

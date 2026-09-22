@@ -41,10 +41,12 @@ def _name(chunk: str) -> str:
 def split_diff(diff: str, *, budget: int, refuse_oversized: bool = False) -> list[str]:
     """`diff` as chunks no larger than `budget`, cutting only between files.
 
-    A file whose own patch exceeds the budget is sent WHOLE, alone in its chunk: truncating
-    it is precisely the behaviour this replaces, and half a patch is unreadable — a judge
-    given one reports on code whose shape it cannot see. `refuse_oversized` turns that case
-    into an error for a caller that would rather stop than review a file it cannot bound.
+    A file whose own patch exceeds the budget gets its own chunk, ALONE — not whole: nothing
+    here can make a patch smaller than a model will take, and `build_prompt` still bounds it.
+    What isolating it buys is that the cut falls inside one file instead of swallowing the
+    files behind it, and that `oversized()` can name it, so the verdict says it was cut rather
+    than claiming the change was read. `refuse_oversized` turns that case into an error for a
+    caller that would rather stop than review a file it cannot bound.
     """
     if not diff:
         return []
@@ -61,7 +63,7 @@ def split_diff(diff: str, *, budget: int, refuse_oversized: bool = False) -> lis
             if current:
                 chunks.append(current)
                 current = ""
-            chunks.append(piece)  # whole, alone — the only honest way to read it
+            chunks.append(piece)  # alone: the cut stays inside this file, and is reported
             continue
         if current and len(current) + len(piece) > budget:
             chunks.append(current)
