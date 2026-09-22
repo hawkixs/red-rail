@@ -22,7 +22,7 @@ from rail.ledger import (
 )
 from rail.ledger.file import receipt_filename
 from rail.reviewer.github import GitHubError, PullRequest
-from rail.reviewer.judges import JudgeReply, judge
+from rail.reviewer.judges import JudgeReply, diff_budget, judge
 from rail.reviewer.policy import ReviewPolicy, producer_provider
 from rail.reviewer.split import oversized, split_diff
 from rail.reviewer.verdict import Finding, ReviewVerdict
@@ -409,8 +409,9 @@ def _review_started(
     # files. The old behaviour handed over `diff[:budget]` and recorded that it had: measured
     # on the first external pull request, 21% of the change, ruled `approve`. Only a file too
     # large to bound on its own still counts as truncated.
-    chunks = split_diff(diff, budget=policy.max_diff_chars)
-    unbounded = oversized(chunks, budget=policy.max_diff_chars)
+    budget = diff_budget(pr, policy, chain, criteria=criteria, notes=notes)
+    chunks = split_diff(diff, budget=budget)
+    unbounded = oversized(chunks, budget=budget)
     truncated = bool(unbounded)
     if len(chunks) > 1:
         replies = []
