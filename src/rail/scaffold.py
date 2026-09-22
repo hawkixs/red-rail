@@ -24,6 +24,10 @@ from rail.policy import parameter, stages_for
 
 TEMPLATE_SOURCE = "git@github.com:hawkixs/red-rail.git"
 ANSWERS_FILE = ".copier-answers.yml"
+# the independent reviewer's check, and the CI job the template wires (job `rail` calling the
+# reusable workflow's `make ci + rail check`) — each named with the App that publishes it
+REVIEW_CHECK = RequiredCheck(name="red-rail/review", app_slug="red-rail-reviewer")
+CI_CHECK = RequiredCheck(name="rail / make ci + rail check", app_slug="github-actions")
 
 
 class ScaffoldError(Exception):
@@ -183,11 +187,7 @@ def bootstrap_contract(project: NewProject) -> Contract:
     deliverable = Deliverable(
         key="main",
         repository=f"{remotes.CANONICAL_OWNER}/{project.slug}",
-        required_checks=(
-            [RequiredCheck(name="red-rail/review", app_slug="red-rail-reviewer")]
-            if reviewed
-            else []
-        ),
+        required_checks=[REVIEW_CHECK] if reviewed else [],
         no_checks_reason=(
             None
             if reviewed
@@ -307,7 +307,18 @@ def new_project(
         _git(project.dest, "commit", "-q", "-m", "chore(rail): mirror the delivery contract")
         if publish:
             remotes.push(project.dest, mirror=mirror, run=run)
+    if publish:
+        # last, once every direct push of `rail new` is done: from here main takes pull requests
+        remotes.protect_main(project.slug, protected_checks(project), run=run)
     return results
+
+
+def protected_checks(project: NewProject) -> list[tuple[str, str]]:
+    """What `main` requires (decision a3846910): the CI job from day 0, and the independent
+    reviewer's check wherever the contract requires it — the same tier line as
+    `bootstrap_contract`."""
+    checks = [CI_CHECK] if project.tier is Tier.BOOTSTRAP else [CI_CHECK, REVIEW_CHECK]
+    return [(check.name, check.app_slug or "") for check in checks]
 
 
 def upgrade(

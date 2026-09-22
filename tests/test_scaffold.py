@@ -1,5 +1,6 @@
 """A fresh scaffold passes its own `rail check` at `bootstrap`; `rail upgrade` follows the tags."""
 
+import json
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from rail.cli import main
 from rail.ledger import RECEIPTS_DIR, RecordKind
 from rail.ledger.file import FileLedger
 from rail.model import LedgerBackend, Stack, Tier
+from rail.remotes import RemoteError
 from rail.scaffold import ANSWERS_FILE, NewProject, ScaffoldError, new_project, render, upgrade
 from tests.fake_brain import FakeBrain
 
@@ -145,23 +147,49 @@ def test_render_refuses_an_existing_destination(template_dir: Path, tmp_path: Pa
         render(_project(template_dir, tmp_path / "red-probe"))
 
 
-def test_new_project_publishes_github_only(template_dir: Path, tmp_path: Path) -> None:
-    """The publish path of `rail new`: GitHub is asked, created and pushed; glab is never
-    called and no `gitlab` remote is added (decision 30acbbde)."""
-    calls: list[list[str]] = []
+# the Apps that publish the checks main requires, as `gh api apps/<slug>` answers here; the ids
+# are made up, so a pinned id can only have come from that lookup
+APP_IDS = {"github-actions": 101, "red-rail-reviewer": 202}
+CI_CHECK = {"context": "rail / make ci + rail check", "app_id": 101}
+REVIEW_CHECK = {"context": "red-rail/review", "app_id": 202}
+
+
+def _github(calls: list[list[str]], bodies: list[dict], *, refuse: str | None = None):
+    """A fake host: GitHub does not know the repository yet, knows the Apps by slug, and takes
+    the branch protection put on `main` — or refuses `refuse`: the App lookup or the
+    protection itself."""
 
     def run(args, **kwargs):
         calls.append(list(args))
-        stdout = "not found" if args[:3] == ["gh", "repo", "view"] else ""
-        code = 1 if args[:3] == ["gh", "repo", "view"] else 0
-        return subprocess.CompletedProcess(args, code, stdout=stdout, stderr="not found")
+        if args[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="not found")
+        if args[:2] == ["gh", "api"] and args[2].startswith("apps/"):
+            if refuse == "app":
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr="HTTP 404")
+            app = APP_IDS[args[2].removeprefix("apps/")]
+            return subprocess.CompletedProcess(args, 0, stdout=f"{app}\n", stderr="")
+        if args[:4] == ["gh", "api", "-X", "PUT"]:
+            bodies.append(json.loads(kwargs["input"]))
+            if refuse == "protection":
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr="HTTP 403")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    return run
+
+
+def test_new_project_publishes_github_only(template_dir: Path, tmp_path: Path) -> None:
+    """The publish path of `rail new`: GitHub is asked, created, pushed and its main protected;
+    glab is never called and no `gitlab` remote is added (decision 30acbbde)."""
+    calls: list[list[str]] = []
 
     project = _project(template_dir, tmp_path / "red-probe")
-    results = new_project(project, publish=True, clock=CLOCK, run=run, resolve=_pin)
+    results = new_project(project, publish=True, clock=CLOCK, run=_github(calls, []), resolve=_pin)
     assert all(r.passed for r in results)
     assert [c[:3] for c in calls if c[0] in ("gh", "glab")] == [
         ["gh", "repo", "view"],
         ["gh", "repo", "create"],
+        ["gh", "api", "apps/github-actions"],
+        ["gh", "api", "-X"],
     ]
     remote_adds = [c for c in calls if c[:3] == ["git", "remote", "add"]]
     assert [c[3] for c in remote_adds] == ["origin"]
@@ -169,6 +197,93 @@ def test_new_project_publishes_github_only(template_dir: Path, tmp_path: Path) -
     assert not any("gitlab" in c for c in calls)
     spec = next((project.dest / "docs" / "specs").glob("*-bootstrap-design.md")).read_text()
     assert "gitlab" not in spec.lower() and "hawkixs/red-probe" in spec
+
+
+@pytest.mark.parametrize(
+    ("tier", "required"),
+    [(Tier.BOOTSTRAP, [CI_CHECK]), (Tier.DEV, [CI_CHECK, REVIEW_CHECK])],
+    ids=["bootstrap", "dev"],
+)
+def test_new_project_protects_main_with_the_checks_of_its_tier(
+    template_dir: Path, tmp_path: Path, tier: Tier, required: list[dict]
+) -> None:
+    """Decision a3846910: main requires the CI job from day 0, and the independent reviewer's
+    check wherever the contract requires it (tier dev and up) — each pinned to the App that
+    publishes it, resolved by slug, so a same-named check from another App never satisfies it.
+    Admins are not bound, so merging on judgment stays the operator's gesture; strict is off,
+    so a main that moves forces no extra review pass."""
+    calls: list[list[str]] = []
+    bodies: list[dict] = []
+    project = _project(template_dir, tmp_path / "red-probe", tier=tier)
+
+    new_project(project, publish=True, clock=CLOCK, run=_github(calls, bodies), resolve=_pin)
+
+    assert [c for c in calls if c[:4] == ["gh", "api", "-X", "PUT"]] == [
+        [
+            "gh",
+            "api",
+            "-X",
+            "PUT",
+            "repos/hawkixs/red-probe/branches/main/protection",
+            "--input",
+            "-",
+        ]
+    ]
+    assert bodies == [
+        {
+            "required_status_checks": {"strict": False, "checks": required},
+            "enforce_admins": False,
+            "required_pull_request_reviews": None,
+            "restrictions": None,
+        }
+    ]
+
+
+def test_new_project_protects_main_only_after_its_last_direct_push(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """On the brain ledger `rail new` pushes to main twice — the bootstrap, then the mirror of
+    the contract. The protection comes after both: from then on main takes pull requests."""
+    brain = FakeBrain(agent="rail new")
+    ticket = brain.add_ticket("red", "red-probe")
+    brain.register_repository("red-probe", 4242, "hawkixs/red-probe")
+    project = _project(
+        template_dir,
+        tmp_path / "red-probe",
+        tier=Tier.DEV,
+        ledger=LedgerBackend.BRAIN,
+        ticket=ticket,
+    )
+    calls: list[list[str]] = []
+
+    new_project(
+        project,
+        publish=True,
+        clock=CLOCK,
+        client=BrainClient.in_memory(brain, agent="rail new"),
+        run=_github(calls, []),
+        resolve=_pin,
+    )
+
+    pushes = [i for i, c in enumerate(calls) if c[:2] == ["git", "push"]]
+    protection = next(i for i, c in enumerate(calls) if c[:4] == ["gh", "api", "-X", "PUT"])
+    assert len(pushes) == 2 and protection > max(pushes)
+
+
+@pytest.mark.parametrize("refuse", ["app", "protection"])
+def test_a_refused_protection_says_main_is_left_unprotected(
+    template_dir: Path, tmp_path: Path, refuse: str
+) -> None:
+    """The repository is created and pushed before main is protected. When that last step is
+    refused — resolving an App or putting the protection — the error says what exists and
+    what does not: an unprotected main is exactly what let red-alerts#2 merge an unreviewed
+    head."""
+    project = _project(template_dir, tmp_path / "red-probe", tier=Tier.DEV)
+
+    with pytest.raises(RemoteError, match="main is NOT protected"):
+        new_project(
+            project, publish=True, clock=CLOCK, run=_github([], [], refuse=refuse), resolve=_pin
+        )
 
 
 def test_new_project_passes_bootstrap_without_remotes(template_dir: Path, tmp_path: Path) -> None:
