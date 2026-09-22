@@ -1,4 +1,5 @@
-"""Stages 5–10 read the ledger: the newest matching attestation must sit on HEAD's history."""
+"""Stages 5–10 read the ledger: a history gate judges the newest matching attestation that
+sits on HEAD's history, never one from another line."""
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,7 +21,7 @@ from rail.gates.evidence import (
 from rail.ledger import RECEIPTS_DIR, AttestationKind
 from rail.ledger.file import FileLedger
 from rail.monitor import AgentView, Container
-from tests.helpers import commit_all, conforming_tree
+from tests.helpers import commit_all, conforming_tree, git
 
 T0 = datetime(2026, 9, 15, 8, 0, tzinfo=UTC)
 
@@ -86,25 +87,87 @@ def test_verdict_must_be_independent_and_approving_on_history(tmp_path: Path) ->
     assert result.passed and "distance 0" in result.details
     commit_all(repo, "feat: more")
     assert "distance 1" in verdict(repo).details
+
+
+def _commit_on_another_line(repo: Path) -> str:
+    """A sibling of HEAD — a pull request still in flight — made without touching the working
+    tree, where the file ledger lives: a branch switch would take the receipts with it."""
+    return git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "feat: another line")
+
+
+def _approve(ledger: FileLedger, key: str, sha: str, decision: str = "approve") -> None:
     _attest(
         ledger,
         AttestationKind.REVIEW_VERDICT,
-        "v4",
-        sha="0" * 40,
+        key,
+        sha=sha,
         independent=True,
-        verdict="approve",
+        verdict=decision,
         issuer="red-rail-reviewer",
     )
-    assert "not on HEAD's history" in verdict(repo).details
+
+
+def test_a_verdict_on_another_line_does_not_mask_the_one_on_head(tmp_path: Path) -> None:
+    """Ticket b37c1ea7: reviewing another pull request turned main red, because the gate judged
+    the newest verdict of the whole ledger instead of the newest one on HEAD's history."""
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    head = gitrepo.head_sha(repo)
+    ledger = _ledger(repo)
+    _approve(ledger, "v1", head)
+    other = _commit_on_another_line(repo)
+    _approve(ledger, "v2", other, decision="request_changes")
+    _approve(ledger, "v3", other)
+    result = verdict(repo)
+    assert result.passed, result
+    assert f"for {head[:12]} at distance 0" in result.details
+
+
+def test_a_newer_verdict_on_heads_line_still_wins(tmp_path: Path) -> None:
+    """The reverse direction: request_changes on HEAD's line beats an older approve, and a
+    newer approve on another line does not rescue it."""
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    ledger = _ledger(repo)
+    _approve(ledger, "v1", gitrepo.head_sha(repo))
+    head = commit_all(repo, "feat: more")
+    _approve(ledger, "v2", head, decision="request_changes")
+    _approve(ledger, "v3", _commit_on_another_line(repo))
+    result = verdict(repo)
+    assert not result.passed and "request_changes" in result.details, result
+
+
+def test_no_attestation_on_heads_line_fails(tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    ledger = _ledger(repo)
+    other = _commit_on_another_line(repo)
+    _approve(ledger, "v1", other)
+    _attest(ledger, AttestationKind.INTEGRATED, "i1", sha=other)
+    for gate in (verdict, integrated):
+        result = gate(repo)
+        assert not result.passed, result
+        assert f"for {other[:12]} not on HEAD's history" in result.details
 
 
 def test_integrated_is_the_newest_receipt_on_history(tmp_path: Path) -> None:
     repo = conforming_tree(tmp_path, "red-beta", "dev")
     ledger = _ledger(repo)
-    _attest(ledger, AttestationKind.INTEGRATED, "i1", sha=gitrepo.head_sha(repo))
+    head = gitrepo.head_sha(repo)
+    _attest(ledger, AttestationKind.INTEGRATED, "i1", sha=head)
     assert integrated(repo).passed
-    _attest(ledger, AttestationKind.INTEGRATED, "i2", sha="0" * 40)
-    assert not integrated(repo).passed
+    _attest(ledger, AttestationKind.INTEGRATED, "i2", sha=_commit_on_another_line(repo))
+    result = integrated(repo)
+    assert result.passed and f"for {head[:12]}" in result.details, result
+
+
+def test_a_record_without_sha_fails_closed_even_over_an_older_one_on_history(
+    tmp_path: Path,
+) -> None:
+    """A record that names no commit cannot be placed on a line, so it is never skipped."""
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    ledger = _ledger(repo)
+    _attest(ledger, AttestationKind.INTEGRATED, "i1", sha=gitrepo.head_sha(repo))
+    _attest(ledger, AttestationKind.INTEGRATED, "i2", note="no sha here")
+    result = integrated(repo)
+    assert not result.passed and "missing sha" in result.details, result
 
 
 def test_release_deploy_observe_learn_chain(tmp_path: Path) -> None:

@@ -1,5 +1,5 @@
-"""Stages 5–10 read evidence from the ledger. A gate passes when the newest matching
-attestation is on HEAD's history; the distance in commits is reported so drift is
+"""Stages 5–10 read evidence from the ledger. A history gate judges the newest matching
+attestation on HEAD's history; the distance in commits is reported so drift is
 measured. Phase 3 adds the live check through red-monitor (`observe.visible`, spec §6
 step 8) and re-anchors `drill`/`fulfilled` on the newest release deployment, not a
 rollback or a drill's roll-forward; phase 1 checks the evidence chain itself."""
@@ -35,28 +35,38 @@ def _on_history(
     kind: AttestationKind,
     accept: Callable[[Record], str | None],
 ) -> tuple[GateResult, Record | None]:
-    """Newest `kind` attestation: `accept(record)` returns a rejection reason or None; then its
-    `sha` must be present and an ancestor of HEAD. Returns the record it judged."""
+    """Newest `kind` attestation ON HEAD's history, not the newest of the whole ledger: with two
+    pull requests in flight, the newest belongs to the other line (ticket b37c1ea7). Walking back
+    from the newest, a record whose `sha` is not an ancestor of HEAD is skipped; one without a
+    `sha` cannot be placed on any line and fails closed. `accept(record)` then judges the record
+    found: a rejection reason or None. Returns the record it judged."""
     records = _attestations(repo, kind)
     if isinstance(records, str):
         return GateResult(stage, code, False, records), None
     if not records:
         return GateResult(stage, code, False, f"no {kind.value} attestation"), None
-    newest = records[-1]
-    data = newest.data
-    label = f"{kind.value} {newest.digest[:19]}"
-    rejection = accept(newest)
-    if rejection:
-        return GateResult(stage, code, False, f"{label}: {rejection}"), newest
-    sha = "" if data.get("sha") is None else str(data["sha"])
-    if not sha:
-        return GateResult(stage, code, False, f"{label}: missing sha"), newest
-    distance = gitrepo.distance(repo, sha)
-    if distance is None:
+    for record in reversed(records):
+        label = f"{kind.value} {record.digest[:19]}"
+        sha = "" if record.data.get("sha") is None else str(record.data["sha"])
+        if not sha:
+            return GateResult(stage, code, False, f"{label}: missing sha"), record
+        distance = gitrepo.distance(repo, sha)
+        if distance is None:
+            continue
+        rejection = accept(record)
+        if rejection:
+            return GateResult(stage, code, False, f"{label}: {rejection}"), record
         return GateResult(
-            stage, code, False, f"{label} for {sha[:12]} not on HEAD's history"
-        ), newest
-    return GateResult(stage, code, True, f"{label} for {sha[:12]} at distance {distance}"), newest
+            stage, code, True, f"{label} for {sha[:12]} at distance {distance}"
+        ), record
+    newest = records[-1]
+    return GateResult(
+        stage,
+        code,
+        False,
+        f"{kind.value} {newest.digest[:19]} for {str(newest.data['sha'])[:12]} not on HEAD's "
+        f"history — none of the {len(records)} in the ledger is",
+    ), newest
 
 
 def verdict(repo: Path) -> GateResult:
