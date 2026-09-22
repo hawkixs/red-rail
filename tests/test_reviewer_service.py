@@ -7,7 +7,7 @@ from pathlib import Path
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
 from rail.ledger.file import FileLedger
 from rail.reviewer.github import CheckRun, PullRequest
-from rail.reviewer.judges import JudgeReply
+from rail.reviewer.judges import JudgeReply, build_prompt
 from rail.reviewer.policy import default_policy
 from rail.reviewer.service import docs_only, needs_review, review_pull
 from rail.reviewer.verdict import Finding, ReviewVerdict
@@ -598,3 +598,49 @@ def test_a_large_docs_only_change_is_still_read_light_when_it_is_split(tmp_path:
     assert len(tiers) == 3, "still one judge per bounded piece"
     assert set(tiers) == {"light"}, "a docs-only change does not wake the deep models"
     assert outcome.verdict.mode == "light", "the receipt must state the depth actually used"
+
+
+def test_the_split_uses_the_budget_the_judge_will_actually_enforce(tmp_path: Path) -> None:
+    """Two budgets in two units, and the split read the wrong one. `split_diff` measured
+    CHARACTERS against `max_diff_chars`; what actually bounds a judge is `prompt_limits`, in
+    BYTES, over the WHOLE prompt — rubric, criteria, body and notes included. A change under
+    `max_diff_chars` was therefore never split, and `judge()` cut it instead.
+
+    Measured on red-alerts#2 (2026-09-22): a 108 173-character incremental delta, one single
+    piece, truncated by the judge — the very failure the split was written to remove, one
+    layer up. Every piece must now fit the prompt the judge will build from it."""
+    repo, ledger = _repo(tmp_path)
+
+    def one(name: str, lines: int) -> str:
+        return f"diff --git a/{name} b/{name}\n" + "".join(f"+line {i}\n" for i in range(lines))
+
+    whole = "".join(one(f"src/f{n}.go", 300) for n in range(6))
+    assert len(whole) < default_policy().max_diff_chars, "under the old budget: never split"
+
+    github = FakeGitHub(diff_text=whole, messages=["chore: plain"])
+    policy = default_policy().model_copy(update={"prompt_limits": {"agy": 12_000}})
+    seen: list[str] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        prompt, truncated = build_prompt(pr, diff, policy, criteria=criteria, notes=notes)
+        assert not truncated, "a piece the judge still has to cut is not a bounded piece"
+        assert len(prompt.encode("utf-8")) <= policy.prompt_limits[provider], (
+            f"prompt of {len(prompt.encode('utf-8'))} bytes over the {provider} limit"
+        )
+        seen.append(diff)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        replace(PR, additions=1800),
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+
+    assert len(seen) > 1, "the byte budget must force a split the character budget never saw"
+    assert "".join(seen) == whole, "every byte of the change still reached a judge"
+    assert outcome.verdict.diff_truncated is False

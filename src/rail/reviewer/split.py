@@ -33,13 +33,19 @@ def _files(diff: str) -> list[str]:
     return [diff[a:b] for a, b in zip(bounds, bounds[1:] + [len(diff)], strict=True)]
 
 
+def _size(text: str) -> int:
+    """UTF-8 bytes. Measuring characters here was the defect: a provider's prompt limit is a
+    byte limit, so a piece could fit the character budget and still not fit the prompt."""
+    return len(text.encode("utf-8"))
+
+
 def _name(chunk: str) -> str:
     first = chunk.split("\n", 1)[0]
     return first.removeprefix("diff --git ").split(" b/", 1)[0].removeprefix("a/") or "?"
 
 
 def split_diff(diff: str, *, budget: int, refuse_oversized: bool = False) -> list[str]:
-    """`diff` as chunks no larger than `budget`, cutting only between files.
+    """`diff` as chunks no larger than `budget` BYTES, cutting only between files.
 
     A file whose own patch exceeds the budget gets its own chunk, ALONE — not whole: nothing
     here can make a patch smaller than a model will take, and `build_prompt` still bounds it.
@@ -50,25 +56,27 @@ def split_diff(diff: str, *, budget: int, refuse_oversized: bool = False) -> lis
     """
     if not diff:
         return []
-    pieces = _files(diff)
-    if len(diff) <= budget:
+    if _size(diff) <= budget:
         return [diff]
 
     chunks: list[str] = []
     current = ""
-    for piece in pieces:
-        if len(piece) > budget:
+    current_size = 0
+    for piece in _files(diff):
+        size = _size(piece)
+        if size > budget:
             if refuse_oversized:
-                raise OversizedFile(f"{_name(piece)}: {len(piece)} characters exceeds {budget}")
+                raise OversizedFile(f"{_name(piece)}: {size} bytes exceeds {budget}")
             if current:
                 chunks.append(current)
-                current = ""
+                current, current_size = "", 0
             chunks.append(piece)  # alone: the cut stays inside this file, and is reported
             continue
-        if current and len(current) + len(piece) > budget:
+        if current and current_size + size > budget:
             chunks.append(current)
-            current = ""
+            current, current_size = "", 0
         current += piece
+        current_size += size
     if current:
         chunks.append(current)
     return chunks
@@ -77,4 +85,4 @@ def split_diff(diff: str, *, budget: int, refuse_oversized: bool = False) -> lis
 def oversized(chunks: list[str], *, budget: int) -> list[str]:
     """The names of files that could not be bounded — what a caller reports instead of
     claiming the whole change was read."""
-    return [_name(c) for c in chunks if len(c) > budget]
+    return [_name(c) for c in chunks if _size(c) > budget]
