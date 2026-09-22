@@ -177,14 +177,16 @@ def _reply(*findings: dict) -> str:
     return json.dumps({"verdict": "request_changes", "summary": "s", "findings": list(findings)})
 
 
-def test_a_finding_on_a_receipt_never_blocks(tmp_path: Path) -> None:
+@pytest.mark.parametrize("severity", ["blocking", "important", "minor"])
+def test_a_finding_on_a_receipt_never_blocks(tmp_path: Path, severity: str) -> None:
     """A receipt is a dated record written by a `rail` command: a binding carries the head at
     `rail bind` time, so it can never equal the head of the pull request that contains it.
     red-alerts#3 was blocked on that mismatch, then on the receipt's absence once it was
     removed. A finding on a receipt is at most minor, and a verdict that rested on such
-    findings alone approves."""
+    findings alone approves — also when the judge already called the finding minor and asked
+    for changes anyway (found by the independent reviewer on this very fix)."""
     receipt = {
-        "severity": "blocking",
+        "severity": severity,
         "file": RECEIPT,
         "line": 8,
         "title": "Binding receipt references the wrong head",

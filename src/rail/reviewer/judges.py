@@ -317,12 +317,14 @@ def discount_records(verdict: ReviewVerdict, policy: ReviewPolicy) -> ReviewVerd
     def on_record(path: str) -> bool:
         return any(fnmatch.fnmatch(path, g) for g in policy.records_globs)
 
+    # keyed on the presence of a record finding, not on a change of severity: a judge may
+    # already call it minor and still ask for changes on it (found by the reviewer on #35)
+    if not any(on_record(f.file) for f in verdict.findings):
+        return verdict
     findings = [
         f.model_copy(update={"severity": "minor"}) if on_record(f.file) else f
         for f in verdict.findings
     ]
-    if findings == verdict.findings:
-        return verdict
     rested_on_records = not any(f.severity in ("blocking", "important") for f in findings)
     decision = "approve" if rested_on_records else verdict.verdict
     return verdict.model_copy(update={"findings": findings, "verdict": decision})
