@@ -247,3 +247,19 @@ def test_lint_gate_still_refuses_an_installation_line(tmp_path: Path) -> None:
     result = lint(go)
     assert not result.passed, result.details
     assert "staticcheck" in result.details and "govulncheck" in result.details
+
+
+def test_a_leak_says_that_fixing_head_is_not_enough(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`gitleaks git` reads the history through every ref, so the fix is never "edit the
+    file": the commit has to stop being reachable, remote-tracking refs included, and the
+    secret is burnt either way. Measured on red-alerts: ~20 minutes on a FALSE positive,
+    most of it spent discovering that `rail check` stayed red on a commit `git branch
+    --contains` no longer found. The gate knew all of that and said none of it."""
+    monkeypatch.setattr(build_gates, "run_gitleaks", lambda repo: (2, "leaks found: 1"))
+    details = secrets(tmp_path).details.lower()
+    assert "history" in details, "say where it looked, or HEAD is assumed"
+    assert "force-push" in details, "a local rewrite leaves the leak on origin/*"
+    assert "rotate" in details, "a pushed secret is compromised whatever the history says"
+    assert secrets(tmp_path).passed is False
