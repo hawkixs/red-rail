@@ -13,6 +13,7 @@ _FENCE = re.compile(r"^(`{3,})([\w+-]*)[^\n]*\n(.*?)^\1`*[ \t]*$", re.MULTILINE 
 _DATED = re.compile(r"^\d{4}-\d{2}-\d{2}-.+\.md$")
 _SPEC_REF = re.compile(r"docs/specs/[\w.\-/]+\.md")
 _TASK = re.compile(r"^###\s+Task\b.*$", re.MULTILINE)
+_LIST_ITEM = re.compile(r"^(?:\d+[.)]|[-*+])[ \t]+\S", re.MULTILINE)
 _VERIFICATION = re.compile(
     r"\b(expect(?:ed)?|verify|assert|should (?:pass|fail)|exit code)\b", re.IGNORECASE
 )
@@ -32,6 +33,24 @@ def headings(text: str) -> list[str]:
 def has_section(text: str, aliases: Iterable[str]) -> bool:
     wanted = [a.lower() for a in aliases]
     return any(alias in h.lower() for h in headings(text) for alias in wanted)
+
+
+def section(text: str, title: str) -> str | None:
+    """The body under the first heading whose title contains `title` (numbering stripped,
+    headings quoted in a fence ignored), up to the next heading of its level or above."""
+    found = list(_HEADING.finditer(_mask_fences(text)))
+    for index, match in enumerate(found):
+        if title.lower() in _NUMBERING.sub("", match.group(2)).lower():
+            level = len(match.group(1))
+            ends = (m.start() for m in found[index + 1 :] if len(m.group(1)) <= level)
+            return text[match.end() : next(ends, len(text))]
+    return None
+
+
+def list_items(text: str) -> int:
+    """Top-level list items, numbered or bulleted, outside fenced code: a detail indented
+    under an item is part of that item."""
+    return len(_LIST_ITEM.findall(_mask_fences(text)))
 
 
 def fenced_blocks(text: str, lang: str | None = None) -> list[str]:

@@ -1,17 +1,24 @@
 ---
 name: rail-plan
-description: Turn a validated spec into a dated implementation plan (stage 3 of the rail) and validate it with `rail check plan`. Use after `rail check design` passes, before any code.
+description: Use when a ReD project needs its dated implementation plan (stage 3 of the rail) under the `spec` or `graph` method, before any code, or when `rail check plan` fails.
 ---
 
 # rail-plan
 
-You write the plan; the rail decides whether it is a valid plan.
+The operator chose the session's method. The plan is written and executed with that
+method's tools; the rail decides whether it is a valid plan.
 
-1. Confirm `rail check design --repo <path>` passes; the plan must reference that spec by its
-   `docs/specs/…` path.
-2. Write `docs/plans/<yyyy-mm-dd>-<topic>.md` with the `writing-plans-parallel` skill (or
-   `sdd-plan`): one `### Task` per unit of work, each with the command that verifies it and
-   what to expect.
+| Method | Write the plan with | Then execute it with |
+|---|---|---|
+| `spec` | `superpowers:writing-plans` | `superpowers:subagent-driven-development` |
+| `graph` | `gitnexus-plan` | `gitnexus-work` |
+
+Under `graph`, `gitnexus-lfg` chains the two with its checkpoint between them. `direct` writes
+no plan: this skill does not apply.
+
+1. Under `spec`, confirm `rail check design --repo <path>` passes first: the plan cites that
+   spec.
+2. Write the plan with the method's planning tool; it lands in `docs/plans/`.
 3. Run `rail check plan --repo <path>`; fix what it reports until it passes. When this skill
    and the CLI disagree, the CLI is right.
-4. Hand the plan to `executing-plans-parallel`.
+4. Execute the plan with the method's executor.
