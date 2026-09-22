@@ -169,6 +169,69 @@ def test_judge_fails_closed_on_exit_code_timeout_or_garbage(tmp_path: Path) -> N
     )
 
 
+# the receipt red-alerts#3 was blocked on, twice (2026-09-22)
+RECEIPT = "docs/receipts/20260922T203705Z-binding-163bf3e62c10.json"
+
+
+def _reply(*findings: dict) -> str:
+    return json.dumps({"verdict": "request_changes", "summary": "s", "findings": list(findings)})
+
+
+def test_a_finding_on_a_receipt_never_blocks(tmp_path: Path) -> None:
+    """A receipt is a dated record written by a `rail` command: a binding carries the head at
+    `rail bind` time, so it can never equal the head of the pull request that contains it.
+    red-alerts#3 was blocked on that mismatch, then on the receipt's absence once it was
+    removed. A finding on a receipt is at most minor, and a verdict that rested on such
+    findings alone approves."""
+    receipt = {
+        "severity": "blocking",
+        "file": RECEIPT,
+        "line": 8,
+        "title": "Binding receipt references the wrong head",
+        "evidence": "head_sha c839216 is not the pull request head 06363c7",
+    }
+
+    reply = judge(
+        PR,
+        DIFF,
+        default_policy(),
+        provider="codex",
+        tier="light",
+        runner=lambda p, s: (0, _reply(receipt)),
+        root=tmp_path,
+    )
+
+    assert reply.verdict is not None and reply.verdict.verdict == "approve"
+    assert [f.severity for f in reply.verdict.findings] == ["minor"]
+
+
+def test_a_receipt_finding_excuses_no_defect_in_the_code(tmp_path: Path) -> None:
+    """Only what rested on a receipt is discounted: a blocking defect elsewhere still blocks."""
+    receipt = {"severity": "blocking", "file": RECEIPT, "title": "stale head", "evidence": "x"}
+    code = {
+        "severity": "blocking",
+        "file": "src/probe.py",
+        "title": "wrong status",
+        "evidence": "y",
+    }
+
+    reply = judge(
+        PR,
+        DIFF,
+        default_policy(),
+        provider="codex",
+        tier="light",
+        runner=lambda p, s: (0, _reply(receipt, code)),
+        root=tmp_path,
+    )
+
+    assert reply.verdict is not None and reply.verdict.verdict == "request_changes"
+    assert {f.file: f.severity for f in reply.verdict.findings} == {
+        RECEIPT: "minor",
+        "src/probe.py": "blocking",
+    }
+
+
 def test_the_agy_guard_denies_machine_tools_and_allows_mcp() -> None:
     from headless_agents.providers.agy import guard_denies_machine_tools
 
