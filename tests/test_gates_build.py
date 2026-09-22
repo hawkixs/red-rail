@@ -87,6 +87,54 @@ def test_commits_gate_checks_conventional_subjects(tmp_path: Path) -> None:
     assert "not a git repository" in commits(tmp_path / "nowhere").details
 
 
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "📝 docs(watcher): measure the exposure from the edge",
+        "✨ feat: add a gate",
+        "♻️ refactor(core): simplify the loader",  # a variation selector follows the symbol
+        "🧑‍💻 chore: improve the developer loop",  # two symbols joined by a ZWJ
+    ],
+    ids=["memo", "sparkles", "variation-selector", "zwj-sequence"],
+)
+def test_commits_gate_accepts_one_leading_emoji(tmp_path: Path, subject: str) -> None:
+    """`/git-commit` writes `<emoji> type(scope): subject`. The gate checks the conventional
+    form, not the typography: one emoji before the type passes (decision d6a4cb7c), so the
+    history already written that way passes without a rewrite."""
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    commit_all(repo, subject)
+
+    result = commits(repo)
+
+    assert result.passed, result.details
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "📝 📝 docs: two emoji",
+        "📝docs: no space after the emoji",
+        "📝notes fix: a word glued to the emoji",
+        "📝 update the docs",
+        "- fix: a dash is not an emoji",
+        "^ fix: a caret is a modifier symbol, not an emoji",
+        "📝 wip: an unknown type",
+    ],
+    ids=["two-emoji", "no-space", "glued-word", "no-type", "dash", "caret", "unknown-type"],
+)
+def test_commits_gate_still_wants_the_conventional_form_after_the_emoji(
+    tmp_path: Path, subject: str
+) -> None:
+    """One emoji, one space, then the whole conventional form: the emoji is the only thing
+    the gate lets through."""
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    commit_all(repo, subject)
+
+    result = commits(repo)
+
+    assert not result.passed and subject in result.details
+
+
 def test_commits_gate_honours_the_window_override(tmp_path: Path) -> None:
     repo = conforming_tree(tmp_path, "red-alpha", "dev")
     commit_all(repo, "Fixed stuff")

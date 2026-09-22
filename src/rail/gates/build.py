@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import unicodedata
 from pathlib import Path
 
 from rail import gitrepo
@@ -15,6 +16,9 @@ from rail.model import MANIFEST_NAME, Stack, manifest_problem, try_load_rail_con
 from rail.policy import effective
 
 CONVENTIONAL = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]+\))?!?: \S")
+# What an emoji is made of: a symbol, then what qualifies or joins it — variation selector,
+# skin tone, keycap, zero-width joiner. Unicode categories, so no new dependency.
+_EMOJI_PARTS = frozenset({"So", "Sk", "Mn", "Me", "Cf"})
 
 
 def _stack(repo: Path) -> Stack | None:
@@ -225,6 +229,19 @@ def secrets(repo: Path) -> GateResult:
     return GateResult(Stage.BUILD, "secrets", False, f"gitleaks failed (exit {code}): {last}")
 
 
+def _without_leading_emoji(subject: str) -> str:
+    """`subject` less one leading emoji and its space — the form `/git-commit` writes
+    (decision d6a4cb7c). Anything else is returned whole, for the conventional form to judge."""
+    head, _, rest = subject.partition(" ")
+    if (
+        head
+        and unicodedata.category(head[0]) == "So"
+        and all(unicodedata.category(char) in _EMOJI_PARTS for char in head)
+    ):
+        return rest
+    return subject
+
+
 def commits(repo: Path) -> GateResult:
     window, _ = effective(repo, "build.commit_window")
     types, _ = effective(repo, "build.conventional_types")
@@ -235,7 +252,7 @@ def commits(repo: Path) -> GateResult:
         return GateResult(Stage.BUILD, "commits", False, "no commits")
     bad = []
     for subject in subjects:
-        match = CONVENTIONAL.match(subject)
+        match = CONVENTIONAL.match(_without_leading_emoji(subject))
         if match is None or match.group("type") not in types:
             bad.append(subject)
     if bad:
