@@ -75,6 +75,7 @@ def test_contract_set_is_idempotent_by_key(tmp_path: Path) -> None:
         "r",
         "--no-checks-reason",
         "fixture: no check declared",
+        "--yes",
         "--key",
         "c1",
     ]
@@ -101,6 +102,7 @@ def test_contract_set_needs_a_deliverable_when_no_github_remote(tmp_path: Path) 
             "r",
             "--no-checks-reason",
             "fixture: no check declared",
+            "--yes",
         ],
     )
     assert out.exit_code == 2 and "--deliverable" in out.output
@@ -119,6 +121,7 @@ def test_contract_set_needs_a_deliverable_when_no_github_remote(tmp_path: Path) 
             "fixture: no check declared",
             "--deliverable",
             "hawkixs/other:release",
+            "--yes",
         ],
     )
     assert out.exit_code == 0, out.output
@@ -562,7 +565,67 @@ def test_contract_set_refuses_the_same_required_check_twice(tmp_path: Path) -> N
             spec,
             "--required-check",
             spec,
+            "--yes",
         ],
     )
     assert out.exit_code == 1 and "duplicate required check selector" in out.output
     assert not list((repo / RECEIPTS_DIR).glob("*.json"))
+
+
+def test_contract_set_refuses_an_address_before_it_is_frozen(tmp_path: Path) -> None:
+    """A contract revision cannot be corrected, only amended — the faulty one stays in
+    history, in the repository and in brain. So the refusal happens before the write, not
+    in a later audit."""
+    repo = _repo(tmp_path)
+    out = CliRunner().invoke(
+        main,
+        [
+            "contract",
+            "set",
+            "--repo",
+            str(repo),
+            "--objective",
+            "serve the probe on 10.100.0.4",
+            "--reason",
+            "r",
+            "--no-checks-reason",
+            "fixture: no check declared",
+            "--yes",
+        ],
+    )
+    assert out.exit_code == 2, out.output
+    assert "10.100.0.4" in out.output and "objective" in out.output
+    assert not list((repo / RECEIPTS_DIR).glob("*.json")), "nothing was written"
+
+
+def test_contract_set_shows_the_contract_and_asks_before_writing(tmp_path: Path) -> None:
+    """One keystroke against a text nobody will be able to correct."""
+    repo = _repo(tmp_path)
+    args = [
+        "contract",
+        "set",
+        "--repo",
+        str(repo),
+        "--objective",
+        "ship red-alpha",
+        "--criterion",
+        "rail check passes",
+        "--reason",
+        "r",
+        "--no-checks-reason",
+        "fixture: no check declared",
+    ]
+
+    refused = CliRunner().invoke(main, args, input="n\n")
+    assert refused.exit_code == 1
+    assert "ship red-alpha" in refused.output and "rail check passes" in refused.output
+    assert "cannot be corrected" in refused.output or "amend" in refused.output
+    assert not list((repo / RECEIPTS_DIR).glob("*.json")), "answering no writes nothing"
+
+    accepted = CliRunner().invoke(main, args, input="y\n")
+    assert accepted.exit_code == 0, accepted.output
+    assert len(list((repo / RECEIPTS_DIR).glob("*.json"))) == 1
+
+    # `--yes` is the same path without the question, for a script
+    assert CliRunner().invoke(main, [*args, "--yes", "--key", "c2"]).exit_code == 0
+    assert len(list((repo / RECEIPTS_DIR).glob("*.json"))) == 2
