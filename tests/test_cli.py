@@ -107,7 +107,7 @@ def test_check_scores_a_dev_repo_through_integrate(tmp_path: Path) -> None:
     assert report["passed"] is True
     assert {g["stage"] for g in report["gates"]} == set(report["stages"])
     assert all(
-        set(g) == {"stage", "code", "passed", "details", "exception", "skipped"}
+        set(g) == {"stage", "code", "passed", "details", "exception", "skipped", "needs"}
         for g in report["gates"]
     )
 

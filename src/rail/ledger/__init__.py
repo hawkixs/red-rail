@@ -342,7 +342,10 @@ def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
     """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a bad manifest.
     `ledger: brain` needs the `brain` extra, the operator's token and the ticket."""
     from rail.ledger.file import FileLedger
-    from rail.model import LedgerBackend, load_rail_config
+    from rail.model import MANIFEST_NAME, LedgerBackend, load_rail_config
+
+    if not (repo / MANIFEST_NAME).exists():
+        return FileLedger(repo / RECEIPTS_DIR)  # the documented default, manifest absent only
 
     cfg = load_rail_config(repo)
     if cfg.ledger is LedgerBackend.FILE:

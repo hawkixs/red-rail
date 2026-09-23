@@ -105,15 +105,17 @@ class FileLedger:
 
     def list(
         self,
-        project: str,
+        project: str | None,
         *,
         kind: RecordKind | None = None,
         attestation: AttestationKind | None = None,
     ) -> list[Record]:
+        """`project=None`: every receipt of the directory — how a gate observes the default
+        file ledger of a repository that declares no project."""
         return [
             r
             for r in self._records()
-            if r.project == project
+            if (project is None or r.project == project)
             and (kind is None or r.kind is kind)
             and (attestation is None or r.attestation is attestation)
         ]

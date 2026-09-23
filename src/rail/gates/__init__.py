@@ -43,6 +43,7 @@ class GateResult:
     details: str
     exception: str | None = None  # reason of a declared exception (`gates:` in rail.yaml)
     skipped: str | None = None  # why the gate was not evaluated (workstation-only under --ci)
+    needs: str | None = None  # the manifest key the verdict depends on — always fail-closed
 
     @property
     def gate_id(self) -> str:
@@ -52,6 +53,20 @@ class GateResult:
         data = asdict(self)
         data["stage"] = self.stage.value
         return data
+
+
+@dataclass(frozen=True, slots=True)
+class Need:
+    """The verdict depends on a manifest key that is not declared (spec 2026-09-23): what was
+    observed is reported, and the gate stays closed until the key is declared."""
+
+    key: str
+    observed: str
+
+    def result(self, stage: Stage, code: str) -> GateResult:
+        return GateResult(
+            stage, code, False, f"needs `{self.key}:` — {self.observed}", needs=self.key
+        )
 
 
 @dataclass(frozen=True, slots=True)
