@@ -170,3 +170,48 @@ def test_check_tags_a_needed_declaration_and_lists_it(tmp_path: Path) -> None:
     )
     assert data["needs_declaration"] == ["build.tests", "build.lint"]
     assert data["passed"] is False
+
+
+def _verdict_lines(output: str) -> list[str]:
+    return [
+        line for line in output.splitlines() if line[:4] in ("PASS", "FAIL", "NEED", "SKIP", "EXC ")
+    ]
+
+
+@pytest.mark.parametrize("ci", [False, True])
+def test_without_a_manifest_only_the_manifest_gate_names_it(tmp_path: Path, ci: bool) -> None:
+    """Ticket 2cbbdd22, criterion 1 of 513e109b — red runs the same check itself."""
+    repo = init_repo(tmp_path / "bare", remotes=False)
+    args = ["check", "--all", "--repo", str(repo)] + (["--ci"] if ci else [])
+    out = CliRunner().invoke(main, args)
+    assert out.exit_code == 1
+    lines = _verdict_lines(out.output)
+    naming = [line for line in lines if "rail.yaml" in line]
+    assert len(naming) == 1 and "hygiene.rail_config" in naming[0], naming
+    for line in lines:
+        if line.startswith("NEED"):
+            assert "needs `" in line, line
+    assert {line.split()[1] for line in lines if line.startswith("NEED")} == {
+        "build.tests",
+        "build.lint",
+    }
+    ledger_gates = (
+        "intent.contract",
+        "review.verdict",
+        "integrate.receipt",
+        "release.released",
+        "deploy.deployed",
+        "observe.drill",
+        "learn.fulfilled",
+    )
+    for gate_id in ledger_gates:  # review focus 3: the file default runs under --ci too
+        line = next(line for line in lines if line.split()[1] == gate_id)
+        assert line.startswith("FAIL") and "docs/receipts" in line, line
+
+
+def test_a_manifest_never_yields_a_need(tmp_path: Path) -> None:
+    """Review focus 4: with a manifest present nothing changes."""
+    repo = _bootstrap_repo(tmp_path)
+    data = json.loads(CliRunner().invoke(main, ["check", "--repo", str(repo), "--json"]).output)
+    assert data["needs_declaration"] == []
+    assert all(g["needs"] is None for g in data["gates"])
