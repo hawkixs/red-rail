@@ -142,6 +142,10 @@ class ComposeTarget:
     def precheck(self, compose_text: str) -> None:
         """Refuse the deployment before the first ssh. The default refuses nothing."""
 
+    def redact(self, text: str) -> str:
+        """What a record may say about this target. The default hides nothing."""
+        return text
+
     # -- the shared mechanics -------------------------------------------------------------
 
     def compose_at(self, sha: str) -> str:

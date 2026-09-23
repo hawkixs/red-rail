@@ -25,6 +25,7 @@ import yaml
 
 from rail.deploy import Artefact, DeployError, domain_of
 from rail.deploy.compose import ComposeTarget, common_env, env_lines
+from rail.deploy.sites import Address, load_site, redact_address, substitute_address
 from rail.model import RailConfig
 from rail.policy import parameter
 
@@ -109,27 +110,47 @@ def published_ports_are_private(compose_text: str, bind_address: str) -> list[tu
 @dataclass(frozen=True, slots=True)
 class Parameters:
     bind_address: str
+    site: str | None = None
+    address: Address | None = None  # behind a site: the parsed address, for redaction
 
     @classmethod
-    def read(cls, repo: Path) -> Parameters:
+    def read(cls, repo: Path, cfg: RailConfig, *, sites: Path | None = None) -> Parameters:
+        site = cfg.deploy.site if cfg.deploy is not None else None
+        if site is not None:
+            address = load_site(site, sites).address
+            return cls(bind_address=str(address), site=site, address=address)
         value = parameter(repo, "deploy.bind_address")
         if not value:
             raise DeployError(
                 "deploy.bind_address is not set: a private target must say which address it "
-                "publishes on, so declare it in rail.yaml under `gates:` with its reason"
+                "publishes on — name a `deploy.site` this host declares in its sites file, or "
+                "declare the address in rail.yaml under `gates:` with its reason"
             )
         return cls(bind_address=str(value))
 
 
 class PrivateCompose(ComposeTarget):
-    def __init__(self, repo: Path, cfg: RailConfig, **kwargs: Any) -> None:
+    def __init__(
+        self, repo: Path, cfg: RailConfig, *, sites: Path | None = None, **kwargs: Any
+    ) -> None:
         super().__init__(repo, cfg, **kwargs)
-        self.private = Parameters.read(repo)
+        self.private = Parameters.read(repo, cfg, sites=sites)
+        if self.private.address is not None:
+            # the token becomes the site's address here and nowhere earlier: the manifest
+            # carries a label, the host carries the address
+            self.healthcheck = substitute_address(self.healthcheck, self.private.address)
         # `Field(pattern=r"^https?://")` is match-at-start, so `https://` passes validation:
         # the host has to be checked here, exactly as `vps-traefik` checks it. Without this
         # the failure surfaces only after the healthcheck timeout, once ssh has already
         # changed the machine, and an empty domain reaches the attestation.
         self.domain = domain_of(self.healthcheck)
+        if self.private.site is not None:
+            self.domain = self.private.site  # what records and prompts name: never the address
+
+    def redact(self, text: str) -> str:
+        if self.private.address is None or self.private.site is None:
+            return text
+        return redact_address(text, self.private.address, self.private.site)
 
     @property
     def origin(self) -> str:

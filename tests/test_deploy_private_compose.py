@@ -338,3 +338,114 @@ def test_a_healthcheck_without_a_host_is_refused_at_construction(tmp_path: Path)
     (repo / "rail.yaml").write_text(manifest + "\n")
     with pytest.raises(DeployError, match="has no host"):
         PrivateCompose(repo, load_rail_config(repo), run=RecordingHost())
+
+
+# -- behind a site (spec 2026-09-23-sites-on-the-host) -------------------------------------
+
+SITE_SAFE = 'services:\n  app:\n    image: x\n    ports:\n      - "${BIND_ADDRESS}:9100:9100"\n'
+
+
+def _site_repo(
+    tmp_path: Path,
+    compose: str,
+    *,
+    site: str = "private-1",
+    healthcheck: str = "http://${BIND_ADDRESS}:9100/healthz",
+) -> Path:
+    repo = conforming_tree(tmp_path, "red-alerts", "prod")
+    write_manifest(
+        repo,
+        project="red-alerts",
+        tier="prod",
+        gates={"deploy.ssh_host": ("private-1-deploy", "the host's ssh alias for the site")},
+        deploy=True,
+    )
+    manifest = (
+        (repo / "rail.yaml")
+        .read_text()
+        .replace("  target: vps-traefik\n", f"  target: private-compose\n  site: {site}\n")
+    )
+    manifest = "\n".join(
+        f'  healthcheck: "{healthcheck}"' if line.strip().startswith("healthcheck:") else line
+        for line in manifest.splitlines()
+    )
+    (repo / "rail.yaml").write_text(manifest + "\n")
+    (repo / "deploy").mkdir(exist_ok=True)
+    (repo / "deploy" / "compose.yaml").write_text(compose)
+    commit_all(repo, "feat: the stack")
+    return repo
+
+
+def _host(tmp_path: Path, address: str = BIND) -> Path:
+    path = tmp_path / "sites.yaml"
+    path.write_text(f'sites:\n  private-1:\n    address: "{address}"\n')
+    path.chmod(0o600)
+    return path
+
+
+def test_behind_a_site_the_host_gives_the_address_the_manifest_never_holds(
+    tmp_path: Path,
+) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    assert BIND not in (repo / "rail.yaml").read_text()
+    target = PrivateCompose(
+        repo, load_rail_config(repo), sites=_host(tmp_path), run=RecordingHost()
+    )
+    steps = target.steps(_artefact(repo))
+    assert "private-1-deploy" in steps[0].title
+    assert steps[1].argv == ("GET", f"http://{BIND}:9100/healthz")
+    assert steps[2].argv == ("GET", f"http://{BIND}:9100/version")
+    assert f"BIND_ADDRESS={BIND}\n" in target.env_file(_artefact(repo))
+    assert target.domain == "private-1"
+
+
+def test_an_ipv6_site_is_bracketed_in_the_urls(tmp_path: Path) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    target = PrivateCompose(
+        repo, load_rail_config(repo), sites=_host(tmp_path, "2001:db8::10"), run=RecordingHost()
+    )
+    steps = target.steps(_artefact(repo))
+    assert steps[1].argv == ("GET", "http://[2001:db8::10]:9100/healthz")
+    assert steps[2].argv == ("GET", "http://[2001:db8::10]:9100/version")
+
+
+def test_a_query_and_a_port_survive_the_substitution(tmp_path: Path) -> None:
+    """Review focus 4: only the token changes; `/version` keeps scheme, address and port."""
+    repo = _site_repo(
+        tmp_path / "repo", SITE_SAFE, healthcheck="http://${BIND_ADDRESS}:9100/healthz?full=1"
+    )
+    target = PrivateCompose(
+        repo, load_rail_config(repo), sites=_host(tmp_path), run=RecordingHost()
+    )
+    steps = target.steps(_artefact(repo))
+    assert steps[1].argv == ("GET", f"http://{BIND}:9100/healthz?full=1")
+    assert steps[2].argv == ("GET", f"http://{BIND}:9100/version")
+
+
+def test_the_site_address_guards_the_compose_file_before_the_first_ssh(tmp_path: Path) -> None:
+    other = 'services:\n  app:\n    image: x\n    ports:\n      - "192.0.2.99:9100:9100"\n'
+    repo = _site_repo(tmp_path / "repo", other)
+    host = RecordingHost()
+    target = PrivateCompose(repo, load_rail_config(repo), sites=_host(tmp_path), run=host)
+    with pytest.raises(DeployError, match="192.0.2.99:9100:9100"):
+        target.steps(_artefact(repo))
+    assert [a for a in host.argv if a[0] == "ssh"] == []
+
+
+def test_a_site_this_host_does_not_know_fails_before_anything_is_planned(tmp_path: Path) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE, site="private-9")
+    with pytest.raises(DeployError, match="private-9 is not declared"):
+        PrivateCompose(repo, load_rail_config(repo), sites=_host(tmp_path), run=RecordingHost())
+
+
+def test_the_target_redacts_its_address_behind_a_site_and_nothing_without_one(
+    tmp_path: Path,
+) -> None:
+    repo = _site_repo(tmp_path / "site", SITE_SAFE)
+    target = PrivateCompose(
+        repo, load_rail_config(repo), sites=_host(tmp_path), run=RecordingHost()
+    )
+    assert target.redact(f"connect to host {BIND} port 22") == "connect to host private-1 port 22"
+    declared = _private_repo(tmp_path / "declared", SAFE)
+    plain = PrivateCompose(declared, load_rail_config(declared), run=RecordingHost())
+    assert plain.redact(f"connect to host {BIND}") == f"connect to host {BIND}"
