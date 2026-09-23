@@ -31,6 +31,11 @@ ADDRESS_TOKEN = "${BIND_ADDRESS}"
 _TOKEN_HOST = re.compile(rf"^https?://{re.escape(ADDRESS_TOKEN)}(?::\d+)?(?=[/?#]|\Z)")
 
 
+def token_is_the_host(url: str) -> bool:
+    """The token is the URL's host and nothing else: a site's address may fill only that."""
+    return _TOKEN_HOST.match(url) is not None
+
+
 class Tier(StrEnum):
     """Maturity tier. Each tier includes the previous one; the audit scores against it."""
 
@@ -74,7 +79,7 @@ class DeployConfig(BaseModel):
                 f"deploy.healthcheck uses {ADDRESS_TOKEN} but no deploy.site says whose "
                 "address it is"
             )
-        if self.site is not None and not _TOKEN_HOST.match(self.healthcheck):
+        if self.site is not None and not token_is_the_host(self.healthcheck):
             raise ValueError(
                 f"behind deploy.site the healthcheck host is {ADDRESS_TOKEN}, filled from the "
                 f"host's sites file (got {self.healthcheck})"

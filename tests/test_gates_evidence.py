@@ -357,9 +357,38 @@ def _probe(image: str, state: str = "running") -> Container:
     return Container(name="red-beta-app-1", stack="red-beta", image=image, state=state, health="")
 
 
+MONITOR = "192.0.2.2"  # RFC 5737: red-monitor's real address lives only in the host's file
+
+
+def _sites(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, text: str | None) -> Path:
+    """Point the rail at a private sites file in `tmp_path`; `None` leaves it absent, so a
+    developer's own `~/.config/red-rail/sites.yaml` can never leak into a test."""
+    path = tmp_path / "host" / "sites.yaml"
+    monkeypatch.setenv("RAIL_SITES_FILE", str(path))
+    if text is not None:
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(text)
+        path.chmod(0o600)
+    return path
+
+
+def _deployed_tree(tmp_path: Path) -> Path:
+    repo = conforming_tree(tmp_path, "red-beta", "prod")
+    _attest(
+        _ledger(repo),
+        AttestationKind.DEPLOYED,
+        "d1",
+        sha=gitrepo.head_sha(repo),
+        digest="sha256:" + "a" * 64,
+        target="vps-traefik",
+    )
+    return repo
+
+
 def test_visible_needs_a_running_container_of_the_stack_with_the_deployed_digest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _sites(monkeypatch, tmp_path, f'sites:\n  red-monitor:\n    address: "{MONITOR}"\n')
     repo = conforming_tree(tmp_path, "red-beta", "prod")
     head = gitrepo.head_sha(repo)
     assert "no deployed" in visible(repo).details and not visible(repo).passed
@@ -382,7 +411,7 @@ def test_visible_needs_a_running_container_of_the_stack_with_the_deployed_digest
     fake_read.view = _agent()  # type: ignore[attr-defined]
     result = visible(repo)
     assert not result.passed and "no running container of stack red-beta" in result.details
-    assert seen[-1] == ("http://10.100.0.2:8081", "vps")
+    assert seen[-1] == (f"http://{MONITOR}:8081", "vps")
     fake_read.view = _agent(_probe("ghcr.io/hawkixs/red-beta@sha256:" + "b" * 64))  # type: ignore[attr-defined]
     result = visible(repo)
     assert not result.passed and "ledger says sha256:" + "a" * 64 in result.details
@@ -400,6 +429,98 @@ def test_visible_needs_a_running_container_of_the_stack_with_the_deployed_digest
 
     monkeypatch.setattr(monitor, "read_agent", broken)
     assert "red-monitor: HTTP 503" in visible(repo).details
+
+
+def _unreachable(base_url: str, agent: str, **kwargs: object) -> AgentView:
+    raise AssertionError(f"red-monitor must not be queried, got {base_url}")
+
+
+def test_visible_fails_closed_naming_the_file_when_the_host_declares_no_monitor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The monitor's address is a host fact: without it the gate says where to declare it,
+    and never falls back to an address of its own."""
+    path = _sites(monkeypatch, tmp_path, None)
+    repo = _deployed_tree(tmp_path)
+    monkeypatch.setattr(monitor, "read_agent", _unreachable)
+    result = visible(repo)
+    assert not result.passed
+    assert "site red-monitor" in result.details and str(path) in result.details
+
+
+def test_visible_lists_the_known_sites_when_red_monitor_is_not_one_of_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _sites(monkeypatch, tmp_path, 'sites:\n  red-base:\n    address: "192.0.2.4"\n')
+    repo = _deployed_tree(tmp_path)
+    monkeypatch.setattr(monitor, "read_agent", _unreachable)
+    result = visible(repo)
+    assert not result.passed and "known: red-base" in result.details
+
+
+def test_visible_never_prints_the_monitor_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreachable monitor's error names its URL; the gate's text names the site instead,
+    because `rail check` output is pasted into issues and pull requests."""
+    _sites(monkeypatch, tmp_path, f'sites:\n  red-monitor:\n    address: "{MONITOR}"\n')
+    repo = _deployed_tree(tmp_path)
+
+    def refused(base_url: str, agent: str, **kwargs: object) -> AgentView:
+        raise monitor.MonitorError(f"{base_url}/api/latest: HTTP 503")
+
+    monkeypatch.setattr(monitor, "read_agent", refused)
+    details = visible(repo).details
+    assert "red-monitor:8081/api/latest: HTTP 503" in details
+    assert MONITOR not in details
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("observe.monitor_url", "http://${BIND_ADDRESS}.elsewhere.example:8081"),
+        ("observe.monitor_url", "http://elsewhere.example/?h=${BIND_ADDRESS}"),
+        ("observe.monitor_url", "http://${BIND_ADDRESS}:8081@elsewhere.example"),
+        ("observe.monitor_site", "Not_A_Label"),
+    ],
+)
+def test_the_monitor_address_only_ever_fills_the_host_of_the_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, value: str
+) -> None:
+    """Review finding: an override placing the token anywhere but the host would send the
+    private address to another machine (a DNS label, a query string, userinfo). The rule of
+    `deploy.healthcheck` holds here too, and the site must be a label."""
+    _sites(monkeypatch, tmp_path, f'sites:\n  red-monitor:\n    address: "{MONITOR}"\n')
+    repo = _deployed_tree(tmp_path)
+    manifest = (repo / "rail.yaml").read_text()
+    (repo / "rail.yaml").write_text(
+        manifest + f"gates:\n  {key}:\n    value: '{value}'\n    reason: probe\n"
+    )
+    monkeypatch.setattr(monitor, "read_agent", _unreachable)
+    result = visible(repo)
+    assert not result.passed and MONITOR not in result.details
+
+
+def test_a_literal_monitor_url_in_the_manifest_needs_no_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _sites(monkeypatch, tmp_path, None)
+    repo = _deployed_tree(tmp_path)
+    manifest = (repo / "rail.yaml").read_text()
+    (repo / "rail.yaml").write_text(
+        manifest
+        + "gates:\n  observe.monitor_url:\n    value: http://192.0.2.9:8081\n"
+        + "    reason: this project watches another monitor\n"
+    )
+    seen: list[str] = []
+
+    def fake_read(base_url: str, agent: str, **kwargs: object) -> AgentView:
+        seen.append(base_url)
+        return _agent()
+
+    monkeypatch.setattr(monitor, "read_agent", fake_read)
+    assert "no running container" in visible(repo).details
+    assert seen == ["http://192.0.2.9:8081"]
 
 
 def test_drill_and_fulfilled_anchor_on_the_newest_release_deployment(tmp_path: Path) -> None:
@@ -434,6 +555,7 @@ def test_drill_and_fulfilled_anchor_on_the_newest_release_deployment(tmp_path: P
 def test_visible_names_a_deployed_record_without_digest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _sites(monkeypatch, tmp_path, f'sites:\n  red-monitor:\n    address: "{MONITOR}"\n')
     repo = conforming_tree(tmp_path, "red-beta", "prod")
     _attest(_ledger(repo), AttestationKind.DEPLOYED, "d1", sha=gitrepo.head_sha(repo), target="t")
     monkeypatch.setattr(

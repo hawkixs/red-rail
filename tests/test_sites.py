@@ -102,6 +102,40 @@ def test_an_empty_or_malformed_file_is_refused_by_name(tmp_path: Path, text: str
     assert "declare it on this host" in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        f'sites:\n  private-1:\n    address: "{V4}"\n  Bad_Label:\n    address: "{V4}"\n',
+        f'sites:\n  private-1:\n    address: "{V4}"\n    extra: "{V4}"\n',
+        f'sites:\n  private-1:\n    address: "{V4}/24"\n',
+        'sites:\n  private-1:\n    address: "fe80::10%eth0"\n',
+        f'sites:\n  private-1:\n    address: "{V4}"\n  {V4}:\n    address: "{V4}"\n',
+        f"sites:\n  private-1:\n    address: {V4.rsplit('.', 2)[0]}\n",  # an unquoted number
+        f'sites:\n  private-1:\n    address: "{V4}"\n  {V4}:\n    address: "not-an-ip"\n',
+    ],
+)
+def test_a_refusal_never_echoes_an_address_from_the_file(tmp_path: Path, text: str) -> None:
+    """Review finding: pydantic's error text carries the offending input, so a malformed file
+    printed its addresses into `rail check` output, which is pasted into issues. The refusal
+    names where the problem is, never what the file holds."""
+    path = _sites(tmp_path, text)
+    with pytest.raises(DeployError, match="not a valid sites file") as caught:
+        load_site("private-1", path)
+    message = str(caught.value)
+    assert V4 not in message and V4.rsplit(".", 2)[0] not in message
+    assert "fe80::10" not in message
+
+
+def test_an_unresolvable_home_in_the_path_is_a_refusal_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding: `~user` of an unknown user makes `expanduser` raise RuntimeError, and a
+    gate must never raise."""
+    monkeypatch.setenv("RAIL_SITES_FILE", "~no-such-user-for-rail/sites.yaml")
+    with pytest.raises(DeployError, match="site private-1"):
+        load_site("private-1")
+
+
 def test_the_environment_names_the_file_never_the_address(tmp_path: Path) -> None:
     assert sites_file({}) == Path("~/.config/red-rail/sites.yaml").expanduser()
     assert sites_file({"RAIL_SITES_FILE": str(tmp_path / "x.yaml")}) == tmp_path / "x.yaml"

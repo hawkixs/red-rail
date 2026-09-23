@@ -34,7 +34,9 @@ class Site(BaseModel):
         # YAML 1.1 reads an all-digit IPv6 such as 2001:0:0:0:0:0:0:1 as a base-60 integer, and
         # an integer would pass for an IPv4 address: only a string is an address here
         if not isinstance(value, str):
-            raise ValueError(f"write the address as a quoted string, got {value!r}")
+            raise ValueError(
+                f"write the address as a quoted string, not a YAML {type(value).__name__}"
+            )
         return value
 
     @field_validator("address")
@@ -51,8 +53,8 @@ class Site(BaseModel):
     def _not_scoped(cls, value: Address) -> Address:
         if isinstance(value, IPv6Address) and value.scope_id is not None:
             raise ValueError(
-                f"{value} is a scoped address: Docker can neither bind it to an interface "
-                "by that name, nor can a scope id be written in a URL"
+                "a scoped address: Docker can neither bind it to an interface by that name, "
+                "nor can a scope id be written in a URL"
             )
         return value
 
@@ -67,7 +69,7 @@ class SitesFile(BaseModel):
     def _labels(cls, value: dict[str, Site]) -> dict[str, Site]:
         bad = sorted(name for name in value if not re.fullmatch(SITE_PATTERN, name))
         if bad:
-            raise ValueError(f"site names are labels ({SITE_PATTERN}): {', '.join(bad)}")
+            raise ValueError(f"site names are labels ({SITE_PATTERN}): {len(bad)} name(s) are not")
         return value
 
 
@@ -80,7 +82,10 @@ def sites_file(environ: Mapping[str, str] | None = None) -> Path:
 def load_site(name: str, path: Path | None = None) -> Site:
     """The site `name` from the host's private sites file. Every failure is a `DeployError`
     naming the site, the file and the fix; the target calls this before any step is planned."""
-    where = sites_file() if path is None else path
+    try:
+        where = sites_file() if path is None else path
+    except RuntimeError as exc:  # `~user` of an unknown user: a refusal, never a crash
+        raise DeployError(f"site {name}: {exc} — name the file with {SITES_FILE_VARIABLE}") from exc
     fix = f'declare it on this host: `sites: {{{name}: {{address: "…"}}}}` in {where}, mode 0600'
     try:
         raw = read_private_file(where)
@@ -88,13 +93,35 @@ def load_site(name: str, path: Path | None = None) -> Site:
         raise DeployError(f"site {name}: {exc} — {fix}") from exc
     try:
         document = SitesFile.model_validate(yaml.safe_load(raw) or {})
-    except (yaml.YAMLError, ValidationError) as exc:
-        raise DeployError(f"site {name}: {where} is not a valid sites file: {exc} — {fix}") from exc
+    except ValidationError as exc:
+        raise DeployError(
+            f"site {name}: {where} is not a valid sites file: {_where_it_fails(exc)} — {fix}"
+        ) from exc
+    except yaml.YAMLError as exc:
+        # a YAML error quotes the line it stopped at, which may hold an address
+        raise DeployError(
+            f"site {name}: {where} is not a valid sites file: not YAML ({type(exc).__name__}) "
+            f"— {fix}"
+        ) from exc
     site = document.sites.get(name)
     if site is None:
         known = ", ".join(sorted(document.sites)) or "none"
         raise DeployError(f"site {name} is not declared in {where} (known: {known}) — {fix}")
     return site
+
+
+def _where_it_fails(exc: ValidationError) -> str:
+    """Each error's location and message, never its input: pydantic's text quotes the offending
+    value, and a refusal is printed where the file's addresses must not go (review finding)."""
+
+    def shown(part: object) -> str:
+        # a site's name is a key of the location, and a mistyped name may be an address
+        return part if isinstance(part, str) and re.fullmatch(SITE_PATTERN, part) else "…"
+
+    return "; ".join(
+        f"{'.'.join(shown(part) for part in error['loc'])}: {error['msg']}"
+        for error in exc.errors(include_input=False, include_url=False)
+    )
 
 
 def substitute_address(url: str, address: Address) -> str:

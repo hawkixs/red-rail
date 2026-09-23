@@ -53,8 +53,8 @@ def _http(status: int = 200, body: object = LATEST):
 
 def test_read_agent_reduces_the_snapshot_to_one_agent() -> None:
     http = _http()
-    view = read_agent("http://10.100.0.2:8081", "vps", http=http)
-    assert http.calls == ["http://10.100.0.2:8081/api/latest"]
+    view = read_agent("http://192.0.2.2:8081", "vps", http=http)
+    assert http.calls == ["http://192.0.2.2:8081/api/latest"]
     assert view.agent == "vps" and view.status == "up"
     assert view.last_seen == datetime(2026, 9, 19, 20, 7, 25, tzinfo=UTC)
     names = [c.name for c in view.containers]
@@ -65,23 +65,23 @@ def test_read_agent_reduces_the_snapshot_to_one_agent() -> None:
 
 
 def test_a_down_agent_and_a_missing_docker_block_are_readable() -> None:
-    view = read_agent("http://10.100.0.2:8081", "pc-gpu", http=_http())
+    view = read_agent("http://192.0.2.2:8081", "pc-gpu", http=_http())
     assert view.status == "down" and view.last_seen is None and view.containers == ()
 
 
 def test_errors_are_monitor_errors() -> None:
     with pytest.raises(MonitorError, match="unknown agent"):
-        read_agent("http://10.100.0.2:8081", "moon", http=_http())
+        read_agent("http://192.0.2.2:8081", "moon", http=_http())
     with pytest.raises(MonitorError, match="HTTP 503"):
-        read_agent("http://10.100.0.2:8081", "vps", http=_http(status=503))
+        read_agent("http://192.0.2.2:8081", "vps", http=_http(status=503))
     with pytest.raises(MonitorError, match="not JSON"):
-        read_agent("http://10.100.0.2:8081", "vps", http=lambda u, t: (200, b"<html>"))
+        read_agent("http://192.0.2.2:8081", "vps", http=lambda u, t: (200, b"<html>"))
 
     def refused(url: str, timeout: float) -> tuple[int, bytes]:
         raise HttpError(f"{url}: connection refused")
 
     with pytest.raises(MonitorError, match="refused"):
-        read_agent("http://10.100.0.2:8081", "vps", http=refused)
+        read_agent("http://192.0.2.2:8081", "vps", http=refused)
 
 
 def test_image_digest_reads_a_pinned_reference_only() -> None:

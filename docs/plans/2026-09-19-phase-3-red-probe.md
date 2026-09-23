@@ -80,7 +80,7 @@ def test_deploy_and_observe_defaults_are_versioned_here() -> None:
     assert GATE_DEFAULTS["deploy.platform"] == "linux/amd64"
     assert GATE_DEFAULTS["deploy.healthcheck_timeout_seconds"] == 120
     assert GATE_DEFAULTS["deploy.compose_path"] == "deploy/compose.yaml"
-    assert GATE_DEFAULTS["observe.monitor_url"] == "http://10.100.0.2:8081"
+    assert GATE_DEFAULTS["observe.monitor_url"] == "http://192.0.2.2:8081"
     assert GATE_DEFAULTS["observe.monitor_agent"] == "vps"
 
 
@@ -186,7 +186,7 @@ In `src/rail/policy.py`, extend `GATE_DEFAULTS` (after `build.conventional_types
     "deploy.healthcheck_timeout_seconds": 120,  # the first deployment waits for its certificate
     "deploy.compose_path": "deploy/compose.yaml",  # in the project, read at the released commit
     # --- observe (spec §6 step 8): the red-monitor server and the agent watching the target ---
-    "observe.monitor_url": "http://10.100.0.2:8081",
+    "observe.monitor_url": "http://192.0.2.2:8081",
     "observe.monitor_agent": "vps",
 ```
 and add after `effective()`:
@@ -588,8 +588,8 @@ def _http(status: int = 200, body: object = LATEST):
 
 def test_read_agent_reduces_the_snapshot_to_one_agent() -> None:
     http = _http()
-    view = read_agent("http://10.100.0.2:8081", "vps", http=http)
-    assert http.calls == ["http://10.100.0.2:8081/api/latest"]
+    view = read_agent("http://192.0.2.2:8081", "vps", http=http)
+    assert http.calls == ["http://192.0.2.2:8081/api/latest"]
     assert view.agent == "vps" and view.status == "up"
     assert view.last_seen == datetime(2026, 9, 19, 20, 7, 25, tzinfo=UTC)
     names = [c.name for c in view.containers]
@@ -600,23 +600,23 @@ def test_read_agent_reduces_the_snapshot_to_one_agent() -> None:
 
 
 def test_a_down_agent_and_a_missing_docker_block_are_readable() -> None:
-    view = read_agent("http://10.100.0.2:8081", "pc-gpu", http=_http())
+    view = read_agent("http://192.0.2.2:8081", "pc-gpu", http=_http())
     assert view.status == "down" and view.last_seen is None and view.containers == ()
 
 
 def test_errors_are_monitor_errors() -> None:
     with pytest.raises(MonitorError, match="unknown agent"):
-        read_agent("http://10.100.0.2:8081", "moon", http=_http())
+        read_agent("http://192.0.2.2:8081", "moon", http=_http())
     with pytest.raises(MonitorError, match="HTTP 503"):
-        read_agent("http://10.100.0.2:8081", "vps", http=_http(status=503))
+        read_agent("http://192.0.2.2:8081", "vps", http=_http(status=503))
     with pytest.raises(MonitorError, match="not JSON"):
-        read_agent("http://10.100.0.2:8081", "vps", http=lambda u, t: (200, b"<html>"))
+        read_agent("http://192.0.2.2:8081", "vps", http=lambda u, t: (200, b"<html>"))
 
     def refused(url: str, timeout: float) -> tuple[int, bytes]:
         raise HttpError(f"{url}: connection refused")
 
     with pytest.raises(MonitorError, match="refused"):
-        read_agent("http://10.100.0.2:8081", "vps", http=refused)
+        read_agent("http://192.0.2.2:8081", "vps", http=refused)
 
 
 def test_image_digest_reads_a_pinned_reference_only() -> None:
@@ -660,7 +660,7 @@ def test_visible_needs_a_running_container_of_the_stack_with_the_deployed_digest
     fake_read.view = _agent()  # type: ignore[attr-defined]
     result = visible(repo)
     assert not result.passed and "no running container of stack red-beta" in result.details
-    assert seen[-1] == ("http://10.100.0.2:8081", "vps")
+    assert seen[-1] == ("http://192.0.2.2:8081", "vps")
     fake_read.view = _agent(_probe("ghcr.io/hawkixs/red-beta@sha256:" + "b" * 64))  # type: ignore[attr-defined]
     result = visible(repo)
     assert not result.passed and "ledger says sha256:" + "a" * 64 in result.details

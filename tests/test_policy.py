@@ -1,9 +1,10 @@
 """Tier defaults live in red-rail; a manifest only declares overrides, each with a reason."""
 
+import re
 from pathlib import Path
 
 from rail.gates import GateResult, GateSpec, Stage, run_gate, run_gates
-from rail.model import Tier
+from rail.model import ADDRESS_TOKEN, SITE_PATTERN, Tier
 from rail.policy import (
     GATE_DEFAULTS,
     applicable_stages,
@@ -128,7 +129,10 @@ def test_deploy_and_observe_defaults_are_versioned_here() -> None:
     # refuse a compose file that publishes everywhere, so its absence must be an error
     assert GATE_DEFAULTS["deploy.bind_address"] is None
     assert GATE_DEFAULTS["deploy.remote_timeout_seconds"] == 900
-    assert GATE_DEFAULTS["observe.monitor_url"] == "http://10.100.0.2:8081"
+    # the monitor is a site: its address comes from the host's private sites file
+    assert GATE_DEFAULTS["observe.monitor_url"] == f"http://{ADDRESS_TOKEN}:8081"
+    assert GATE_DEFAULTS["observe.monitor_site"] == "red-monitor"
+    assert re.fullmatch(SITE_PATTERN, GATE_DEFAULTS["observe.monitor_site"])
     assert GATE_DEFAULTS["observe.monitor_agent"] == "vps"
 
 

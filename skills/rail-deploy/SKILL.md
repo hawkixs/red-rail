@@ -13,7 +13,8 @@ never in the repository: `~/.config/red-rail/sites.yaml`, mode 0600, holding
 `rail deploy --plan` stops before printing a step, naming the site and the file. In
 `rail.yaml`, `deploy.site: <site>` names the site, and its healthcheck uses the rail's token
 as the host (`http://${BIND_ADDRESS}:<port>/<path>`); records redact that site's address
-only.
+only. The same file declares the site `red-monitor` (`observe.monitor_site`), which
+`rail check observe` needs.
 
 1. Preview: `rail deploy --repo <path> --plan` (the remote script and the checks, nothing runs).
 2. Deploy: `rail deploy --repo <path>` — refuses without a `released` attestation, asks for

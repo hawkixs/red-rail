@@ -585,7 +585,7 @@ def test_contract_set_refuses_an_address_before_it_is_frozen(tmp_path: Path) -> 
             "--repo",
             str(repo),
             "--objective",
-            "serve the probe on 10.100.0.4",
+            "serve the probe on 198.51.100.4",
             "--reason",
             "r",
             "--no-checks-reason",
@@ -594,7 +594,7 @@ def test_contract_set_refuses_an_address_before_it_is_frozen(tmp_path: Path) -> 
         ],
     )
     assert out.exit_code == 2, out.output
-    assert "10.100.0.4" in out.output and "objective" in out.output
+    assert "198.51.100.4" in out.output and "objective" in out.output
     assert not list((repo / RECEIPTS_DIR).glob("*.json")), "nothing was written"
 
 
