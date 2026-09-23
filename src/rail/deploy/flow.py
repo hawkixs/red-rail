@@ -54,10 +54,6 @@ def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
     return cast("Target", shape(repo, cfg, **kwargs))
 
 
-def _unchanged(text: str) -> str:
-    return text
-
-
 def _redacted(value: Any, redact: Callable[[str], str]) -> Any:
     """Every string of an attestation payload, as the target allows it to be recorded."""
     if isinstance(value, str):
@@ -76,8 +72,10 @@ class Attester:
     target: str
     issuer: str
     # a private target behind a site replaces its address with the site's name: every string
-    # of every record passes here before the key, the mirror and the ledger see it
-    redact: Callable[[str], str] = field(default=_unchanged)
+    # of every record passes here before the key, the mirror and the ledger see it. No
+    # default: a construction that forgets this argument must fail to build, not record the
+    # address silently (review finding)
+    redact: Callable[[str], str]
     records: list[Record] = field(default_factory=list)
     unattested: list[Unattested] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)  # a refusal that left no mirror

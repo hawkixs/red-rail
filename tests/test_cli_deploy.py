@@ -443,6 +443,65 @@ def test_a_straddling_address_is_never_left_partial_by_the_thousand_character_ca
     assert "192.0.2" not in receipts  # the address's 7-character prefix must not leak either
 
 
+def test_an_attester_without_a_redaction_cannot_be_built() -> None:
+    """Review finding: a default of "leave the text unchanged" would let a future
+    construction that forgets `redact=` record a target's address silently — the previous
+    default, and only the forward flow was ever exercised through a real Attester. `redact`
+    is required so that mistake fails loudly at construction instead of leaking quietly."""
+    with pytest.raises(TypeError, match="redact"):
+        flow.Attester(None, "red-alerts", "private-compose", "operator")  # type: ignore[call-arg]
+
+
+def test_rollback_names_the_site_never_the_address_when_the_apply_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`test_what_the_flows_attest_names_the_site_never_the_address` only exercises the
+    forward flow; a manual `--rollback` builds its own Attester and must redact just as well."""
+    fake = SiteTarget()
+    monkeypatch.setattr(flow, "make_target", lambda repo, cfg, **kwargs: fake)
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"]
+        ).exit_code
+        == 0
+    )
+    assert runner.invoke(main, ["deploy", "--repo", str(repo), "--yes"]).exit_code == 0
+    fake.broken.add(D1)  # --rollback applies the previous artefact (0.1.0 / D1), which fails
+    out = runner.invoke(main, ["deploy", "--repo", str(repo), "--rollback", "--yes"])
+    assert out.exit_code == 1, out.output
+    receipts = "".join(p.read_text() for p in (repo / RECEIPTS_DIR).glob("*.json"))
+    assert SiteTarget.ADDRESS not in receipts
+    incident = next(d for k, d in _kinds(repo) if k == "incident_detected")
+    assert "connect to host private-1 port 22" in incident["reason"]
+
+
+def test_drill_names_the_site_never_the_address_when_the_rollback_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same gap as the manual rollback, for `rail drill`'s own Attester."""
+    fake = SiteTarget()
+    monkeypatch.setattr(flow, "make_target", lambda repo, cfg, **kwargs: fake)
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"]
+        ).exit_code
+        == 0
+    )
+    assert runner.invoke(main, ["deploy", "--repo", str(repo), "--yes"]).exit_code == 0
+    fake.broken.add(D1)  # the drill's rollback applies the previous artefact (D1), which fails
+    out = runner.invoke(main, ["drill", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 1, out.output
+    assert "drill aborted" in out.output
+    receipts = "".join(p.read_text() for p in (repo / RECEIPTS_DIR).glob("*.json"))
+    assert SiteTarget.ADDRESS not in receipts
+    incident = next(d for k, d in _kinds(repo) if k == "incident_detected" and d["drill"] is False)
+    assert "connect to host private-1 port 22" in incident["reason"]
+
+
 def test_the_attester_redacts_every_string_before_the_ledger_sees_it() -> None:
     """The file ledger stores what it is given; brain receives the same payload after the
     mirror. Recording what `attest` is handed covers both."""
