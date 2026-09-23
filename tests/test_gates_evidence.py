@@ -475,6 +475,32 @@ def test_visible_never_prints_the_monitor_address(
     assert MONITOR not in details
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("observe.monitor_url", "http://${BIND_ADDRESS}.elsewhere.example:8081"),
+        ("observe.monitor_url", "http://elsewhere.example/?h=${BIND_ADDRESS}"),
+        ("observe.monitor_url", "http://${BIND_ADDRESS}:8081@elsewhere.example"),
+        ("observe.monitor_site", "Not_A_Label"),
+    ],
+)
+def test_the_monitor_address_only_ever_fills_the_host_of_the_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, value: str
+) -> None:
+    """Review finding: an override placing the token anywhere but the host would send the
+    private address to another machine (a DNS label, a query string, userinfo). The rule of
+    `deploy.healthcheck` holds here too, and the site must be a label."""
+    _sites(monkeypatch, tmp_path, f'sites:\n  red-monitor:\n    address: "{MONITOR}"\n')
+    repo = _deployed_tree(tmp_path)
+    manifest = (repo / "rail.yaml").read_text()
+    (repo / "rail.yaml").write_text(
+        manifest + f"gates:\n  {key}:\n    value: '{value}'\n    reason: probe\n"
+    )
+    monkeypatch.setattr(monitor, "read_agent", _unreachable)
+    result = visible(repo)
+    assert not result.passed and MONITOR not in result.details
+
+
 def test_a_literal_monitor_url_in_the_manifest_needs_no_site(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

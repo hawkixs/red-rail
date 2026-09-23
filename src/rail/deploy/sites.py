@@ -51,8 +51,8 @@ class Site(BaseModel):
     def _not_scoped(cls, value: Address) -> Address:
         if isinstance(value, IPv6Address) and value.scope_id is not None:
             raise ValueError(
-                f"{value} is a scoped address: Docker can neither bind it to an interface "
-                "by that name, nor can a scope id be written in a URL"
+                "a scoped address: Docker can neither bind it to an interface by that name, "
+                "nor can a scope id be written in a URL"
             )
         return value
 
@@ -80,7 +80,10 @@ def sites_file(environ: Mapping[str, str] | None = None) -> Path:
 def load_site(name: str, path: Path | None = None) -> Site:
     """The site `name` from the host's private sites file. Every failure is a `DeployError`
     naming the site, the file and the fix; the target calls this before any step is planned."""
-    where = sites_file() if path is None else path
+    try:
+        where = sites_file() if path is None else path
+    except RuntimeError as exc:  # `~user` of an unknown user: a refusal, never a crash
+        raise DeployError(f"site {name}: {exc} — name the file with {SITES_FILE_VARIABLE}") from exc
     fix = f'declare it on this host: `sites: {{{name}: {{address: "…"}}}}` in {where}, mode 0600'
     try:
         raw = read_private_file(where)
@@ -88,13 +91,30 @@ def load_site(name: str, path: Path | None = None) -> Site:
         raise DeployError(f"site {name}: {exc} — {fix}") from exc
     try:
         document = SitesFile.model_validate(yaml.safe_load(raw) or {})
-    except (yaml.YAMLError, ValidationError) as exc:
-        raise DeployError(f"site {name}: {where} is not a valid sites file: {exc} — {fix}") from exc
+    except ValidationError as exc:
+        raise DeployError(
+            f"site {name}: {where} is not a valid sites file: {_where_it_fails(exc)} — {fix}"
+        ) from exc
+    except yaml.YAMLError as exc:
+        # a YAML error quotes the line it stopped at, which may hold an address
+        raise DeployError(
+            f"site {name}: {where} is not a valid sites file: not YAML ({type(exc).__name__}) "
+            f"— {fix}"
+        ) from exc
     site = document.sites.get(name)
     if site is None:
         known = ", ".join(sorted(document.sites)) or "none"
         raise DeployError(f"site {name} is not declared in {where} (known: {known}) — {fix}")
     return site
+
+
+def _where_it_fails(exc: ValidationError) -> str:
+    """Each error's location and message, never its input: pydantic's text quotes the offending
+    value, and a refusal is printed where the file's addresses must not go (review finding)."""
+    return "; ".join(
+        f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+        for error in exc.errors(include_input=False, include_url=False)
+    )
 
 
 def substitute_address(url: str, address: Address) -> str:

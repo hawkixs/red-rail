@@ -6,6 +6,7 @@ rollback or a drill's roll-forward; phase 1 checks the evidence chain itself."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -15,7 +16,13 @@ from rail.deploy.sites import load_site, redact_address, substitute_address
 from rail.gates import GateResult, GateSpec, Need, Stage
 from rail.ledger import RECEIPTS_DIR, AttestationKind, LedgerError, Record, open_ledger
 from rail.ledger.file import FileLedger
-from rail.model import ADDRESS_TOKEN, Declarations, declarations
+from rail.model import (
+    ADDRESS_TOKEN,
+    SITE_PATTERN,
+    Declarations,
+    declarations,
+    token_is_the_host,
+)
 
 
 def _attestations(repo: Path, kind: AttestationKind) -> list[Record] | str | Need:
@@ -217,7 +224,23 @@ def visible(repo: Path) -> GateResult:
     address = None
     if ADDRESS_TOKEN in url:
         # the address is a host fact (spec 2026-09-23-sites-on-the-host): without it the gate
-        # stays closed and says where to declare it, never guessing one of its own
+        # stays closed and says where to declare it, never guessing one of its own. It fills
+        # the URL's host only — anywhere else (a DNS label, a query, userinfo) it would be sent
+        # to another machine — and the site is a label, as `deploy.site` is.
+        if not token_is_the_host(url):
+            return GateResult(
+                Stage.OBSERVE,
+                "visible",
+                False,
+                f"observe.monitor_url: {ADDRESS_TOKEN} must be the URL's host (got {url})",
+            )
+        if not re.fullmatch(SITE_PATTERN, site):
+            return GateResult(
+                Stage.OBSERVE,
+                "visible",
+                False,
+                f"observe.monitor_site must be a label ({SITE_PATTERN}), got {site!r}",
+            )
         try:
             address = load_site(site).address
         except DeployError as exc:
