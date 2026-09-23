@@ -54,7 +54,7 @@
       "name": "red-delta",
       "score": {
         "applicable": 11,
-        "passed": 3
+        "passed": 4
       },
       "stages": {
         "build": "n/a",

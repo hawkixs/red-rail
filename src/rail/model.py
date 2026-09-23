@@ -6,6 +6,7 @@ which is what keeps twenty manifests from diverging.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
@@ -115,6 +116,29 @@ def manifest_problem(repo: Path) -> str | None:
         location = ".".join(str(part) for part in first["loc"]) or "<root>"
         return f"{MANIFEST_NAME} is invalid: {location}: {first['msg']}"
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class Declarations:
+    """What the manifest declares, field by field; with no manifest at all, the documented
+    defaults (`ledger: file`) and None where there is no default. `cfg` is the full manifest."""
+
+    project: str | None
+    stack: Stack | None
+    ledger: LedgerBackend
+    cfg: RailConfig | None
+
+
+def declarations(repo: Path) -> Declarations | str:
+    """The manifest's declarations, or why it cannot be read. Defaults apply ONLY when the file
+    is absent: an invalid manifest that declares `ledger: brain` must never make a gate judge
+    `docs/receipts` as authoritative (spec decision 4)."""
+    if not (repo / MANIFEST_NAME).exists():
+        return Declarations(project=None, stack=None, ledger=LedgerBackend.FILE, cfg=None)
+    cfg = try_load_rail_config(repo)
+    if cfg is None:
+        return manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
+    return Declarations(project=cfg.project, stack=cfg.stack, ledger=cfg.ledger, cfg=cfg)
 
 
 def load_rail_config(repo: Path) -> RailConfig:

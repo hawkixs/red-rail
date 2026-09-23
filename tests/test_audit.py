@@ -10,6 +10,8 @@ from click.testing import CliRunner
 from rail.audit import audit_paths, audit_project, discover, matrix, render_table, template_version
 from rail.cli import main
 from rail.gates import build as build_gates
+from rail.ledger import RECEIPTS_DIR, Contract, Deliverable
+from rail.ledger.file import FileLedger
 from tests.helpers import conforming_tree, init_repo, with_evidence, write_manifest, write_roster
 
 GOLDEN = Path(__file__).parent / "golden" / "audit-matrix.json"
@@ -77,10 +79,13 @@ def test_audit_project_scores_against_the_declared_tier(tmp_path: Path) -> None:
     assert gamma.exceptions == ["review.verdict: reviewer arrives in phase 2"]
     assert {s.stage: s.status for s in gamma.stages}["review"] == "exception"
     delta = audit_project(projects / "red-delta")
+    # hygiene.mirrors passes vacuously without a manifest (spec 2026-09-23: the default file
+    # ledger applies, `docs/receipts` is the ledger) — one more pass than before that gate
+    # named the missing manifest like every other ledger-scoped gate.
     assert (delta.declared_tier, delta.tier_used, delta.passed, delta.applicable) == (
         None,
         "bootstrap",
-        3,
+        4,
         11,
     )
 
@@ -159,3 +164,31 @@ def test_discover_follows_a_symlinked_project(tmp_path: Path) -> None:
     (projects / "red-link").symlink_to(real, target_is_directory=True)
     names = [p.name for p in discover(projects)]
     assert names == ["red-alpha", "red-beta", "red-delta", "red-gamma", "red-link"]
+
+
+def test_a_stage_that_only_needs_a_declaration_is_marked_apart(tmp_path: Path) -> None:
+    """Review focus 5. Undeclared tier = bootstrap (hygiene, intent, design). The only intent
+    gate is `intent.contract`: no manifest and one contract receipt make it a NEED."""
+    repo = init_repo(tmp_path / "bare", remotes=False)
+    FileLedger(repo / RECEIPTS_DIR).contract_set(
+        "red-beta",
+        Contract(
+            objective="fixture",
+            deliverables=[
+                Deliverable(key="main", repository="hawkixs/red-beta", no_checks_reason="fixture")
+            ],
+        ),
+        reason="bootstrap",
+        issuer="op",
+        idempotency_key="c1",
+    )
+    audit = audit_project(repo)
+    statuses = {s.stage: s.status for s in audit.stages}
+    assert statuses["intent"] == "needs"
+    assert statuses["hygiene"] == "fail"  # rail_config is a FAIL: one FAIL makes the stage ✗
+    intent = next(s for s in audit.stages if s.stage == "intent")
+    assert (intent.passed, intent.total) == (0, 1)  # a NEED counts as not passed
+    table = render_table([audit])
+    row = next(line for line in table.splitlines() if line.startswith(audit.name))
+    assert " ? " in row
+    assert "? needs a declaration" in table

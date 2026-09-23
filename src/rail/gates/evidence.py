@@ -9,23 +9,41 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from pydantic import ValidationError
-
 from rail import gitrepo, monitor
-from rail.gates import GateResult, GateSpec, Stage
-from rail.ledger import AttestationKind, LedgerError, Record, open_ledger
-from rail.model import MANIFEST_NAME, load_rail_config, manifest_problem, try_load_rail_config
+from rail.gates import GateResult, GateSpec, Need, Stage
+from rail.ledger import RECEIPTS_DIR, AttestationKind, LedgerError, Record, open_ledger
+from rail.ledger.file import FileLedger
+from rail.model import Declarations, declarations
 
 
-def _attestations(repo: Path, kind: AttestationKind) -> list[Record] | str:
-    """Chronological attestations of `kind`, or the reason they cannot be read."""
+def _attestations(repo: Path, kind: AttestationKind) -> list[Record] | str | Need:
+    """Chronological attestations of `kind`; the reason they cannot be read; or, with no
+    declared project, what the default file ledger holds (spec 2026-09-23): nothing is an
+    observed gap, receipts are a `Need` — the rail does not guess whose they are."""
+    decl = declarations(repo)
+    if isinstance(decl, str):
+        return decl
     try:
-        cfg = load_rail_config(repo)
-        return open_ledger(repo).list(cfg.project, attestation=kind)
-    except (FileNotFoundError, ValidationError):
-        return manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
+        if decl.project is None:
+            found = FileLedger(repo / RECEIPTS_DIR).list(None, attestation=kind)
+            if found:
+                return Need(
+                    "project",
+                    f"{len(found)} {kind.value} receipt(s) in {RECEIPTS_DIR} — `project:` says "
+                    "which are this repository's",
+                )
+            return []
+        return open_ledger(repo).list(decl.project, attestation=kind)
     except LedgerError as exc:
         return str(exc)
+
+
+def _absent(repo: Path, what: str) -> str:
+    """`what`, plus where it was looked for when no manifest names the ledger."""
+    decl = declarations(repo)
+    if isinstance(decl, Declarations) and decl.cfg is None:
+        return f"{what} in {RECEIPTS_DIR} (default file ledger)"
+    return what
 
 
 def _on_history(
@@ -43,8 +61,10 @@ def _on_history(
     records = _attestations(repo, kind)
     if isinstance(records, str):
         return GateResult(stage, code, False, records), None
+    if isinstance(records, Need):
+        return records.result(stage, code), None
     if not records:
-        return GateResult(stage, code, False, f"no {kind.value} attestation"), None
+        return GateResult(stage, code, False, _absent(repo, f"no {kind.value} attestation")), None
     for record in reversed(records):
         label = f"{kind.value} {record.digest[:19]}"
         sha = "" if record.data.get("sha") is None else str(record.data["sha"])
@@ -116,18 +136,18 @@ def released(repo: Path) -> GateResult:
     return result
 
 
-def _newest(repo: Path, kind: AttestationKind) -> Record | None | str:
+def _newest(repo: Path, kind: AttestationKind) -> Record | None | str | Need:
     records = _attestations(repo, kind)
-    if isinstance(records, str):
+    if isinstance(records, str | Need):
         return records
     return records[-1] if records else None
 
 
-def _newest_release_deploy(repo: Path) -> Record | None | str:
+def _newest_release_deploy(repo: Path) -> Record | None | str | Need:
     """The newest `deployed` that is a delivery: a rollback or a drill's roll-forward names the
     live digest but is not a new release (`mode` conventions in `rail.ledger`)."""
     records = _attestations(repo, AttestationKind.DEPLOYED)
-    if isinstance(records, str):
+    if isinstance(records, str | Need):
         return records
     releases = [r for r in records if (r.data.get("mode") or "release") == "release"]
     return releases[-1] if releases else None
@@ -135,15 +155,21 @@ def _newest_release_deploy(repo: Path) -> Record | None | str:
 
 def deployed(repo: Path) -> GateResult:
     release = _newest(repo, AttestationKind.RELEASED)
+    if isinstance(release, Need):
+        return release.result(Stage.DEPLOY, "deployed")
     if isinstance(release, str):
         return GateResult(Stage.DEPLOY, "deployed", False, release)
     if release is None:
-        return GateResult(Stage.DEPLOY, "deployed", False, "no released attestation to deploy")
+        return GateResult(
+            Stage.DEPLOY, "deployed", False, _absent(repo, "no released attestation to deploy")
+        )
     deploy = _newest(repo, AttestationKind.DEPLOYED)
+    if isinstance(deploy, Need):
+        return deploy.result(Stage.DEPLOY, "deployed")
     if isinstance(deploy, str):
         return GateResult(Stage.DEPLOY, "deployed", False, deploy)
     if deploy is None:
-        return GateResult(Stage.DEPLOY, "deployed", False, "no deployed attestation")
+        return GateResult(Stage.DEPLOY, "deployed", False, _absent(repo, "no deployed attestation"))
     expected = release.data.get("digest")
     actual = deploy.data.get("digest")
     if expected in (None, "") or actual in (None, ""):
@@ -166,16 +192,23 @@ def visible(repo: Path) -> GateResult:
     reference is digest-pinned it must be the digest the ledger says is live."""
     from rail.policy import parameter
 
-    cfg = try_load_rail_config(repo)
-    if cfg is None:
-        return GateResult(
-            Stage.OBSERVE, "visible", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
-        )
+    decl = declarations(repo)
+    if isinstance(decl, str):
+        return GateResult(Stage.OBSERVE, "visible", False, decl)
     deploy = _newest(repo, AttestationKind.DEPLOYED)
+    if isinstance(deploy, Need):
+        return deploy.result(Stage.OBSERVE, "visible")
     if isinstance(deploy, str):
         return GateResult(Stage.OBSERVE, "visible", False, deploy)
     if deploy is None:
-        return GateResult(Stage.OBSERVE, "visible", False, "no deployed attestation to observe")
+        return GateResult(
+            Stage.OBSERVE, "visible", False, _absent(repo, "no deployed attestation to observe")
+        )
+    project = decl.project
+    if project is None:  # unreachable: no project means _newest returned a Need or None
+        return Need("project", "it names the stack red-monitor watches").result(
+            Stage.OBSERVE, "visible"
+        )
     url = str(parameter(repo, "observe.monitor_url"))
     agent = str(parameter(repo, "observe.monitor_agent"))
     try:
@@ -186,13 +219,13 @@ def visible(repo: Path) -> GateResult:
         return GateResult(
             Stage.OBSERVE, "visible", False, f"agent {agent} is {view.status or 'unknown'}"
         )
-    running = [c for c in monitor.stack_containers(view, cfg.project) if c.state == "running"]
+    running = [c for c in monitor.stack_containers(view, project) if c.state == "running"]
     if not running:
         return GateResult(
             Stage.OBSERVE,
             "visible",
             False,
-            f"no running container of stack {cfg.project} on agent {agent}",
+            f"no running container of stack {project} on agent {agent}",
         )
     expected = str(deploy.data.get("digest") or "")
     if not expected:
@@ -217,18 +250,26 @@ def visible(repo: Path) -> GateResult:
         Stage.OBSERVE,
         "visible",
         True,
-        f"{len(running)} running container(s) of {cfg.project} on {agent}, {digest}",
+        f"{len(running)} running container(s) of {project} on {agent}, {digest}",
     )
 
 
 def drill(repo: Path) -> GateResult:
     deploy = _newest_release_deploy(repo)
+    if isinstance(deploy, Need):
+        return deploy.result(Stage.OBSERVE, "drill")
     if isinstance(deploy, str):
         return GateResult(Stage.OBSERVE, "drill", False, deploy)
     if deploy is None:
-        return GateResult(Stage.OBSERVE, "drill", False, "no deployed attestation to drill")
+        return GateResult(
+            Stage.OBSERVE, "drill", False, _absent(repo, "no deployed attestation to drill")
+        )
     rollbacks = _attestations(repo, AttestationKind.ROLLED_BACK)
     restores = _attestations(repo, AttestationKind.RESTORED)
+    if isinstance(rollbacks, Need):
+        return rollbacks.result(Stage.OBSERVE, "drill")
+    if isinstance(restores, Need):
+        return restores.result(Stage.OBSERVE, "drill")
     if isinstance(rollbacks, str) or isinstance(restores, str):
         return GateResult(Stage.OBSERVE, "drill", False, "ledger unreadable")
     after = [r for r in rollbacks if r.data.get("drill") and r.recorded_at > deploy.recorded_at]
@@ -250,13 +291,19 @@ def drill(repo: Path) -> GateResult:
 
 def fulfilled(repo: Path) -> GateResult:
     deploy = _newest_release_deploy(repo)
+    if isinstance(deploy, Need):
+        return deploy.result(Stage.LEARN, "fulfilled")
     if isinstance(deploy, str):
         return GateResult(Stage.LEARN, "fulfilled", False, deploy)
     done = _newest(repo, AttestationKind.FULFILLED)
+    if isinstance(done, Need):
+        return done.result(Stage.LEARN, "fulfilled")
     if isinstance(done, str):
         return GateResult(Stage.LEARN, "fulfilled", False, done)
     if done is None:
-        return GateResult(Stage.LEARN, "fulfilled", False, "no fulfilled attestation")
+        return GateResult(
+            Stage.LEARN, "fulfilled", False, _absent(repo, "no fulfilled attestation")
+        )
     if deploy is not None and done.recorded_at < deploy.recorded_at:
         return GateResult(Stage.LEARN, "fulfilled", False, "fulfilled predates the last deployment")
     return GateResult(Stage.LEARN, "fulfilled", True, f"fulfilled {done.digest[:19]}")

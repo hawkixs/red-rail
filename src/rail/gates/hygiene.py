@@ -19,9 +19,9 @@ from rail.gates import GateResult, GateSpec, Stage
 from rail.ledger import BRAIN_MILESTONES, RECEIPTS_DIR, LedgerError, RecordKind, open_ledger
 from rail.ledger.file import FileLedger, load_receipt, receipt_filename
 from rail.model import (
-    MANIFEST_NAME,
     MISSING_HINT,
     LedgerBackend,
+    declarations,
     load_rail_config,
     manifest_problem,
     try_load_rail_config,
@@ -240,15 +240,14 @@ def mirrors(repo: Path) -> GateResult:
     without its attestation is drift (ADR-0002), the phase-2 proof line. Milestone receipts
     (`integrated`, `fulfilled`) are brain's own receipts, never attested by the rail: the ones
     kept from a file-ledger past are history, not drift."""
-    cfg = try_load_rail_config(repo)
-    if cfg is None:
-        return GateResult(
-            Stage.HYGIENE, "mirrors", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
-        )
-    if cfg.ledger is LedgerBackend.FILE:
-        return GateResult(
-            Stage.HYGIENE, "mirrors", True, "file ledger: the receipts are the ledger"
-        )
+    decl = declarations(repo)
+    if isinstance(decl, str):
+        return GateResult(Stage.HYGIENE, "mirrors", False, decl)
+    if decl.ledger is LedgerBackend.FILE:
+        where = "file ledger (default)" if decl.cfg is None else "file ledger"
+        return GateResult(Stage.HYGIENE, "mirrors", True, f"{where}: the receipts are the ledger")
+    cfg = decl.cfg
+    assert cfg is not None  # a brain ledger is only ever declared by a manifest
     local = FileLedger(repo / RECEIPTS_DIR)
     try:
         kept = local.list(cfg.project, kind=RecordKind.ATTESTATION)

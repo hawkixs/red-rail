@@ -339,8 +339,11 @@ class Ledger(Protocol):
 
 
 def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
-    """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a bad manifest.
-    `ledger: brain` needs the `brain` extra, the operator's token and the ticket."""
+    """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a missing or bad
+    manifest — this is a write path, and it stays fail-closed without one. `ledger: brain`
+    needs the `brain` extra, the operator's token and the ticket. Gates that must still work
+    without a manifest observe the default file ledger themselves
+    (`FileLedger(repo / RECEIPTS_DIR)`), never through here."""
     from rail.ledger.file import FileLedger
     from rail.model import LedgerBackend, load_rail_config
 

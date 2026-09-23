@@ -11,7 +11,7 @@ from rail.cli import main
 from rail.gates import build as build_gates
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
 from rail.ledger.file import FileLedger
-from tests.helpers import conforming_tree, git, write_roster
+from tests.helpers import conforming_tree, git, init_repo, write_roster
 
 CLOCK = lambda: datetime(2026, 9, 15, 8, 0, tzinfo=UTC)  # noqa: E731
 
@@ -107,7 +107,7 @@ def test_check_scores_a_dev_repo_through_integrate(tmp_path: Path) -> None:
     assert report["passed"] is True
     assert {g["stage"] for g in report["gates"]} == set(report["stages"])
     assert all(
-        set(g) == {"stage", "code", "passed", "details", "exception", "skipped"}
+        set(g) == {"stage", "code", "passed", "details", "exception", "skipped", "needs"}
         for g in report["gates"]
     )
 
@@ -157,3 +157,74 @@ def test_check_shows_declared_exceptions(tmp_path: Path) -> None:
     out = CliRunner().invoke(main, ["check", "--repo", str(repo)])
     assert out.exit_code == 0, out.output
     assert "EXC   review.verdict" in out.output and "reviewer arrives in phase 2" in out.output
+
+
+def test_check_tags_a_needed_declaration_and_lists_it(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "bare", remotes=False)
+    out = CliRunner().invoke(main, ["check", "build", "--all", "--repo", str(repo)])
+    assert out.exit_code == 1
+    assert "NEED  build.tests" in out.output and "NEED  build.lint" in out.output
+    assert "— needs a declaration: build.tests, build.lint" in out.output
+    data = json.loads(
+        CliRunner().invoke(main, ["check", "build", "--all", "--repo", str(repo), "--json"]).output
+    )
+    assert data["needs_declaration"] == ["build.tests", "build.lint"]
+    assert data["passed"] is False
+
+
+def _verdict_lines(output: str) -> list[str]:
+    return [
+        line for line in output.splitlines() if line[:4] in ("PASS", "FAIL", "NEED", "SKIP", "EXC ")
+    ]
+
+
+@pytest.mark.parametrize("ci", [False, True])
+def test_without_a_manifest_only_the_manifest_gate_names_it(tmp_path: Path, ci: bool) -> None:
+    """Ticket 2cbbdd22, criterion 1 of 513e109b — red runs the same check itself."""
+    repo = init_repo(tmp_path / "bare", remotes=False)
+    args = ["check", "--all", "--repo", str(repo)] + (["--ci"] if ci else [])
+    out = CliRunner().invoke(main, args)
+    assert out.exit_code == 1
+    lines = _verdict_lines(out.output)
+    naming = [line for line in lines if "rail.yaml" in line]
+    assert len(naming) == 1 and "hygiene.rail_config" in naming[0], naming
+    for line in lines:
+        if line.startswith("NEED"):
+            assert "needs `" in line, line
+    assert {line.split()[1] for line in lines if line.startswith("NEED")} == {
+        "build.tests",
+        "build.lint",
+    }
+    ledger_gates = (
+        "intent.contract",
+        "review.verdict",
+        "integrate.receipt",
+        "release.released",
+        "deploy.deployed",
+        "observe.drill",
+        "learn.fulfilled",
+    )
+    for gate_id in ledger_gates:  # review focus 3: the file default runs under --ci too
+        line = next(line for line in lines if line.split()[1] == gate_id)
+        assert line.startswith("FAIL") and "docs/receipts" in line, line
+
+
+def test_a_manifest_never_yields_a_need(tmp_path: Path) -> None:
+    """Review focus 4: with a manifest present nothing changes. `--all` so build and evidence
+    gates run too — the only ones that ever NEED — not just the bootstrap tier's own three."""
+    repo = _bootstrap_repo(tmp_path)
+    out = CliRunner().invoke(main, ["check", "--all", "--repo", str(repo), "--json"])
+    data = json.loads(out.output)
+    assert data["needs_declaration"] == []
+    assert all(g["needs"] is None for g in data["gates"])
+
+
+def test_attest_writes_nothing_without_a_manifest(tmp_path: Path) -> None:
+    """`rail attest` opens the ledger before anything else: without a manifest that write path
+    stays fail-closed (item 1 of the final fix wave), so no receipt is ever written."""
+    repo = init_repo(tmp_path / "bare", remotes=False)
+    out = CliRunner().invoke(
+        main, ["attest", "integrated", "--repo", str(repo), "--data", f"sha={'0' * 40}"]
+    )
+    assert out.exit_code != 0
+    assert not (repo / RECEIPTS_DIR).exists()

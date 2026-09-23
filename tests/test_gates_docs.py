@@ -34,10 +34,12 @@ def _with_contract(repo: Path) -> Path:
     return repo
 
 
-def test_intent_requires_a_readable_manifest(tmp_path: Path) -> None:
+def test_intent_without_a_manifest_reads_the_default_file_ledger(tmp_path: Path) -> None:
     result = contract(tmp_path)
-    assert result.stage is Stage.INTENT and not result.passed
-    assert "rail.yaml" in result.details
+    assert result.stage is Stage.INTENT and not result.passed and result.needs is None
+    assert "no contract recorded in docs/receipts (default file ledger)" in result.details
+    _with_contract(tmp_path)
+    assert contract(tmp_path).needs == "project"
 
 
 def test_intent_fails_without_a_contract_and_names_the_command(tmp_path: Path) -> None:

@@ -79,10 +79,10 @@ def test_run_gates_returns_one_result_per_gate_and_never_raises(
         "learn.fulfilled",
     ]
     by_id = {r.gate_id: r for r in results}
-    # vacuous pass on an empty tree: no receipts to check, no roster in scope.
-    # hygiene.mirrors needs rail.yaml to know the ledger backend, so on a manifest-less
-    # tree it fails "rail.yaml unreadable" like every other ledger-scoped gate here.
-    vacuous = ("hygiene.receipts", "hygiene.roster_entry")
+    # vacuous pass on an empty tree: no receipts to check, no roster in scope, and
+    # hygiene.mirrors defaults to the file ledger with no manifest to declare otherwise
+    # (spec 2026-09-23: absent-manifest defaults apply, `docs/receipts` is the ledger).
+    vacuous = ("hygiene.receipts", "hygiene.roster_entry", "hygiene.mirrors")
     assert all(by_id[gate_id].passed for gate_id in vacuous)
     assert all(not r.passed for r in results if r.gate_id not in vacuous)
 
@@ -141,24 +141,21 @@ def test_ledger_gates_are_skipped_in_ci_only_with_the_brain_ledger(tmp_path: Pat
     assert run_gate(spec, repo, ci=False).details == "ran"
 
 
-def test_a_missing_manifest_is_named_the_same_way_everywhere(tmp_path: Path) -> None:
-    """One fact, one wording (found by the red-arena session on 2026-09-20): a repository
-    without rail.yaml hears "is missing" and the way out from every gate, never "unreadable"."""
+def test_only_the_manifest_gate_names_a_missing_manifest(tmp_path: Path) -> None:
+    """Spec 2026-09-23 supersedes "one fact, one wording" (red-arena, 2026-09-20) for an ABSENT
+    manifest: the manifest gate names it, every other gate names what it observed or the key
+    it needs. An INVALID manifest is still named the same way everywhere."""
     from rail.gates import build, evidence, hygiene, intent
-    from rail.model import MISSING_HINT, manifest_problem
+    from rail.model import MISSING_HINT
 
-    assert manifest_problem(tmp_path) == MISSING_HINT and "rail new" in MISSING_HINT
-    gates = (
-        hygiene.rail_config,
-        hygiene.mirrors,
-        intent.contract,
-        build.has_tests,
-        evidence.visible,
-    )
-    for gate in gates:
-        result = gate(tmp_path)
-        assert not result.passed and "is missing" in result.details, result
-        assert "unreadable" not in result.details, result
+    assert hygiene.rail_config(tmp_path).details == MISSING_HINT
+    assert hygiene.mirrors(tmp_path).passed
+    assert "file ledger (default)" in hygiene.mirrors(tmp_path).details
+    assert "no contract recorded in docs/receipts" in intent.contract(tmp_path).details
+    assert build.has_tests(tmp_path).needs == "stack"
+    for gate in (hygiene.mirrors, intent.contract, build.has_tests, build.lint, evidence.visible):
+        assert "rail.yaml" not in gate(tmp_path).details
     (tmp_path / "rail.yaml").write_text("rail: 1\nproject: nope\n")
-    assert manifest_problem(tmp_path).startswith("rail.yaml is invalid: ")
-    assert "is invalid" in intent.contract(tmp_path).details
+    for gate in (hygiene.mirrors, intent.contract, build.has_tests, evidence.verdict):
+        result = gate(tmp_path)
+        assert not result.passed and "is invalid" in result.details, result
