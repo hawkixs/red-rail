@@ -34,7 +34,9 @@ class Site(BaseModel):
         # YAML 1.1 reads an all-digit IPv6 such as 2001:0:0:0:0:0:0:1 as a base-60 integer, and
         # an integer would pass for an IPv4 address: only a string is an address here
         if not isinstance(value, str):
-            raise ValueError(f"write the address as a quoted string, got {value!r}")
+            raise ValueError(
+                f"write the address as a quoted string, not a YAML {type(value).__name__}"
+            )
         return value
 
     @field_validator("address")
@@ -67,7 +69,7 @@ class SitesFile(BaseModel):
     def _labels(cls, value: dict[str, Site]) -> dict[str, Site]:
         bad = sorted(name for name in value if not re.fullmatch(SITE_PATTERN, name))
         if bad:
-            raise ValueError(f"site names are labels ({SITE_PATTERN}): {', '.join(bad)}")
+            raise ValueError(f"site names are labels ({SITE_PATTERN}): {len(bad)} name(s) are not")
         return value
 
 
@@ -111,8 +113,13 @@ def load_site(name: str, path: Path | None = None) -> Site:
 def _where_it_fails(exc: ValidationError) -> str:
     """Each error's location and message, never its input: pydantic's text quotes the offending
     value, and a refusal is printed where the file's addresses must not go (review finding)."""
+
+    def shown(part: object) -> str:
+        # a site's name is a key of the location, and a mistyped name may be an address
+        return part if isinstance(part, str) and re.fullmatch(SITE_PATTERN, part) else "…"
+
     return "; ".join(
-        f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+        f"{'.'.join(shown(part) for part in error['loc'])}: {error['msg']}"
         for error in exc.errors(include_input=False, include_url=False)
     )
 

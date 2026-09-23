@@ -109,6 +109,9 @@ def test_an_empty_or_malformed_file_is_refused_by_name(tmp_path: Path, text: str
         f'sites:\n  private-1:\n    address: "{V4}"\n    extra: "{V4}"\n',
         f'sites:\n  private-1:\n    address: "{V4}/24"\n',
         'sites:\n  private-1:\n    address: "fe80::10%eth0"\n',
+        f'sites:\n  private-1:\n    address: "{V4}"\n  {V4}:\n    address: "{V4}"\n',
+        f"sites:\n  private-1:\n    address: {V4.rsplit('.', 2)[0]}\n",  # an unquoted number
+        f'sites:\n  private-1:\n    address: "{V4}"\n  {V4}:\n    address: "not-an-ip"\n',
     ],
 )
 def test_a_refusal_never_echoes_an_address_from_the_file(tmp_path: Path, text: str) -> None:
@@ -118,7 +121,9 @@ def test_a_refusal_never_echoes_an_address_from_the_file(tmp_path: Path, text: s
     path = _sites(tmp_path, text)
     with pytest.raises(DeployError, match="not a valid sites file") as caught:
         load_site("private-1", path)
-    assert V4 not in str(caught.value) and "fe80::10" not in str(caught.value)
+    message = str(caught.value)
+    assert V4 not in message and V4.rsplit(".", 2)[0] not in message
+    assert "fe80::10" not in message
 
 
 def test_an_unresolvable_home_in_the_path_is_a_refusal_not_a_crash(
