@@ -338,3 +338,173 @@ def test_a_healthcheck_without_a_host_is_refused_at_construction(tmp_path: Path)
     (repo / "rail.yaml").write_text(manifest + "\n")
     with pytest.raises(DeployError, match="has no host"):
         PrivateCompose(repo, load_rail_config(repo), run=RecordingHost())
+
+
+# -- behind a site (spec 2026-09-23-sites-on-the-host) -------------------------------------
+
+SITE_SAFE = 'services:\n  app:\n    image: x\n    ports:\n      - "${BIND_ADDRESS}:9100:9100"\n'
+
+
+def _site_repo(
+    tmp_path: Path,
+    compose: str,
+    *,
+    site: str = "private-1",
+    healthcheck: str = "http://${BIND_ADDRESS}:9100/healthz",
+) -> Path:
+    repo = conforming_tree(tmp_path, "red-alerts", "prod")
+    write_manifest(
+        repo,
+        project="red-alerts",
+        tier="prod",
+        gates={"deploy.ssh_host": ("private-1-deploy", "the host's ssh alias for the site")},
+        deploy=True,
+    )
+    manifest = (
+        (repo / "rail.yaml")
+        .read_text()
+        .replace("  target: vps-traefik\n", f"  target: private-compose\n  site: {site}\n")
+    )
+    manifest = "\n".join(
+        f'  healthcheck: "{healthcheck}"' if line.strip().startswith("healthcheck:") else line
+        for line in manifest.splitlines()
+    )
+    (repo / "rail.yaml").write_text(manifest + "\n")
+    (repo / "deploy").mkdir(exist_ok=True)
+    (repo / "deploy" / "compose.yaml").write_text(compose)
+    commit_all(repo, "feat: the stack")
+    return repo
+
+
+def _host(tmp_path: Path, address: str = BIND) -> Path:
+    path = tmp_path / "sites.yaml"
+    path.write_text(f'sites:\n  private-1:\n    address: "{address}"\n')
+    path.chmod(0o600)
+    return path
+
+
+def test_behind_a_site_the_host_gives_the_address_the_manifest_never_holds(
+    tmp_path: Path,
+) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    assert BIND not in (repo / "rail.yaml").read_text()
+    target = PrivateCompose(
+        repo, load_rail_config(repo), sites=_host(tmp_path), run=RecordingHost()
+    )
+    steps = target.steps(_artefact(repo))
+    assert "private-1-deploy" in steps[0].title
+    assert steps[1].argv == ("GET", f"http://{BIND}:9100/healthz")
+    assert steps[2].argv == ("GET", f"http://{BIND}:9100/version")
+    assert f"BIND_ADDRESS={BIND}\n" in target.env_file(_artefact(repo))
+    assert target.domain == "private-1"
+
+
+def test_an_ipv6_site_is_bracketed_in_the_urls(tmp_path: Path) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    target = PrivateCompose(
+        repo, load_rail_config(repo), sites=_host(tmp_path, "2001:db8::10"), run=RecordingHost()
+    )
+    steps = target.steps(_artefact(repo))
+    assert steps[1].argv == ("GET", "http://[2001:db8::10]:9100/healthz")
+    assert steps[2].argv == ("GET", "http://[2001:db8::10]:9100/version")
+
+
+def test_a_query_and_a_port_survive_the_substitution(tmp_path: Path) -> None:
+    """Review focus 4: only the token changes; `/version` keeps scheme, address and port."""
+    repo = _site_repo(
+        tmp_path / "repo", SITE_SAFE, healthcheck="http://${BIND_ADDRESS}:9100/healthz?full=1"
+    )
+    target = PrivateCompose(
+        repo, load_rail_config(repo), sites=_host(tmp_path), run=RecordingHost()
+    )
+    steps = target.steps(_artefact(repo))
+    assert steps[1].argv == ("GET", f"http://{BIND}:9100/healthz?full=1")
+    assert steps[2].argv == ("GET", f"http://{BIND}:9100/version")
+
+
+def test_the_site_address_guards_the_compose_file_before_the_first_ssh(tmp_path: Path) -> None:
+    other = 'services:\n  app:\n    image: x\n    ports:\n      - "192.0.2.99:9100:9100"\n'
+    repo = _site_repo(tmp_path / "repo", other)
+    host = RecordingHost()
+    target = PrivateCompose(repo, load_rail_config(repo), sites=_host(tmp_path), run=host)
+    with pytest.raises(DeployError, match="192.0.2.99:9100:9100"):
+        target.steps(_artefact(repo))
+    assert [a for a in host.argv if a[0] == "ssh"] == []
+
+
+def test_a_site_this_host_does_not_know_fails_before_anything_is_planned(tmp_path: Path) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE, site="private-9")
+    with pytest.raises(DeployError, match="private-9 is not declared"):
+        PrivateCompose(repo, load_rail_config(repo), sites=_host(tmp_path), run=RecordingHost())
+
+
+def test_the_target_redacts_its_address_behind_a_site_and_nothing_without_one(
+    tmp_path: Path,
+) -> None:
+    repo = _site_repo(tmp_path / "site", SITE_SAFE)
+    target = PrivateCompose(
+        repo, load_rail_config(repo), sites=_host(tmp_path), run=RecordingHost()
+    )
+    assert target.redact(f"connect to host {BIND} port 22") == "connect to host private-1 port 22"
+    declared = _private_repo(tmp_path / "declared", SAFE)
+    plain = PrivateCompose(declared, load_rail_config(declared), run=RecordingHost())
+    assert plain.redact(f"connect to host {BIND}") == f"connect to host {BIND}"
+
+
+# -- acceptance through the CLI (spec 2026-09-23-sites-on-the-host, criteria 1 and 3) --------
+
+from click.testing import CliRunner  # noqa: E402
+
+from rail.cli import main  # noqa: E402
+from rail.ledger import RECEIPTS_DIR, AttestationKind  # noqa: E402
+from rail.ledger.file import FileLedger  # noqa: E402
+
+
+def _released(repo: Path) -> None:
+    artefact = _artefact(repo)
+    FileLedger(repo / RECEIPTS_DIR).attest(
+        "red-alerts",
+        AttestationKind.RELEASED,
+        {
+            "version": artefact.version,
+            "sha": artefact.sha,
+            "digest": artefact.digest,
+            "image": artefact.image,
+            "tag": "v0.1.0",
+        },
+        issuer="op",
+        idempotency_key="released:0.1.0",
+    )
+
+
+@pytest.mark.parametrize("ci", [False, True])
+def test_a_manifest_with_a_site_passes_rail_check_where_no_host_file_exists(
+    tmp_path: Path, ci: bool
+) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    env = {"RAIL_SITES_FILE": str(tmp_path / "nowhere.yaml")}
+    args = ["check", "hygiene", "--repo", str(repo), *(["--ci"] if ci else [])]
+    out = CliRunner().invoke(main, args, env=env)
+    assert "PASS  hygiene.rail_config" in out.output, out.output
+
+
+def test_plan_names_the_site_and_prints_the_resolved_steps(tmp_path: Path) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    _released(repo)
+    env = {"RAIL_SITES_FILE": str(_host(tmp_path))}
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--plan"], env=env)
+    assert out.exit_code == 0, out.output
+    assert "on private-1" in out.output
+    assert "private-1-deploy" in out.output
+    assert f"GET http://{BIND}:9100/healthz" in out.output
+    assert f"GET http://{BIND}:9100/version" in out.output
+
+
+def test_plan_without_the_host_file_fails_before_printing_a_step(tmp_path: Path) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    _released(repo)
+    env = {"RAIL_SITES_FILE": str(tmp_path / "nowhere.yaml")}
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--plan"], env=env)
+    assert out.exit_code == 1
+    assert "site private-1" in out.output and "nowhere.yaml" in out.output
+    assert "GET " not in out.output and "ssh " not in out.output

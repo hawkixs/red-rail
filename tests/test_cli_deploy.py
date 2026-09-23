@@ -2,6 +2,7 @@
 that is faked here; the gates then read what the flows wrote."""
 
 import json
+from ipaddress import ip_address
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from click.testing import CliRunner
 
 from rail.cli import main
 from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step, flow
+from rail.deploy.sites import redact_address
 from rail.gates.evidence import deployed
 from rail.gates.evidence import drill as drill_gate
 from rail.ledger import RECEIPTS_DIR, AttestationKind
@@ -43,6 +45,9 @@ class FakeTarget:
         if artefact.digest in self.broken:
             raise DeployError(f"{artefact.version}: not healthy within 120s (HTTP 503)")
         return LiveVersion("red-probe", artefact.version, artefact.sha, artefact.digest)
+
+    def redact(self, text: str) -> str:
+        return text
 
 
 @pytest.fixture
@@ -361,3 +366,226 @@ def test_the_flows_write_the_same_attestations_whatever_the_target_shape(
         "deployed",
     ]
     assert target.applied == [D1, D2, D1, D2]
+
+
+# -- behind a site, records name the site (spec 2026-09-23-sites-on-the-host) ---------------
+
+
+class SiteTarget(FakeTarget):
+    """A private target behind a site: its errors name the address, its records must not."""
+
+    ADDRESS = "192.0.2.10"  # RFC 5737 documentation address
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.domain = "private-1"
+
+    def apply(self, artefact: Artefact) -> LiveVersion:
+        if artefact.digest in self.broken:
+            self.applied.append(artefact.digest)
+            raise DeployError(
+                f"http://{self.ADDRESS}:9204/healthz: not healthy within 120s; "
+                f"ssh: connect to host {self.ADDRESS} port 22"
+            )
+        return super().apply(artefact)
+
+    def redact(self, text: str) -> str:
+        return text.replace(self.ADDRESS, "private-1")
+
+
+def test_what_the_flows_attest_names_the_site_never_the_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = SiteTarget()
+    monkeypatch.setattr(flow, "make_target", lambda repo, cfg, **kwargs: fake)
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    first = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"])
+    assert first.exit_code == 0, first.output
+    fake.broken.add(D2)
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 1, out.output
+    receipts = "".join(p.read_text() for p in (repo / RECEIPTS_DIR).glob("*.json"))
+    assert SiteTarget.ADDRESS not in receipts
+    incident = next(d for k, d in _kinds(repo) if k == "incident_detected")
+    assert "connect to host private-1 port 22" in incident["reason"]
+    assert [d["domain"] for k, d in _kinds(repo) if k == "deployed"] == ["private-1", "private-1"]
+
+
+def test_a_straddling_address_is_never_left_partial_by_the_thousand_character_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding: `reason = str(exc)[:1000]` used to cut the text BEFORE redaction ran.
+    With the address starting at character 991 of the error, the cap used to leave
+    `192.0.2.1` in the incident and rolled-back receipts — 9 of the address's 10 characters.
+    Redaction must see the whole text; only the Attester caps it, and only after redaction."""
+
+    class StraddlingTarget(SiteTarget):
+        def apply(self, artefact: Artefact) -> LiveVersion:
+            if artefact.digest in self.broken:
+                self.applied.append(artefact.digest)
+                # the address starts at character 991: `str(exc)[:1000]` used to cut it to
+                # `192.0.2.1`, missing only the final `0`
+                raise DeployError("x" * 991 + self.ADDRESS + " is unreachable")
+            return super().apply(artefact)
+
+    fake = StraddlingTarget()
+    monkeypatch.setattr(flow, "make_target", lambda repo, cfg, **kwargs: fake)
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    assert (
+        CliRunner()
+        .invoke(main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"])
+        .exit_code
+        == 0
+    )
+    fake.broken.add(D2)
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 1, out.output
+    receipts = "".join(p.read_text() for p in (repo / RECEIPTS_DIR).glob("*.json"))
+    assert SiteTarget.ADDRESS not in receipts
+    assert "192.0.2" not in receipts  # the address's 7-character prefix must not leak either
+
+
+def test_the_cap_never_cuts_another_address_down_to_the_sites() -> None:
+    """Review finding: a different, longer address that merely starts with the site's own
+    (192.0.2.100 here, the site is 192.0.2.10) is never matched by `redact` — 192.0.2.100 is
+    not 192.0.2.10 — so it reaches the cap unredacted. The thousand-character cut must never
+    land inside that token and leave exactly the site's address behind."""
+    handed: list[dict] = []
+
+    class RecordingLedger:
+        def list(self, project: str, **kwargs: object) -> list:
+            return []
+
+        def attest(self, project, kind, payload, *, issuer, idempotency_key, emitted_at):
+            handed.append(payload)
+            return None
+
+    attester = flow.Attester(
+        RecordingLedger(),  # type: ignore[arg-type]
+        "red-alerts",
+        "private-compose",
+        "operator",
+        redact=lambda text: redact_address(text, ip_address("192.0.2.10"), "private-1"),
+    )
+    attester.attest(
+        AttestationKind.INCIDENT_DETECTED,
+        {
+            "reason": "x" * 990 + " 192.0.2.100 is another host",
+            "drill": False,
+            "version": "0.1.0",
+        },
+    )
+    reason = handed[0]["reason"]
+    assert "192.0.2.10" not in reason
+    assert "192.0.2" not in reason
+    assert len(reason) <= flow.MAX_REASON_LENGTH
+
+
+def test_the_cap_keeps_a_whole_last_token_and_the_limit() -> None:
+    """Pins the value and the rule of the cap, which no test did before this one: never longer
+    than the limit, never a partial token, and empty only when the whole visible window is one
+    unbroken token — the mirror of `_tail`'s own rule."""
+    long_reason = "ab " * 1000  # 3000 characters; the limit falls inside a token, not on a gap
+    capped = flow._head(long_reason)
+    assert len(capped) <= flow.MAX_REASON_LENGTH
+    assert len(capped) >= flow.MAX_REASON_LENGTH - 3
+    assert capped.endswith("ab")
+
+    on_a_gap = "a" * flow.MAX_REASON_LENGTH + " " + "b" * 500
+    assert flow._head(on_a_gap) == "a" * flow.MAX_REASON_LENGTH
+
+    one_unbroken_token = "x" * 2000
+    assert flow._head(one_unbroken_token) == ""
+
+
+def test_an_attester_without_a_redaction_cannot_be_built() -> None:
+    """Review finding: a default of "leave the text unchanged" would let a future
+    construction that forgets `redact=` record a target's address silently — the previous
+    default, and only the forward flow was ever exercised through a real Attester. `redact`
+    is required so that mistake fails loudly at construction instead of leaking quietly."""
+    with pytest.raises(TypeError, match="redact"):
+        flow.Attester(None, "red-alerts", "private-compose", "operator")  # type: ignore[call-arg]
+
+
+def test_rollback_names_the_site_never_the_address_when_the_apply_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`test_what_the_flows_attest_names_the_site_never_the_address` only exercises the
+    forward flow; a manual `--rollback` builds its own Attester and must redact just as well."""
+    fake = SiteTarget()
+    monkeypatch.setattr(flow, "make_target", lambda repo, cfg, **kwargs: fake)
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"]
+        ).exit_code
+        == 0
+    )
+    assert runner.invoke(main, ["deploy", "--repo", str(repo), "--yes"]).exit_code == 0
+    fake.broken.add(D1)  # --rollback applies the previous artefact (0.1.0 / D1), which fails
+    out = runner.invoke(main, ["deploy", "--repo", str(repo), "--rollback", "--yes"])
+    assert out.exit_code == 1, out.output
+    receipts = "".join(p.read_text() for p in (repo / RECEIPTS_DIR).glob("*.json"))
+    assert SiteTarget.ADDRESS not in receipts
+    incident = next(d for k, d in _kinds(repo) if k == "incident_detected")
+    assert "connect to host private-1 port 22" in incident["reason"]
+
+
+def test_drill_names_the_site_never_the_address_when_the_rollback_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same gap as the manual rollback, for `rail drill`'s own Attester."""
+    fake = SiteTarget()
+    monkeypatch.setattr(flow, "make_target", lambda repo, cfg, **kwargs: fake)
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"]
+        ).exit_code
+        == 0
+    )
+    assert runner.invoke(main, ["deploy", "--repo", str(repo), "--yes"]).exit_code == 0
+    fake.broken.add(D1)  # the drill's rollback applies the previous artefact (D1), which fails
+    out = runner.invoke(main, ["drill", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 1, out.output
+    assert "drill aborted" in out.output
+    receipts = "".join(p.read_text() for p in (repo / RECEIPTS_DIR).glob("*.json"))
+    assert SiteTarget.ADDRESS not in receipts
+    incident = next(d for k, d in _kinds(repo) if k == "incident_detected" and d["drill"] is False)
+    assert "connect to host private-1 port 22" in incident["reason"]
+
+
+def test_the_attester_redacts_every_string_before_the_ledger_sees_it() -> None:
+    """The file ledger stores what it is given; brain receives the same payload after the
+    mirror. Recording what `attest` is handed covers both."""
+    handed: list[dict] = []
+
+    class RecordingLedger:
+        def list(self, project: str, **kwargs: object) -> list:
+            return []
+
+        def attest(self, project, kind, payload, *, issuer, idempotency_key, emitted_at):
+            handed.append(payload)
+            return None
+
+    attester = flow.Attester(
+        RecordingLedger(),  # type: ignore[arg-type]
+        "red-alerts",
+        "private-compose",
+        "operator",
+        redact=lambda text: text.replace("192.0.2.10", "private-1"),
+    )
+    attester.attest(
+        AttestationKind.INCIDENT_DETECTED,
+        {
+            "reason": "connect to host 192.0.2.10",
+            "nested": {"why": ["192.0.2.10", 3]},
+            "drill": False,
+            "version": "0.1.0",
+        },
+    )
+    assert handed[0]["reason"] == "connect to host private-1"
+    assert handed[0]["nested"] == {"why": ["private-1", 3]}
+    assert handed[0]["drill"] is False and handed[0]["target"] == "private-compose"

@@ -121,3 +121,88 @@ def test_ticket_is_a_uuid_and_only_with_the_brain_ledger(tmp_path: Path) -> None
     )
     with pytest.raises(ValidationError):
         load_rail_config(tmp_path)
+
+
+# -- sites (spec 2026-09-23-sites-on-the-host) ------------------------------------------
+
+SITE_DEPLOY = {
+    "target": "private-compose",
+    "site": "private-1",
+    "healthcheck": "http://${BIND_ADDRESS}:9204/healthz",
+}
+
+
+def _prod(deploy: dict, gates: dict | None = None) -> dict:
+    return {**MINIMAL, "tier": "prod", "deploy": deploy, **({"gates": gates} if gates else {})}
+
+
+def test_a_private_target_names_a_site_and_the_address_token() -> None:
+    cfg = RailConfig.model_validate(_prod(SITE_DEPLOY))
+    assert cfg.deploy is not None and cfg.deploy.site == "private-1"
+
+
+@pytest.mark.parametrize(
+    "site", ["192.0.2.10", "2001:db8::10", "private.example", "Private-1", "-private", "private_1"]
+)
+def test_a_site_is_a_label_that_cannot_hold_an_address(site: str) -> None:
+    with pytest.raises(ValidationError, match="site"):
+        RailConfig.model_validate(_prod({**SITE_DEPLOY, "site": site}))
+
+
+def test_a_site_is_refused_on_a_public_target() -> None:
+    public = {
+        "target": "vps-traefik",
+        "site": "private-1",
+        "healthcheck": "https://probe.hawkixs.com/healthz",
+    }
+    with pytest.raises(ValidationError, match="private-compose only"):
+        RailConfig.model_validate(_prod(public))
+
+
+def test_the_address_token_without_a_site_is_refused() -> None:
+    tokenised = {"target": "private-compose", "healthcheck": "http://${BIND_ADDRESS}:9204/healthz"}
+    with pytest.raises(ValidationError, match=r"no deploy\.site"):
+        RailConfig.model_validate(_prod(tokenised))
+
+
+@pytest.mark.parametrize(
+    "healthcheck",
+    [
+        "http://192.0.2.10:9204/healthz",
+        "http://private-1:9204/healthz",
+        "http://$BIND_ADDRESS:9204/healthz",
+        "http://example.invalid/${BIND_ADDRESS}/healthz",
+        # the token followed by `:9204@other.example` reads as userinfo, not a port: the URL's
+        # real host is `other.example`, so the checks would go there instead (review finding)
+        "http://${BIND_ADDRESS}:9204@other.example/healthz",
+    ],
+)
+def test_behind_a_site_the_healthcheck_host_is_the_token(healthcheck: str) -> None:
+    with pytest.raises(ValidationError, match="healthcheck host"):
+        RailConfig.model_validate(_prod({**SITE_DEPLOY, "healthcheck": healthcheck}))
+
+
+@pytest.mark.parametrize(
+    "healthcheck",
+    [
+        "http://${BIND_ADDRESS}:9204/healthz",
+        "http://${BIND_ADDRESS}/healthz",
+        "http://${BIND_ADDRESS}",
+    ],
+)
+def test_behind_a_site_the_token_alone_as_the_host_is_accepted(healthcheck: str) -> None:
+    cfg = RailConfig.model_validate(_prod({**SITE_DEPLOY, "healthcheck": healthcheck}))
+    assert cfg.deploy is not None and cfg.deploy.healthcheck == healthcheck
+
+
+def test_a_site_and_a_declared_bind_address_are_refused_together() -> None:
+    gates = {"deploy.bind_address": {"value": "192.0.2.10", "reason": "declared in the manifest"}}
+    with pytest.raises(ValidationError, match="two sources for one address"):
+        RailConfig.model_validate(_prod(SITE_DEPLOY, gates))
+
+
+def test_without_a_site_a_declared_bind_address_still_works() -> None:
+    gates = {"deploy.bind_address": {"value": "192.0.2.10", "reason": "declared in the manifest"}}
+    declared = {"target": "private-compose", "healthcheck": "http://192.0.2.10:9204/healthz"}
+    cfg = RailConfig.model_validate(_prod(declared, gates))
+    assert cfg.deploy is not None and cfg.deploy.site is None

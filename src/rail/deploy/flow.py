@@ -23,12 +23,18 @@ from rail.ledger import (
 )
 from rail.model import DeployTarget, RailConfig
 
+# a `reason` is capped only here, AFTER redaction — capping first (the previous shape, in
+# three places) could cut a matched address in half and leave a fragment the redaction below
+# never sees (review finding)
+MAX_REASON_LENGTH = 1000
+
 
 class Target(Protocol):
     domain: str
 
     def steps(self, artefact: Artefact) -> list[Step]: ...
     def apply(self, artefact: Artefact) -> LiveVersion: ...
+    def redact(self, text: str) -> str: ...
 
 
 def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
@@ -48,12 +54,44 @@ def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
     return cast("Target", shape(repo, cfg, **kwargs))
 
 
+def _redacted(value: Any, redact: Callable[[str], str]) -> Any:
+    """Every string of an attestation payload, as the target allows it to be recorded."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {key: _redacted(item, redact) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_redacted(item, redact) for item in value]
+    return value
+
+
+def _head(text: str) -> str:
+    """The first `MAX_REASON_LENGTH` characters of `text`. When the cut actually removes a
+    suffix, the partial last token — everything from the last whitespace of what is kept
+    onward — goes with it: an address contains no whitespace, so it can never survive split
+    in half at the end of what remains (review finding)."""
+    if len(text) <= MAX_REASON_LENGTH:
+        return text
+    head = text[:MAX_REASON_LENGTH]
+    if text[MAX_REASON_LENGTH].isspace():
+        return head.rstrip()
+    for index in range(len(head) - 1, -1, -1):
+        if head[index].isspace():
+            return head[:index].rstrip()
+    return ""  # the whole visible window is one token: no boundary to cut at safely
+
+
 @dataclass
 class Attester:
     ledger: Ledger
     project: str
     target: str
     issuer: str
+    # a private target behind a site replaces its address with the site's name: every string
+    # of every record passes here before the key, the mirror and the ledger see it. No
+    # default: a construction that forgets this argument must fail to build, not record the
+    # address silently (review finding)
+    redact: Callable[[str], str]
     records: list[Record] = field(default_factory=list)
     unattested: list[Unattested] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)  # a refusal that left no mirror
@@ -73,7 +111,10 @@ class Attester:
         return emitted
 
     def attest(self, kind: AttestationKind, data: dict[str, Any]) -> None:
-        payload = {"target": self.target, **data}
+        payload = _redacted({"target": self.target, **data}, self.redact)
+        reason = payload.get("reason")
+        if isinstance(reason, str):
+            payload["reason"] = _head(reason)
         emitted = self._emitted_at()
         try:
             self.records.append(
@@ -162,7 +203,7 @@ def forward(
 ) -> Outcome:
     assert cfg.deploy is not None
     target = target or make_target(repo, cfg)
-    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer)
+    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer, redact=target.redact)
     artefact = newest_release(ledger, cfg.project, version)
     previous = previous_artefact(ledger, cfg.project, artefact.digest)
     try:
@@ -173,7 +214,7 @@ def forward(
         # spec §7: never a half-deployed state — the previous artefact comes back and the
         # change counts as failed: incident, rollback, the live digest, the recovery
         started = clock()
-        reason = str(exc)[:1000]
+        reason = str(exc)  # the whole text: the Attester redacts it, then caps it
         attester.attest(
             AttestationKind.INCIDENT_DETECTED,
             {
@@ -267,7 +308,7 @@ def rollback(
 ) -> Outcome:
     assert cfg.deploy is not None
     target = target or make_target(repo, cfg)
-    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer)
+    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer, redact=target.redact)
     live = live_artefact(ledger, cfg.project)
     previous = previous_artefact(ledger, cfg.project, live.digest) if live else None
     if live is None or previous is None:
@@ -287,7 +328,7 @@ def rollback(
                 "automatic": False,
                 "digest": live.digest,
                 "version": live.version,
-                "reason": f"rollback to {previous.version} failed: {exc}"[:1000],
+                "reason": f"rollback to {previous.version} failed: {exc}",
             },
         )
         return Outcome(
@@ -340,7 +381,7 @@ def drill(
     in mode `drill` so the ledger keeps naming the live digest."""
     assert cfg.deploy is not None
     target = target or make_target(repo, cfg)
-    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer)
+    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer, redact=target.redact)
     live = live_artefact(ledger, cfg.project)
     previous = previous_artefact(ledger, cfg.project, live.digest) if live else None
     if live is None or previous is None:
@@ -370,7 +411,7 @@ def drill(
                 "automatic": True,
                 "digest": live.digest,
                 "version": live.version,
-                "reason": f"drill: rollback to {previous.version} failed: {exc}"[:1000],
+                "reason": f"drill: rollback to {previous.version} failed: {exc}",
             },
         )
         return Outcome(
