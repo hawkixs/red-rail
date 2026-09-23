@@ -65,6 +65,22 @@ def _redacted(value: Any, redact: Callable[[str], str]) -> Any:
     return value
 
 
+def _head(text: str) -> str:
+    """The first `MAX_REASON_LENGTH` characters of `text`. When the cut actually removes a
+    suffix, the partial last token — everything from the last whitespace of what is kept
+    onward — goes with it: an address contains no whitespace, so it can never survive split
+    in half at the end of what remains (review finding)."""
+    if len(text) <= MAX_REASON_LENGTH:
+        return text
+    head = text[:MAX_REASON_LENGTH]
+    if text[MAX_REASON_LENGTH].isspace():
+        return head.rstrip()
+    for index in range(len(head) - 1, -1, -1):
+        if head[index].isspace():
+            return head[:index].rstrip()
+    return ""  # the whole visible window is one token: no boundary to cut at safely
+
+
 @dataclass
 class Attester:
     ledger: Ledger
@@ -98,7 +114,7 @@ class Attester:
         payload = _redacted({"target": self.target, **data}, self.redact)
         reason = payload.get("reason")
         if isinstance(reason, str):
-            payload["reason"] = reason[:MAX_REASON_LENGTH]
+            payload["reason"] = _head(reason)
         emitted = self._emitted_at()
         try:
             self.records.append(

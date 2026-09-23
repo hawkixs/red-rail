@@ -2,6 +2,7 @@
 that is faked here; the gates then read what the flows wrote."""
 
 import json
+from ipaddress import ip_address
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from click.testing import CliRunner
 
 from rail.cli import main
 from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step, flow
+from rail.deploy.sites import redact_address
 from rail.gates.evidence import deployed
 from rail.gates.evidence import drill as drill_gate
 from rail.ledger import RECEIPTS_DIR, AttestationKind
@@ -441,6 +443,59 @@ def test_a_straddling_address_is_never_left_partial_by_the_thousand_character_ca
     receipts = "".join(p.read_text() for p in (repo / RECEIPTS_DIR).glob("*.json"))
     assert SiteTarget.ADDRESS not in receipts
     assert "192.0.2" not in receipts  # the address's 7-character prefix must not leak either
+
+
+def test_the_cap_never_cuts_another_address_down_to_the_sites() -> None:
+    """Review finding: a different, longer address that merely starts with the site's own
+    (192.0.2.100 here, the site is 192.0.2.10) is never matched by `redact` — 192.0.2.100 is
+    not 192.0.2.10 — so it reaches the cap unredacted. The thousand-character cut must never
+    land inside that token and leave exactly the site's address behind."""
+    handed: list[dict] = []
+
+    class RecordingLedger:
+        def list(self, project: str, **kwargs: object) -> list:
+            return []
+
+        def attest(self, project, kind, payload, *, issuer, idempotency_key, emitted_at):
+            handed.append(payload)
+            return None
+
+    attester = flow.Attester(
+        RecordingLedger(),  # type: ignore[arg-type]
+        "red-alerts",
+        "private-compose",
+        "operator",
+        redact=lambda text: redact_address(text, ip_address("192.0.2.10"), "private-1"),
+    )
+    attester.attest(
+        AttestationKind.INCIDENT_DETECTED,
+        {
+            "reason": "x" * 990 + " 192.0.2.100 is another host",
+            "drill": False,
+            "version": "0.1.0",
+        },
+    )
+    reason = handed[0]["reason"]
+    assert "192.0.2.10" not in reason
+    assert "192.0.2" not in reason
+    assert len(reason) <= flow.MAX_REASON_LENGTH
+
+
+def test_the_cap_keeps_a_whole_last_token_and_the_limit() -> None:
+    """Pins the value and the rule of the cap, which no test did before this one: never longer
+    than the limit, never a partial token, and empty only when the whole visible window is one
+    unbroken token — the mirror of `_tail`'s own rule."""
+    long_reason = "ab " * 1000  # 3000 characters; the limit falls inside a token, not on a gap
+    capped = flow._head(long_reason)
+    assert len(capped) <= flow.MAX_REASON_LENGTH
+    assert len(capped) >= flow.MAX_REASON_LENGTH - 3
+    assert capped.endswith("ab")
+
+    on_a_gap = "a" * flow.MAX_REASON_LENGTH + " " + "b" * 500
+    assert flow._head(on_a_gap) == "a" * flow.MAX_REASON_LENGTH
+
+    one_unbroken_token = "x" * 2000
+    assert flow._head(one_unbroken_token) == ""
 
 
 def test_an_attester_without_a_redaction_cannot_be_built() -> None:
