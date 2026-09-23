@@ -28,6 +28,7 @@ from rail.policy import parameter
 
 LOCKED = 75  # the remote script's exit code when the lock is taken (EX_TEMPFAIL)
 POLL_SECONDS = 3.0
+TAIL_LIMIT = 2000
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
@@ -63,6 +64,21 @@ def common_env(project: str, artefact: Artefact) -> tuple[tuple[str, str], ...]:
         ("GIT_SHA", artefact.sha),
         ("VERSION", artefact.version),
     )
+
+
+def _tail(text: str) -> str:
+    """The last `TAIL_LIMIT` characters of the remote's stderr/stdout. When the cut actually
+    removes a prefix, the partial first token — text up to and including the first
+    whitespace — goes with it: an address contains no whitespace, so it can never survive
+    split in half at the start of what remains (review finding)."""
+    stripped = text.strip()
+    if len(stripped) <= TAIL_LIMIT:
+        return stripped
+    tail = stripped[-TAIL_LIMIT:]
+    for index, char in enumerate(tail):
+        if char.isspace():
+            return tail[index + 1 :]
+    return ""  # the whole visible window is one token: no boundary to cut at safely
 
 
 def _heredoc(name: str, text: str) -> str:
@@ -214,7 +230,7 @@ class ComposeTarget:
         if done.returncode == LOCKED:
             raise Locked((done.stderr or done.stdout).strip())
         if done.returncode != 0:
-            detail = (done.stderr or done.stdout).strip()[-2000:]
+            detail = _tail(done.stderr or done.stdout)
             raise DeployError(
                 f"remote deployment of {artefact.version} failed (exit {done.returncode}): {detail}"
             )

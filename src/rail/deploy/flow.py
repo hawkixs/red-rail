@@ -23,6 +23,11 @@ from rail.ledger import (
 )
 from rail.model import DeployTarget, RailConfig
 
+# a `reason` is capped only here, AFTER redaction — capping first (the previous shape, in
+# three places) could cut a matched address in half and leave a fragment the redaction below
+# never sees (review finding)
+MAX_REASON_LENGTH = 1000
+
 
 class Target(Protocol):
     domain: str
@@ -93,6 +98,9 @@ class Attester:
 
     def attest(self, kind: AttestationKind, data: dict[str, Any]) -> None:
         payload = _redacted({"target": self.target, **data}, self.redact)
+        reason = payload.get("reason")
+        if isinstance(reason, str):
+            payload["reason"] = reason[:MAX_REASON_LENGTH]
         emitted = self._emitted_at()
         try:
             self.records.append(
@@ -192,7 +200,7 @@ def forward(
         # spec §7: never a half-deployed state — the previous artefact comes back and the
         # change counts as failed: incident, rollback, the live digest, the recovery
         started = clock()
-        reason = str(exc)[:1000]
+        reason = str(exc)  # the whole text: the Attester redacts it, then caps it
         attester.attest(
             AttestationKind.INCIDENT_DETECTED,
             {
@@ -306,7 +314,7 @@ def rollback(
                 "automatic": False,
                 "digest": live.digest,
                 "version": live.version,
-                "reason": f"rollback to {previous.version} failed: {exc}"[:1000],
+                "reason": f"rollback to {previous.version} failed: {exc}",
             },
         )
         return Outcome(
@@ -389,7 +397,7 @@ def drill(
                 "automatic": True,
                 "digest": live.digest,
                 "version": live.version,
-                "reason": f"drill: rollback to {previous.version} failed: {exc}"[:1000],
+                "reason": f"drill: rollback to {previous.version} failed: {exc}",
             },
         )
         return Outcome(

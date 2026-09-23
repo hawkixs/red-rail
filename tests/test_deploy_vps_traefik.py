@@ -45,8 +45,9 @@ def _live(artefact: Artefact) -> dict[str, str]:
 
 
 class FakeHost:
-    def __init__(self, *, exit_code: int = 0) -> None:
+    def __init__(self, *, exit_code: int = 0, stderr: str | None = None) -> None:
         self.exit_code = exit_code
+        self.stderr = stderr
         self.scripts: list[str] = []
         self.argv: list[list[str]] = []
 
@@ -54,11 +55,12 @@ class FakeHost:
         self.argv.append(list(args))
         if args[0] == "ssh":
             self.scripts.append(kwargs.get("input") or "")
+            default = "locked" if self.exit_code == LOCKED else ""
             return subprocess.CompletedProcess(
                 args,
                 self.exit_code,
                 stdout="[]",
-                stderr="locked" if self.exit_code == LOCKED else "",
+                stderr=self.stderr if self.stderr is not None else default,
             )
         return subprocess.run(args, **kwargs)
 
@@ -221,6 +223,31 @@ def test_an_artefact_carries_only_characters_the_target_script_is_safe_with() ->
         }
         with pytest.raises(DeployError, match=f"artefact {field}"):
             Artefact(**kwargs)
+
+
+def test_apply_never_leaves_a_partial_address_at_the_tail_cut(tmp_path: Path) -> None:
+    """`apply()` keeps only the last 2000 characters of stderr/stdout. When that cut lands
+    inside a token, the whole partial token must go with it — not just the part the fixed
+    width happened to keep — because an address contains no whitespace and so can never
+    survive split in half (review finding)."""
+    repo = _repo(tmp_path)
+    cfg = load_rail_config(repo)
+    artefact = _artefact(repo)
+    address = "192.0.2.10"
+    filler = "z" * 1994
+    # 500 + 10 + 1 + 1994 = 2505 characters; the last-2000 cut removes the first 505, which
+    # is 5 characters into the 10-character address — a genuine straddle, not an edge case
+    stderr = "n" * 500 + address + " " + filler
+    assert len(stderr) == 2505
+    target = VpsTraefik(
+        repo, cfg, run=FakeHost(exit_code=1, stderr=stderr), http=FakeWeb(_live(artefact))
+    )
+    with pytest.raises(DeployError) as caught:
+        target.apply(artefact)
+    message = str(caught.value)
+    assert message.endswith(f": {filler}")  # the partial fragment is dropped, not just capped
+    assert address not in message
+    assert ".2.10" not in message  # the fragment a naive fixed-width cut used to leave
 
 
 def test_a_remote_session_that_hangs_is_killed_and_reported(tmp_path: Path) -> None:

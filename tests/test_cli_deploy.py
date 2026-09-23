@@ -409,6 +409,40 @@ def test_what_the_flows_attest_names_the_site_never_the_address(
     assert [d["domain"] for k, d in _kinds(repo) if k == "deployed"] == ["private-1", "private-1"]
 
 
+def test_a_straddling_address_is_never_left_partial_by_the_thousand_character_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding: `reason = str(exc)[:1000]` used to cut the text BEFORE redaction ran.
+    With the address starting at character 991 of the error, the cap used to leave
+    `192.0.2.1` in the incident and rolled-back receipts — 9 of the address's 10 characters.
+    Redaction must see the whole text; only the Attester caps it, and only after redaction."""
+
+    class StraddlingTarget(SiteTarget):
+        def apply(self, artefact: Artefact) -> LiveVersion:
+            if artefact.digest in self.broken:
+                self.applied.append(artefact.digest)
+                # the address starts at character 991: `str(exc)[:1000]` used to cut it to
+                # `192.0.2.1`, missing only the final `0`
+                raise DeployError("x" * 991 + self.ADDRESS + " is unreachable")
+            return super().apply(artefact)
+
+    fake = StraddlingTarget()
+    monkeypatch.setattr(flow, "make_target", lambda repo, cfg, **kwargs: fake)
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    assert (
+        CliRunner()
+        .invoke(main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"])
+        .exit_code
+        == 0
+    )
+    fake.broken.add(D2)
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 1, out.output
+    receipts = "".join(p.read_text() for p in (repo / RECEIPTS_DIR).glob("*.json"))
+    assert SiteTarget.ADDRESS not in receipts
+    assert "192.0.2" not in receipts  # the address's 7-character prefix must not leak either
+
+
 def test_the_attester_redacts_every_string_before_the_ledger_sees_it() -> None:
     """The file ledger stores what it is given; brain receives the same payload after the
     mirror. Recording what `attest` is handed covers both."""
