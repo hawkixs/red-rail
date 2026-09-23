@@ -11,7 +11,7 @@ from rail.cli import main
 from rail.gates import build as build_gates
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
 from rail.ledger.file import FileLedger
-from tests.helpers import conforming_tree, git, write_roster
+from tests.helpers import conforming_tree, git, init_repo, write_roster
 
 CLOCK = lambda: datetime(2026, 9, 15, 8, 0, tzinfo=UTC)  # noqa: E731
 
@@ -157,3 +157,16 @@ def test_check_shows_declared_exceptions(tmp_path: Path) -> None:
     out = CliRunner().invoke(main, ["check", "--repo", str(repo)])
     assert out.exit_code == 0, out.output
     assert "EXC   review.verdict" in out.output and "reviewer arrives in phase 2" in out.output
+
+
+def test_check_tags_a_needed_declaration_and_lists_it(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "bare", remotes=False)
+    out = CliRunner().invoke(main, ["check", "build", "--all", "--repo", str(repo)])
+    assert out.exit_code == 1
+    assert "NEED  build.tests" in out.output and "NEED  build.lint" in out.output
+    assert "— needs a declaration: build.tests, build.lint" in out.output
+    data = json.loads(
+        CliRunner().invoke(main, ["check", "build", "--all", "--repo", str(repo), "--json"]).output
+    )
+    assert data["needs_declaration"] == ["build.tests", "build.lint"]
+    assert data["passed"] is False

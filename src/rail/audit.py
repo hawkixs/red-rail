@@ -17,8 +17,8 @@ from rail.policy import applicable_stages, declared_tier
 
 SCHEMA_VERSION = 1
 ANSWERS_FILE = ".copier-answers.yml"
-Status = Literal["pass", "fail", "exception", "n/a"]
-SYMBOLS: dict[str, str] = {"pass": "✓", "fail": "✗", "exception": "!", "n/a": "·"}
+Status = Literal["pass", "fail", "needs", "exception", "n/a"]
+SYMBOLS: dict[str, str] = {"pass": "✓", "fail": "✗", "needs": "?", "exception": "!", "n/a": "·"}
 COLUMNS = {
     Stage.HYGIENE: "hyg",
     Stage.INTENT: "int",
@@ -102,7 +102,8 @@ def audit_project(repo: Path, *, ci: bool = False) -> ProjectAudit:
         if ok == len(mine):
             status: Status = "exception" if any(r.exception for r in mine) else "pass"
         else:
-            status = "fail"
+            failing = [r for r in mine if not r.passed]
+            status = "needs" if all(r.needs for r in failing) else "fail"
         exceptions.extend(f"{r.gate_id}: {r.exception}" for r in mine if r.exception)
         stages.append(StageScore(stage.value, status, ok, len(mine)))
     return ProjectAudit(
@@ -170,7 +171,8 @@ def render_table(audits: list[ProjectAudit]) -> str:
         )
     lines.append("")
     lines.append(
-        "✓ pass   ✗ fail   ! declared exception   · not applicable to the tier   tier? undeclared"
+        "✓ pass   ✗ fail   ? needs a declaration   ! declared exception   "
+        "· not applicable to the tier   tier? undeclared"
     )
     for a in audits:
         for exc in a.exceptions:

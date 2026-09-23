@@ -12,7 +12,7 @@ from rail.gates import GateResult, Stage, run_gates
 from rail.model import try_load_rail_config
 from rail.policy import applicable_stages, declared_tier
 
-VERDICTS = {"pass": "PASS", "fail": "FAIL", "skip": "SKIP", "exception": "EXC "}
+VERDICTS = {"pass": "PASS", "fail": "FAIL", "skip": "SKIP", "exception": "EXC ", "need": "NEED"}
 
 
 def _verdict(result: GateResult) -> str:
@@ -20,6 +20,8 @@ def _verdict(result: GateResult) -> str:
         return VERDICTS["skip"]
     if result.exception:
         return VERDICTS["exception"]
+    if result.needs:
+        return VERDICTS["need"]
     return VERDICTS["pass"] if result.passed else VERDICTS["fail"]
 
 
@@ -42,6 +44,7 @@ def report(
         "stages": [s.value for s in stages],
         "passed": all(r.passed for r in results),
         "gates": [r.to_dict() for r in results],
+        "needs_declaration": [r.gate_id for r in results if r.needs],
     }
 
 
@@ -78,5 +81,8 @@ def command(stage: str | None, repo: Path, as_json: bool, ci: bool, everything: 
         for r in results:
             click.echo(f"{_verdict(r)}  {r.gate_id:<22} {r.details}")
         counted = [r for r in results if not r.skipped]
-        click.echo(f"passed {sum(r.passed for r in counted)}/{len(counted)}")
+        summary = f"passed {sum(r.passed for r in counted)}/{len(counted)}"
+        if payload["needs_declaration"]:
+            summary += f" — needs a declaration: {', '.join(payload['needs_declaration'])}"
+        click.echo(summary)
     raise SystemExit(0 if payload["passed"] else 1)
