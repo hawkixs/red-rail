@@ -210,8 +210,10 @@ def test_without_a_manifest_only_the_manifest_gate_names_it(tmp_path: Path, ci: 
 
 
 def test_a_manifest_never_yields_a_need(tmp_path: Path) -> None:
-    """Review focus 4: with a manifest present nothing changes."""
+    """Review focus 4: with a manifest present nothing changes. `--all` so build and evidence
+    gates run too — the only ones that ever NEED — not just the bootstrap tier's own three."""
     repo = _bootstrap_repo(tmp_path)
-    data = json.loads(CliRunner().invoke(main, ["check", "--repo", str(repo), "--json"]).output)
+    out = CliRunner().invoke(main, ["check", "--all", "--repo", str(repo), "--json"])
+    data = json.loads(out.output)
     assert data["needs_declaration"] == []
     assert all(g["needs"] is None for g in data["gates"])
