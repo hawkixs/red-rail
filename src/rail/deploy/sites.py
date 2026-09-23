@@ -96,9 +96,17 @@ def substitute_address(url: str, address: Address) -> str:
 def redact_address(text: str, address: Address, label: str) -> str:
     """`text` with every occurrence of `address` replaced by `label`. Number boundaries are
     respected (`192.0.2.1` never matches inside `192.0.2.10`); an IPv6 address is matched
-    case-insensitively, and its bracketed form is replaced brackets included."""
+    case-insensitively, its bracketed form is replaced brackets included, and a bare address
+    immediately followed by `:<port>` — Docker's own bind-conflict wording — is matched too,
+    even though a bare `:` would otherwise read as more of the address."""
     literal = re.escape(str(address))
     if address.version == 4:
         return re.sub(rf"(?<![\d.]){literal}(?!\.?\d)", label, text)
     text = re.sub(rf"\[{literal}\]", label, text, flags=re.IGNORECASE)
-    return re.sub(rf"(?<![0-9A-Fa-f:]){literal}(?![0-9A-Fa-f:])", label, text, flags=re.IGNORECASE)
+    text = re.sub(rf"(?<![0-9A-Fa-f:]){literal}(?![0-9A-Fa-f:])", label, text, flags=re.IGNORECASE)
+    return re.sub(
+        rf"(?<![0-9A-Fa-f:]){literal}(?=:\d{{1,5}}(?![0-9A-Fa-f:]))",
+        label,
+        text,
+        flags=re.IGNORECASE,
+    )

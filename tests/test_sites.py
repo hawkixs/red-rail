@@ -121,6 +121,17 @@ def test_redaction_respects_number_boundaries() -> None:
     )
 
 
+def test_a_bare_ipv6_address_followed_by_a_port_is_redacted() -> None:
+    """Review focus 6: Docker writes port conflicts as `Bind for <ip>:<port> failed`. The
+    bare pass's lookahead rejected a match followed by `:`, so this case slipped through. A
+    hex suffix, or a longer address sharing the same prefix, must still stay untouched."""
+    assert redact_address("Bind for 2001:db8::10:9204 failed", ip_address(V6), "private-6") == (
+        "Bind for private-6:9204 failed"
+    )
+    assert redact_address("2001:db8::10:abcd", ip_address(V6), "private-6") == "2001:db8::10:abcd"
+    assert redact_address("2001:db8::100:9204", ip_address(V6), "private-6") == "2001:db8::100:9204"
+
+
 def test_ipv6_redaction_takes_the_brackets_and_ignores_case() -> None:
     """Review focus 5."""
     text = (
