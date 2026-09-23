@@ -6,6 +6,7 @@ which is what keeps twenty manifests from diverging.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -16,6 +17,14 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 MANIFEST_NAME = "rail.yaml"
+
+# A site is a label the repository may carry; its address lives on the host that deploys
+# (spec 2026-09-23-sites-on-the-host). No dot and no colon: no address, no domain fits.
+SITE_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+# the rail's own variable: in a compose file (`${BIND_ADDRESS}:9204:9204`) and, behind a site,
+# as the healthcheck's host
+ADDRESS_TOKEN = "${BIND_ADDRESS}"
+_TOKEN_HOST = re.compile(r"^https?://\$\{BIND_ADDRESS\}(?=[:/?#]|$)")
 
 
 class Tier(StrEnum):
@@ -50,6 +59,23 @@ class DeployConfig(BaseModel):
 
     target: DeployTarget
     healthcheck: str = Field(pattern=r"^https?://")
+    site: str | None = Field(default=None, pattern=SITE_PATTERN)
+
+    @model_validator(mode="after")
+    def _a_site_and_its_token_go_together(self) -> DeployConfig:
+        if self.site is not None and self.target is not DeployTarget.PRIVATE_COMPOSE:
+            raise ValueError("deploy.site applies to target private-compose only")
+        if self.site is None and ADDRESS_TOKEN in self.healthcheck:
+            raise ValueError(
+                f"deploy.healthcheck uses {ADDRESS_TOKEN} but no deploy.site says whose "
+                "address it is"
+            )
+        if self.site is not None and not _TOKEN_HOST.match(self.healthcheck):
+            raise ValueError(
+                f"behind deploy.site the healthcheck host is {ADDRESS_TOKEN}, filled from the "
+                f"host's sites file (got {self.healthcheck})"
+            )
+        return self
 
 
 class GateOverride(BaseModel):
@@ -86,6 +112,16 @@ class RailConfig(BaseModel):
             raise ValueError("ledger 'brain' requires 'ticket' (the delivery ticket UUID)")
         if self.ledger is LedgerBackend.FILE and self.ticket is not None:
             raise ValueError("'ticket' is only meaningful with ledger 'brain'")
+        return self
+
+    @model_validator(mode="after")
+    def _one_source_for_the_address(self) -> RailConfig:
+        if self.deploy is not None and self.deploy.site is not None:
+            if "deploy.bind_address" in self.gates:
+                raise ValueError(
+                    "deploy.site and a gates override of deploy.bind_address are two sources "
+                    "for one address: the site's comes from the host, drop the override"
+                )
         return self
 
 
