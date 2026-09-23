@@ -11,8 +11,8 @@ import unicodedata
 from pathlib import Path
 
 from rail import gitrepo
-from rail.gates import GateResult, GateSpec, Stage
-from rail.model import MANIFEST_NAME, Stack, manifest_problem, try_load_rail_config
+from rail.gates import GateResult, GateSpec, Need, Stage
+from rail.model import Stack, declarations
 from rail.policy import effective
 
 CONVENTIONAL = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]+\))?!?: \S")
@@ -21,54 +21,62 @@ CONVENTIONAL = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]+\))?!?: \S")
 _EMOJI_PARTS = frozenset({"So", "Sk", "Mn", "Me", "Cf"})
 
 
-def _stack(repo: Path) -> Stack | None:
-    cfg = try_load_rail_config(repo)
-    return cfg.stack if cfg else None
+def _python_tests(repo: Path) -> list[Path]:
+    root = repo / "tests"
+    if not root.is_dir():
+        return []
+    return [
+        p for p in root.rglob("*.py") if p.name.startswith("test_") or p.name.endswith("_test.py")
+    ]
+
+
+def _go_tests(repo: Path) -> list[Path]:
+    return [p for p in repo.rglob("*_test.go") if "vendor" not in p.parts]
+
+
+def _ruff_configured(repo: Path) -> bool:
+    pyproject = repo / "pyproject.toml"
+    return (pyproject.is_file() and "[tool.ruff" in pyproject.read_text()) or any(
+        (repo / name).is_file() for name in ("ruff.toml", ".ruff.toml")
+    )
 
 
 def has_tests(repo: Path) -> GateResult:
     # named `has_tests`, not `tests`: pytest would collect a `tests` function on import
-    stack = _stack(repo)
-    if stack is None:
-        return GateResult(
-            Stage.BUILD, "tests", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
+    decl = declarations(repo)
+    if isinstance(decl, str):
+        return GateResult(Stage.BUILD, "tests", False, decl)
+    if decl.stack is None:
+        python, go = len(_python_tests(repo)), len(_go_tests(repo))
+        observed = (
+            "no test file found (tests/test_*.py, *_test.go)"
+            if not python and not go
+            else f"{python} test file(s) (tests/test_*.py), {go} (*_test.go)"
         )
-    if stack is Stack.DOCS:
+        return Need("stack", observed).result(Stage.BUILD, "tests")
+    if decl.stack is Stack.DOCS:
         return GateResult(Stage.BUILD, "tests", True, "stack docs: no test suite required")
-    if stack is Stack.PYTHON:
-        root = repo / "tests"
-        found = (
-            [
-                p
-                for p in root.rglob("*.py")
-                if p.name.startswith("test_") or p.name.endswith("_test.py")
-            ]
-            if root.is_dir()
-            else []
-        )
-        where = "tests/test_*.py"
+    if decl.stack is Stack.PYTHON:
+        found, where = _python_tests(repo), "tests/test_*.py"
     else:
-        found = [p for p in repo.rglob("*_test.go") if "vendor" not in p.parts]
-        where = "*_test.go"
+        found, where = _go_tests(repo), "*_test.go"
     if not found:
         return GateResult(Stage.BUILD, "tests", False, f"no test files ({where})")
     return GateResult(Stage.BUILD, "tests", True, f"{len(found)} test file(s)")
 
 
 def lint(repo: Path) -> GateResult:
-    stack = _stack(repo)
-    if stack is None:
-        return GateResult(
-            Stage.BUILD, "lint", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
-        )
-    if stack is Stack.DOCS:
+    decl = declarations(repo)
+    if isinstance(decl, str):
+        return GateResult(Stage.BUILD, "lint", False, decl)
+    if decl.stack is None:
+        ruff = "ruff configured" if _ruff_configured(repo) else "ruff not configured"
+        go = "go.mod present" if (repo / "go.mod").is_file() else "no go.mod"
+        return Need("stack", f"{ruff}, {go}").result(Stage.BUILD, "lint")
+    if decl.stack is Stack.DOCS:
         return GateResult(Stage.BUILD, "lint", True, "stack docs: no linter required")
-    if stack is Stack.PYTHON:
-        pyproject = repo / "pyproject.toml"
-        configured = (pyproject.is_file() and "[tool.ruff" in pyproject.read_text()) or any(
-            (repo / name).is_file() for name in ("ruff.toml", ".ruff.toml")
-        )
-        if configured:
+    if decl.stack is Stack.PYTHON:
+        if _ruff_configured(repo):
             return GateResult(Stage.BUILD, "lint", True, "ruff configured")
         return GateResult(
             Stage.BUILD,

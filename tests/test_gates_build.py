@@ -31,7 +31,25 @@ def test_tests_gate_per_stack(tmp_path: Path) -> None:
     assert has_tests(go).passed
     docs = conforming_tree(tmp_path / "docs", "red-gamma", "dev", stack="docs")
     assert has_tests(docs).passed and "docs" in has_tests(docs).details
-    assert "rail.yaml" in has_tests(tmp_path).details
+    assert has_tests(tmp_path).needs == "stack"
+
+
+def test_without_a_manifest_tests_and_lint_need_the_stack_and_say_what_they_saw(
+    tmp_path: Path,
+) -> None:
+    empty = has_tests(tmp_path)
+    assert not empty.passed and empty.needs == "stack"
+    assert "rail.yaml" not in empty.details
+    assert "no test file found (tests/test_*.py, *_test.go)" in empty.details
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("")
+    (tmp_path / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n")
+    found = has_tests(tmp_path)
+    assert found.needs == "stack"
+    assert "1 test file(s) (tests/test_*.py), 0 (*_test.go)" in found.details
+    linted = lint(tmp_path)
+    assert not linted.passed and linted.needs == "stack"
+    assert "ruff configured, no go.mod" in linted.details and "rail.yaml" not in linted.details
 
 
 def test_lint_gate_per_stack(tmp_path: Path) -> None:
