@@ -54,7 +54,60 @@ def test_every_gate_fails_explicitly_without_evidence(tmp_path: Path) -> None:
     for gate in (verdict, integrated, released, deployed, visible, drill, fulfilled):
         result = gate(repo)
         assert not result.passed and "no " in result.details, result
-    assert "rail.yaml" in verdict(tmp_path).details
+    bare = verdict(tmp_path)
+    assert "no review_verdict attestation in docs/receipts (default file ledger)" in bare.details
+    assert bare.needs is None and "rail.yaml" not in bare.details
+
+
+def test_without_a_manifest_receipts_need_the_project(tmp_path: Path) -> None:
+    FileLedger(tmp_path / RECEIPTS_DIR).attest(
+        "red-beta",
+        AttestationKind.REVIEW_VERDICT,
+        {"sha": "0" * 40},
+        issuer="op",
+        idempotency_key="v1",
+    )
+    result = verdict(tmp_path)
+    assert not result.passed and result.needs == "project"
+    assert "1 review_verdict receipt(s) in docs/receipts" in result.details
+    assert "rail.yaml" not in result.details
+
+
+def test_without_a_manifest_every_evidence_gate_names_an_observed_gap(tmp_path: Path) -> None:
+    for gate in (verdict, integrated, released, deployed, visible, drill, fulfilled):
+        result = gate(tmp_path)
+        assert not result.passed and result.needs is None, result
+        assert "docs/receipts (default file ledger)" in result.details, result
+        assert "rail.yaml" not in result.details, result
+
+
+def test_an_invalid_manifest_declaring_brain_never_reads_the_receipts(tmp_path: Path) -> None:
+    """Review focus 1: the receipts of a brain ledger are mirrors; an invalid manifest must not
+    turn them into the authority."""
+    FileLedger(tmp_path / RECEIPTS_DIR).attest(
+        "red-beta",
+        AttestationKind.REVIEW_VERDICT,
+        {"sha": "0" * 40},
+        issuer="op",
+        idempotency_key="v1",
+    )
+    (tmp_path / "rail.yaml").write_text("rail: 1\nproject: nope\nledger: brain\n")
+    for gate in (verdict, integrated, visible):
+        result = gate(tmp_path)
+        assert not result.passed and result.needs is None
+        assert result.details.startswith("rail.yaml is invalid: "), result
+
+
+def test_a_tampered_receipt_without_a_manifest_is_a_failure_not_a_need(tmp_path: Path) -> None:
+    """Review focus 2."""
+    ledger = FileLedger(tmp_path / RECEIPTS_DIR)
+    ledger.attest(
+        "red-beta", AttestationKind.INTEGRATED, {"sha": "0" * 40}, issuer="op", idempotency_key="i1"
+    )
+    receipt = next((tmp_path / RECEIPTS_DIR).glob("*.json"))
+    receipt.write_text(receipt.read_text().replace("0" * 40, "1" * 40))
+    result = integrated(tmp_path)
+    assert not result.passed and result.needs is None and "tampered" in result.details
 
 
 def test_verdict_must_be_independent_and_approving_on_history(tmp_path: Path) -> None:

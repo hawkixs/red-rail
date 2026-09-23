@@ -77,10 +77,13 @@ def test_audit_project_scores_against_the_declared_tier(tmp_path: Path) -> None:
     assert gamma.exceptions == ["review.verdict: reviewer arrives in phase 2"]
     assert {s.stage: s.status for s in gamma.stages}["review"] == "exception"
     delta = audit_project(projects / "red-delta")
+    # hygiene.mirrors passes vacuously without a manifest (spec 2026-09-23: the default file
+    # ledger applies, `docs/receipts` is the ledger) — one more pass than before that gate
+    # named the missing manifest like every other ledger-scoped gate.
     assert (delta.declared_tier, delta.tier_used, delta.passed, delta.applicable) == (
         None,
         "bootstrap",
-        3,
+        4,
         11,
     )
 

@@ -4,23 +4,35 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import ValidationError
-
-from rail.gates import GateResult, GateSpec, Stage
-from rail.ledger import TERMINAL_TICKET_STATUSES, LedgerError, RecordKind, open_ledger
-from rail.model import MANIFEST_NAME, load_rail_config, manifest_problem
+from rail.gates import GateResult, GateSpec, Need, Stage
+from rail.ledger import RECEIPTS_DIR, TERMINAL_TICKET_STATUSES, LedgerError, RecordKind, open_ledger
+from rail.ledger.file import FileLedger
+from rail.model import declarations
 
 
 def contract(repo: Path) -> GateResult:
+    decl = declarations(repo)
+    if isinstance(decl, str):
+        return GateResult(Stage.INTENT, "contract", False, decl)
     try:
-        cfg = load_rail_config(repo)
+        if decl.project is None:
+            found = FileLedger(repo / RECEIPTS_DIR).list(None, kind=RecordKind.CONTRACT)
+            if found:
+                return Need(
+                    "project",
+                    f"{len(found)} contract receipt(s) in {RECEIPTS_DIR} — `project:` says "
+                    "which are this repository's",
+                ).result(Stage.INTENT, "contract")
+            return GateResult(
+                Stage.INTENT,
+                "contract",
+                False,
+                f"no contract recorded in {RECEIPTS_DIR} (default file ledger)",
+            )
+        project = decl.project
         ledger = open_ledger(repo)
-        records = ledger.list(cfg.project, kind=RecordKind.CONTRACT)
+        records = ledger.list(project, kind=RecordKind.CONTRACT)
         status = ledger.coordination_status()
-    except (FileNotFoundError, ValidationError):
-        return GateResult(
-            Stage.INTENT, "contract", False, manifest_problem(repo) or f"{MANIFEST_NAME} unreadable"
-        )
     except LedgerError as exc:
         return GateResult(Stage.INTENT, "contract", False, str(exc))
     if not records:
@@ -28,13 +40,15 @@ def contract(repo: Path) -> GateResult:
             Stage.INTENT,
             "contract",
             False,
-            f"no contract recorded for {cfg.project} (run `rail contract set`)",
+            f"no contract recorded for {project} (run `rail contract set`)",
         )
     if status in TERMINAL_TICKET_STATUSES:
         # A contract record proves an intention was once declared, not that it still covers
         # this work. A terminal ticket takes no further pull request (`rail bind` answers
         # `ticket_not_contractable`), so work continuing under it is covered by nothing —
         # and the gate used to stay green throughout, which is how it went unnoticed.
+        cfg = decl.cfg
+        assert cfg is not None  # a status is only ever returned once a manifest was loaded
         return GateResult(
             Stage.INTENT,
             "contract",
