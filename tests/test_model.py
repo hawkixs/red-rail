@@ -172,11 +172,27 @@ def test_the_address_token_without_a_site_is_refused() -> None:
         "http://private-1:9204/healthz",
         "http://$BIND_ADDRESS:9204/healthz",
         "http://example.invalid/${BIND_ADDRESS}/healthz",
+        # the token followed by `:9204@other.example` reads as userinfo, not a port: the URL's
+        # real host is `other.example`, so the checks would go there instead (review finding)
+        "http://${BIND_ADDRESS}:9204@other.example/healthz",
     ],
 )
 def test_behind_a_site_the_healthcheck_host_is_the_token(healthcheck: str) -> None:
     with pytest.raises(ValidationError, match="healthcheck host"):
         RailConfig.model_validate(_prod({**SITE_DEPLOY, "healthcheck": healthcheck}))
+
+
+@pytest.mark.parametrize(
+    "healthcheck",
+    [
+        "http://${BIND_ADDRESS}:9204/healthz",
+        "http://${BIND_ADDRESS}/healthz",
+        "http://${BIND_ADDRESS}",
+    ],
+)
+def test_behind_a_site_the_token_alone_as_the_host_is_accepted(healthcheck: str) -> None:
+    cfg = RailConfig.model_validate(_prod({**SITE_DEPLOY, "healthcheck": healthcheck}))
+    assert cfg.deploy is not None and cfg.deploy.healthcheck == healthcheck
 
 
 def test_a_site_and_a_declared_bind_address_are_refused_together() -> None:

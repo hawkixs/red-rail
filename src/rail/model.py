@@ -24,7 +24,11 @@ SITE_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 # the rail's own variable: in a compose file (`${BIND_ADDRESS}:9204:9204`) and, behind a site,
 # as the healthcheck's host
 ADDRESS_TOKEN = "${BIND_ADDRESS}"
-_TOKEN_HOST = re.compile(r"^https?://\$\{BIND_ADDRESS\}(?=[:/?#]|$)")
+# match-at-start only: a token followed by `:9204@other.example` used to pass (`:` opened the
+# allowed set) even though that is userinfo, not a port — the URL's real host is
+# `other.example`. An optional port is now the only thing allowed between the token and the
+# next path/query/fragment boundary or the end of the string.
+_TOKEN_HOST = re.compile(rf"^https?://{re.escape(ADDRESS_TOKEN)}(?::\d+)?(?=[/?#]|\Z)")
 
 
 class Tier(StrEnum):
