@@ -79,7 +79,7 @@ def load_site(name: str, path: Path | None = None) -> Site:
     try:
         document = SitesFile.model_validate(yaml.safe_load(raw) or {})
     except (yaml.YAMLError, ValidationError) as exc:
-        raise DeployError(f"site {name}: {where} is not a valid sites file: {exc}") from exc
+        raise DeployError(f"site {name}: {where} is not a valid sites file: {exc} — {fix}") from exc
     site = document.sites.get(name)
     if site is None:
         known = ", ".join(sorted(document.sites)) or "none"

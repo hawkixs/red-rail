@@ -88,8 +88,9 @@ def test_an_unquoted_all_digit_ipv6_asks_to_be_quoted(tmp_path: Path) -> None:
 def test_an_empty_or_malformed_file_is_refused_by_name(tmp_path: Path, text: str) -> None:
     """Review focus 2."""
     path = _sites(tmp_path, text)
-    with pytest.raises(DeployError, match=r"sites\.yaml is not a valid sites file"):
+    with pytest.raises(DeployError, match=r"sites\.yaml is not a valid sites file") as caught:
         load_site("private-1", path)
+    assert "declare it on this host" in str(caught.value)
 
 
 def test_the_environment_names_the_file_never_the_address(tmp_path: Path) -> None:
