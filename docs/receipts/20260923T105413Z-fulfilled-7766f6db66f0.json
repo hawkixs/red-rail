@@ -1,0 +1,18 @@
+{
+  "digest": "sha256:7766f6db66f084f2190fc77745466b23ff903ee53a9abaf4537b84f259f4757b",
+  "idempotency_key": "fulfilled:9ba81939713623eb413b0cc807e16e460401012e",
+  "issuer": "brain-v42",
+  "kind": "attestation",
+  "payload": {
+    "data": {
+      "delivery_digest": "c8fe8b4cfcc29bbecb3baf58ba887188c9f953bb1da810f0891753b931628741",
+      "rationale": "Accepted by red on 2026-09-23 with the operator's explicit go. Both acceptance criteria re-run by red itself with the reinstalled rail 0.4.0 (red-rail main 4892efc): (1) an empty git init with no manifest -> rail check --all gives a gate-by-gate report, passed 4/23, and exactly one line cites rail.yaml (hygiene.rail_config); (2) red-alerts, onboarded by hand, passes 18/18 at its declared tier (dev) on 7748411. Evidence: PR #38 merged as 9ba8193, red-rail/review approved, integration receipt e821ad40.",
+      "receipt_id": "9da3975d-244a-4b57-9ac9-52639b0e4c98",
+      "sha": "9ba81939713623eb413b0cc807e16e460401012e"
+    },
+    "kind": "fulfilled"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-23T10:54:13.109758Z",
+  "schema_version": 1
+}
