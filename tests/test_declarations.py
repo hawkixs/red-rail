@@ -33,9 +33,11 @@ def test_an_invalid_manifest_never_falls_back_to_defaults(tmp_path: Path) -> Non
         open_ledger(tmp_path)
 
 
-def test_open_ledger_without_a_manifest_is_the_default_file_ledger(tmp_path: Path) -> None:
-    ledger = open_ledger(tmp_path)
-    assert isinstance(ledger, FileLedger) and ledger.root == tmp_path / RECEIPTS_DIR
+def test_open_ledger_still_refuses_a_repository_without_a_manifest(tmp_path: Path) -> None:
+    """The default file ledger is a gate's observation, never a write path: commands that
+    open the ledger keep failing closed without a manifest."""
+    with pytest.raises(FileNotFoundError):
+        open_ledger(tmp_path)
 
 
 def test_file_ledger_lists_every_project_when_none_is_named(tmp_path: Path) -> None:

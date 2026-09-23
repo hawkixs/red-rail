@@ -189,4 +189,6 @@ def test_a_stage_that_only_needs_a_declaration_is_marked_apart(tmp_path: Path) -
     intent = next(s for s in audit.stages if s.stage == "intent")
     assert (intent.passed, intent.total) == (0, 1)  # a NEED counts as not passed
     table = render_table([audit])
-    assert " ? " in table and "? needs a declaration" in table
+    row = next(line for line in table.splitlines() if line.startswith(audit.name))
+    assert " ? " in row
+    assert "? needs a declaration" in table

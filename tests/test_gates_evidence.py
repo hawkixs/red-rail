@@ -73,6 +73,28 @@ def test_without_a_manifest_receipts_need_the_project(tmp_path: Path) -> None:
     assert "rail.yaml" not in result.details
 
 
+def test_without_a_manifest_a_deployed_receipt_needs_the_project(tmp_path: Path) -> None:
+    ledger = FileLedger(tmp_path / RECEIPTS_DIR)
+    ledger.attest(
+        "red-beta",
+        AttestationKind.RELEASED,
+        {"sha": "0" * 40, "version": "1.0.0", "digest": "sha256:a"},
+        issuer="op",
+        idempotency_key="r1",
+    )
+    ledger.attest(
+        "red-beta",
+        AttestationKind.DEPLOYED,
+        {"sha": "0" * 40, "digest": "sha256:a"},
+        issuer="op",
+        idempotency_key="d1",
+    )
+    for gate in (deployed, visible, drill, fulfilled):
+        result = gate(tmp_path)
+        assert not result.passed and result.needs == "project", result
+        assert "rail.yaml" not in result.details
+
+
 def test_without_a_manifest_every_evidence_gate_names_an_observed_gap(tmp_path: Path) -> None:
     for gate in (verdict, integrated, released, deployed, visible, drill, fulfilled):
         result = gate(tmp_path)

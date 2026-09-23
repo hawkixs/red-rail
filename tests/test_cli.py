@@ -217,3 +217,14 @@ def test_a_manifest_never_yields_a_need(tmp_path: Path) -> None:
     data = json.loads(out.output)
     assert data["needs_declaration"] == []
     assert all(g["needs"] is None for g in data["gates"])
+
+
+def test_attest_writes_nothing_without_a_manifest(tmp_path: Path) -> None:
+    """`rail attest` opens the ledger before anything else: without a manifest that write path
+    stays fail-closed (item 1 of the final fix wave), so no receipt is ever written."""
+    repo = init_repo(tmp_path / "bare", remotes=False)
+    out = CliRunner().invoke(
+        main, ["attest", "integrated", "--repo", str(repo), "--data", f"sha={'0' * 40}"]
+    )
+    assert out.exit_code != 0
+    assert not (repo / RECEIPTS_DIR).exists()
