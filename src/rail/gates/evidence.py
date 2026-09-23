@@ -10,10 +10,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from rail import gitrepo, monitor
+from rail.deploy import DeployError
+from rail.deploy.sites import load_site, redact_address, substitute_address
 from rail.gates import GateResult, GateSpec, Need, Stage
 from rail.ledger import RECEIPTS_DIR, AttestationKind, LedgerError, Record, open_ledger
 from rail.ledger.file import FileLedger
-from rail.model import Declarations, declarations
+from rail.model import ADDRESS_TOKEN, Declarations, declarations
 
 
 def _attestations(repo: Path, kind: AttestationKind) -> list[Record] | str | Need:
@@ -211,10 +213,21 @@ def visible(repo: Path) -> GateResult:
         )
     url = str(parameter(repo, "observe.monitor_url"))
     agent = str(parameter(repo, "observe.monitor_agent"))
+    site = str(parameter(repo, "observe.monitor_site"))
+    address = None
+    if ADDRESS_TOKEN in url:
+        # the address is a host fact (spec 2026-09-23-sites-on-the-host): without it the gate
+        # stays closed and says where to declare it, never guessing one of its own
+        try:
+            address = load_site(site).address
+        except DeployError as exc:
+            return GateResult(Stage.OBSERVE, "visible", False, f"red-monitor: {exc}")
+        url = substitute_address(url, address)
     try:
         view = monitor.read_agent(url, agent)
     except monitor.MonitorError as exc:
-        return GateResult(Stage.OBSERVE, "visible", False, f"red-monitor: {exc}")
+        reason = str(exc) if address is None else redact_address(str(exc), address, site)
+        return GateResult(Stage.OBSERVE, "visible", False, f"red-monitor: {reason}")
     if view.status != "up":
         return GateResult(
             Stage.OBSERVE, "visible", False, f"agent {agent} is {view.status or 'unknown'}"

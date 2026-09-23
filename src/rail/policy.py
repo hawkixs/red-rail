@@ -89,7 +89,11 @@ GATE_DEFAULTS: dict[str, Any] = {
     "deploy.compose_path": "deploy/compose.yaml",  # in the project, read at the released commit
     "deploy.remote_timeout_seconds": 900,  # the ssh session (pull + up --wait) is killed after
     # --- observe (spec §6 step 8): the red-monitor server and the agent watching the target ---
-    "observe.monitor_url": "http://10.100.0.2:8081",
+    # red-monitor is a site like any private target: this public repository names it, and
+    # the host's private sites file fills the token with its address. A literal URL declared
+    # in rail.yaml needs no site.
+    "observe.monitor_url": "http://${BIND_ADDRESS}:8081",
+    "observe.monitor_site": "red-monitor",
     "observe.monitor_agent": "vps",
 }
 
