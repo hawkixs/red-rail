@@ -29,6 +29,7 @@ class Target(Protocol):
 
     def steps(self, artefact: Artefact) -> list[Step]: ...
     def apply(self, artefact: Artefact) -> LiveVersion: ...
+    def redact(self, text: str) -> str: ...
 
 
 def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
@@ -48,12 +49,30 @@ def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
     return cast("Target", shape(repo, cfg, **kwargs))
 
 
+def _unchanged(text: str) -> str:
+    return text
+
+
+def _redacted(value: Any, redact: Callable[[str], str]) -> Any:
+    """Every string of an attestation payload, as the target allows it to be recorded."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {key: _redacted(item, redact) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_redacted(item, redact) for item in value]
+    return value
+
+
 @dataclass
 class Attester:
     ledger: Ledger
     project: str
     target: str
     issuer: str
+    # a private target behind a site replaces its address with the site's name: every string
+    # of every record passes here before the key, the mirror and the ledger see it
+    redact: Callable[[str], str] = field(default=_unchanged)
     records: list[Record] = field(default_factory=list)
     unattested: list[Unattested] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)  # a refusal that left no mirror
@@ -73,7 +92,7 @@ class Attester:
         return emitted
 
     def attest(self, kind: AttestationKind, data: dict[str, Any]) -> None:
-        payload = {"target": self.target, **data}
+        payload = _redacted({"target": self.target, **data}, self.redact)
         emitted = self._emitted_at()
         try:
             self.records.append(
@@ -162,7 +181,7 @@ def forward(
 ) -> Outcome:
     assert cfg.deploy is not None
     target = target or make_target(repo, cfg)
-    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer)
+    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer, redact=target.redact)
     artefact = newest_release(ledger, cfg.project, version)
     previous = previous_artefact(ledger, cfg.project, artefact.digest)
     try:
@@ -267,7 +286,7 @@ def rollback(
 ) -> Outcome:
     assert cfg.deploy is not None
     target = target or make_target(repo, cfg)
-    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer)
+    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer, redact=target.redact)
     live = live_artefact(ledger, cfg.project)
     previous = previous_artefact(ledger, cfg.project, live.digest) if live else None
     if live is None or previous is None:
@@ -340,7 +359,7 @@ def drill(
     in mode `drill` so the ledger keeps naming the live digest."""
     assert cfg.deploy is not None
     target = target or make_target(repo, cfg)
-    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer)
+    attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer, redact=target.redact)
     live = live_artefact(ledger, cfg.project)
     previous = previous_artefact(ledger, cfg.project, live.digest) if live else None
     if live is None or previous is None:

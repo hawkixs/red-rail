@@ -44,6 +44,9 @@ class FakeTarget:
             raise DeployError(f"{artefact.version}: not healthy within 120s (HTTP 503)")
         return LiveVersion("red-probe", artefact.version, artefact.sha, artefact.digest)
 
+    def redact(self, text: str) -> str:
+        return text
+
 
 @pytest.fixture
 def target(monkeypatch: pytest.MonkeyPatch) -> FakeTarget:
@@ -361,3 +364,80 @@ def test_the_flows_write_the_same_attestations_whatever_the_target_shape(
         "deployed",
     ]
     assert target.applied == [D1, D2, D1, D2]
+
+
+# -- behind a site, records name the site (spec 2026-09-23-sites-on-the-host) ---------------
+
+
+class SiteTarget(FakeTarget):
+    """A private target behind a site: its errors name the address, its records must not."""
+
+    ADDRESS = "192.0.2.10"  # RFC 5737 documentation address
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.domain = "private-1"
+
+    def apply(self, artefact: Artefact) -> LiveVersion:
+        if artefact.digest in self.broken:
+            self.applied.append(artefact.digest)
+            raise DeployError(
+                f"http://{self.ADDRESS}:9204/healthz: not healthy within 120s; "
+                f"ssh: connect to host {self.ADDRESS} port 22"
+            )
+        return super().apply(artefact)
+
+    def redact(self, text: str) -> str:
+        return text.replace(self.ADDRESS, "private-1")
+
+
+def test_what_the_flows_attest_names_the_site_never_the_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = SiteTarget()
+    monkeypatch.setattr(flow, "make_target", lambda repo, cfg, **kwargs: fake)
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    first = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--version", "0.1.0", "--yes"])
+    assert first.exit_code == 0, first.output
+    fake.broken.add(D2)
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 1, out.output
+    receipts = "".join(p.read_text() for p in (repo / RECEIPTS_DIR).glob("*.json"))
+    assert SiteTarget.ADDRESS not in receipts
+    incident = next(d for k, d in _kinds(repo) if k == "incident_detected")
+    assert "connect to host private-1 port 22" in incident["reason"]
+    assert [d["domain"] for k, d in _kinds(repo) if k == "deployed"] == ["private-1", "private-1"]
+
+
+def test_the_attester_redacts_every_string_before_the_ledger_sees_it() -> None:
+    """The file ledger stores what it is given; brain receives the same payload after the
+    mirror. Recording what `attest` is handed covers both."""
+    handed: list[dict] = []
+
+    class RecordingLedger:
+        def list(self, project: str, **kwargs: object) -> list:
+            return []
+
+        def attest(self, project, kind, payload, *, issuer, idempotency_key, emitted_at):
+            handed.append(payload)
+            return None
+
+    attester = flow.Attester(
+        RecordingLedger(),  # type: ignore[arg-type]
+        "red-alerts",
+        "private-compose",
+        "operator",
+        redact=lambda text: text.replace("192.0.2.10", "private-1"),
+    )
+    attester.attest(
+        AttestationKind.INCIDENT_DETECTED,
+        {
+            "reason": "connect to host 192.0.2.10",
+            "nested": {"why": ["192.0.2.10", 3]},
+            "drill": False,
+            "version": "0.1.0",
+        },
+    )
+    assert handed[0]["reason"] == "connect to host private-1"
+    assert handed[0]["nested"] == {"why": ["private-1", 3]}
+    assert handed[0]["drill"] is False and handed[0]["target"] == "private-compose"
