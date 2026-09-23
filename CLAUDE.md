@@ -53,7 +53,9 @@ comments, test names. The conversation with the operator stays in French.
   sequence; a target supplies only the `.env` it writes and the origin it verifies
   against), `vps_traefik.py` (Traefik's routing and the public route), `private_compose.py`
   (a machine with no public route: verification over the address of `deploy.healthcheck`,
-  `deploy.bind_address` with no default, and a refusal — before the first ssh — of a
+  `deploy.bind_address` with no default — or, behind a `deploy.site`, the address this host
+  declares in `~/.config/red-rail/sites.yaml` (`sites.py`, a private file: the manifest and
+  every attestation carry the site's name, never the address) — and a refusal — before the first ssh — of a
   released compose file that would publish outside that address, `network_mode: host`
   included, because Docker bypasses the firewall) and `flow.py` (forward / rollback / drill,
   the target chosen from the manifest, and the attestation sequences they write — ADR-0004).

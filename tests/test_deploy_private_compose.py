@@ -449,3 +449,61 @@ def test_the_target_redacts_its_address_behind_a_site_and_nothing_without_one(
     declared = _private_repo(tmp_path / "declared", SAFE)
     plain = PrivateCompose(declared, load_rail_config(declared), run=RecordingHost())
     assert plain.redact(f"connect to host {BIND}") == f"connect to host {BIND}"
+
+
+# -- acceptance through the CLI (spec 2026-09-23-sites-on-the-host, criteria 1 and 3) --------
+
+from click.testing import CliRunner  # noqa: E402
+
+from rail.cli import main  # noqa: E402
+from rail.ledger import RECEIPTS_DIR, AttestationKind  # noqa: E402
+from rail.ledger.file import FileLedger  # noqa: E402
+
+
+def _released(repo: Path) -> None:
+    artefact = _artefact(repo)
+    FileLedger(repo / RECEIPTS_DIR).attest(
+        "red-alerts",
+        AttestationKind.RELEASED,
+        {
+            "version": artefact.version,
+            "sha": artefact.sha,
+            "digest": artefact.digest,
+            "image": artefact.image,
+            "tag": "v0.1.0",
+        },
+        issuer="op",
+        idempotency_key="released:0.1.0",
+    )
+
+
+@pytest.mark.parametrize("ci", [False, True])
+def test_a_manifest_with_a_site_passes_rail_check_where_no_host_file_exists(
+    tmp_path: Path, ci: bool
+) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    env = {"RAIL_SITES_FILE": str(tmp_path / "nowhere.yaml")}
+    args = ["check", "hygiene", "--repo", str(repo), *(["--ci"] if ci else [])]
+    out = CliRunner().invoke(main, args, env=env)
+    assert "PASS  hygiene.rail_config" in out.output, out.output
+
+
+def test_plan_names_the_site_and_prints_the_resolved_steps(tmp_path: Path) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    _released(repo)
+    env = {"RAIL_SITES_FILE": str(_host(tmp_path))}
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--plan"], env=env)
+    assert out.exit_code == 0, out.output
+    assert "on private-1" in out.output
+    assert "private-1-deploy" in out.output
+    assert f"GET http://{BIND}:9100/healthz" in out.output
+
+
+def test_plan_without_the_host_file_fails_before_printing_a_step(tmp_path: Path) -> None:
+    repo = _site_repo(tmp_path / "repo", SITE_SAFE)
+    _released(repo)
+    env = {"RAIL_SITES_FILE": str(tmp_path / "nowhere.yaml")}
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--plan"], env=env)
+    assert out.exit_code == 1
+    assert "site private-1" in out.output and "nowhere.yaml" in out.output
+    assert "GET " not in out.output and "ssh " not in out.output

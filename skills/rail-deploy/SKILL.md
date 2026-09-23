@@ -7,6 +7,11 @@ description: Deploy a released ReD project to the border VPS behind Traefik with
 
 Stages 8 and 9 run from the host over the operator's ssh; the ledger is the rollback source.
 
+A private target behind a site (`deploy.site` in `rail.yaml`) needs its address on this host,
+never in the repository: `~/.config/red-rail/sites.yaml`, mode 0600, holding
+`sites: {<site>: {address: "<ip>"}}` (`RAIL_SITES_FILE` names another path). Without it,
+`rail deploy --plan` stops before printing a step, naming the site and the file.
+
 1. Preview: `rail deploy --repo <path> --plan` (the remote script and the checks, nothing runs).
 2. Deploy: `rail deploy --repo <path>` — refuses without a `released` attestation, asks for
    confirmation, verifies `/version` equals the artefact, attests `deployed`. A failed
