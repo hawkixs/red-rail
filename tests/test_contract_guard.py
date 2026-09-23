@@ -17,32 +17,32 @@ from rail.contract_guard import Unwritable, refuse_unwritable
 @pytest.mark.parametrize(
     "text",
     [
-        "deploy on 10.100.0.4 behind the mesh",
-        "deploy on 10.100.0.4.",  # a sentence ending in an address is the natural way to write one
-        "reach 10.100.0.4, then the proxy",
-        "(10.100.0.4)",
-        "10.100.0.4 is the target",
+        "deploy on 198.51.100.4 behind the mesh",
+        "deploy on 198.51.100.4.",  # a sentence ending in an address: the natural way to write it
+        "reach 198.51.100.4, then the proxy",
+        "(198.51.100.4)",
+        "198.51.100.4 is the target",
     ],
 )
 def test_an_address_is_refused_wherever_it_sits_in_a_sentence(text: str) -> None:
     """A guard bypassed by a full stop guards nothing: the most natural way to write an
     address is at the end of a sentence."""
-    with pytest.raises(Unwritable, match=r"10\.100\.0\.4"):
+    with pytest.raises(Unwritable, match=r"198\.51\.100\.4"):
         refuse_unwritable([text])
 
 
 def test_a_longer_dotted_run_is_not_an_address() -> None:
     """Five groups is not an address, and must not be reported as one."""
-    refuse_unwritable(["the build id is 10.100.0.4.5 and it is not an address"])
+    refuse_unwritable(["the build id is 198.51.100.4.5 and it is not an address"])
 
 
 def test_a_literal_address_is_refused() -> None:
     """The operator's standing rule is that no address belongs in a spec. A contract is a
     stronger case: a spec can be edited, a contract revision cannot."""
-    with pytest.raises(Unwritable, match="10.100.0.4"):
-        refuse_unwritable(["deploy on 10.100.0.4 behind the mesh"])
+    with pytest.raises(Unwritable, match="198.51.100.4"):
+        refuse_unwritable(["deploy on 198.51.100.4 behind the mesh"])
     with pytest.raises(Unwritable, match="address"):
-        refuse_unwritable(["the service answers on 192.168.1.10:8080"])
+        refuse_unwritable(["the service answers on 203.0.113.10:8080"])
 
 
 def test_version_numbers_and_digests_are_not_addresses() -> None:
@@ -76,9 +76,9 @@ def test_a_credential_shaped_string_is_refused() -> None:
 def test_the_message_names_what_was_found_and_where() -> None:
     """A refusal that does not say which field and which string costs more than it saves."""
     with pytest.raises(Unwritable) as raised:
-        refuse_unwritable(["fine"], constraints=["reach 10.100.0.4 first"])
+        refuse_unwritable(["fine"], constraints=["reach 198.51.100.4 first"])
     message = str(raised.value)
-    assert "10.100.0.4" in message and "constraint" in message
+    assert "198.51.100.4" in message and "constraint" in message
 
 
 def test_empty_and_absent_fields_are_fine() -> None:
