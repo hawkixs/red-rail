@@ -497,6 +497,7 @@ def test_plan_names_the_site_and_prints_the_resolved_steps(tmp_path: Path) -> No
     assert "on private-1" in out.output
     assert "private-1-deploy" in out.output
     assert f"GET http://{BIND}:9100/healthz" in out.output
+    assert f"GET http://{BIND}:9100/version" in out.output
 
 
 def test_plan_without_the_host_file_fails_before_printing_a_step(tmp_path: Path) -> None:
