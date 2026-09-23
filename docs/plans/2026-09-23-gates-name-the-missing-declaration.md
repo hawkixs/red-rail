@@ -52,6 +52,15 @@ distinctly.
 
 ### Task 1: Declarations, `Need`, and the default file ledger
 
+> **Superseded by the final review of the branch (2026-09-23).** The `open_ledger` default that
+> this task plans was withdrawn. `open_ledger` stays fail-closed and still refuses a repository
+> without a manifest, as on `main` (spec, decision 5). Without a manifest, the gates read
+> `FileLedger(repo / RECEIPTS_DIR)` themselves; with one, they still go through `open_ledger`.
+> `test_open_ledger_still_refuses_a_repository_without_a_manifest` (`tests/test_declarations.py`)
+> and `test_attest_writes_nothing_without_a_manifest` (`tests/test_cli.py`) pin the refusal. The
+> withdrawal also reaches Task 3 (the ledger reads) and Task 5 (mutant 5). The text below is left
+> as planned, as the record of the plan.
+
 **Files:**
 - Modify: `src/rail/model.py` (add `Declarations`, `declarations`)
 - Modify: `src/rail/gates/__init__.py` (`GateResult.needs`, `Need`)
