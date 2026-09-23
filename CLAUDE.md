@@ -44,7 +44,8 @@ comments, test names. The conversation with the operator stays in French.
 - `src/rail/http.py` — one bounded GET, timeout and size-capped, the only way the rail reaches
   a network URL that is not brain or GitHub.
 - `src/rail/monitor.py` — reads red-monitor's `/api/latest` (image reference of a deployed
-  container) for `observe.visible`.
+  container) for `observe.visible`. red-monitor is a site: `observe.monitor_site` (default
+  `red-monitor`) is resolved through the host's `sites.yaml`, the only site `rail check` reads.
 - `src/rail/release.py` — stage 7: builds and pushes the image to GHCR by digest, tags both
   remotes, attests `released`.
 - `src/rail/deploy/` — `compose.py` (what every compose target does identically: the lock

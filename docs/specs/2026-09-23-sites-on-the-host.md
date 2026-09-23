@@ -67,7 +67,7 @@ the one fact still missing on that side.
 5. **Only the target reads the host.** Gates, `rail check`, `rail audit` and CI never open the
    site file. The rules of decisions 1 to 3 are properties of the manifest alone, so a manifest
    with a site passes `rail check` where no host file exists, and gates stay pure functions of
-   the repository's state.
+   the repository's state. One exception, decision 8: `observe.visible`.
 
 6. **The target resolves the site once, and everything downstream uses that address.** With a
    site, `PrivateCompose` reads the site's address and uses it everywhere the declared address
@@ -94,6 +94,21 @@ the one fact still missing on that side.
      `http://private-1:9204/healthz`.
    - The operator's terminal is not the repository. `--plan`, errors and the report show the
      resolved address, and none of it is persisted.
+
+8. **red-monitor is a site too** (amendment, 2026-09-23). This repository is public, and the
+   versioned default of `observe.monitor_url` was a literal private address.
+   - The default is now `http://${BIND_ADDRESS}:8081`. `observe.monitor_site` (default
+     `red-monitor`, a label under decision 1's pattern) names the site whose address fills the
+     token.
+   - A project may still declare a literal `observe.monitor_url` in `rail.yaml`; without the
+     token, no site is read.
+   - `observe.visible` is the one gate that opens the site file. It already has `workstation`
+     scope: it queries red-monitor over the network and is skipped under `--ci`. Decision 5's
+     guarantees still hold: every manifest rule is checked without a host file, and CI never
+     needs one.
+   - Without the declaration, the gate fails closed with `load_site`'s message (site, path,
+     fix). Its details redact the address to the site's name, as decision 7 does for records:
+     `rail check` output is pasted into issues and pull requests.
 
 ## Non-goals
 
