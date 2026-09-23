@@ -252,7 +252,7 @@ def test_an_unimplemented_target_is_still_refused_by_name(tmp_path: Path) -> Non
         "0.0.0.0:9204:9204",  # names an address AND publishes everywhere
         "[::]:9204:9204",  # the IPv6 spelling of the same thing
         "192.0.2.99:9204:9204",  # an address, but not this machine's
-        "[fd00::4]:9204:9204",  # bracketed IPv6 that is not the bind address
+        "[2001:db8::4]:9204:9204",  # bracketed IPv6 that is not the bind address
         "0.0.0.0:9204-9210:9204-9210",  # a range does not hide the wildcard
         "${FOO}:9204:9204",  # a variable the rail does not write
         "${BIND_ADDRESS:-0.0.0.0}:9204:9204",  # a default turns the variable into a wildcard
