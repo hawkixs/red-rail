@@ -69,6 +69,15 @@ def test_an_address_is_a_literal_that_does_not_publish_everywhere(
         load_site("private-1", path)
 
 
+def test_a_scoped_ipv6_address_is_refused(tmp_path: Path) -> None:
+    """Review finding: `fe80::1%eth0` used to validate here and fail only after ssh. A scoped
+    address is bound to one interface: Docker can neither bind it, nor can it be written in
+    a URL, so a private target refuses it just as it refuses `0.0.0.0`."""
+    path = _sites(tmp_path, 'sites:\n  private-1:\n    address: "fe80::1%eth0"\n')
+    with pytest.raises(DeployError, match="scope"):
+        load_site("private-1", path)
+
+
 def test_an_unquoted_all_digit_ipv6_asks_to_be_quoted(tmp_path: Path) -> None:
     """Review focus 1: YAML 1.1 reads 2001:0:0:0:0:0:0:1 as a base-60 integer."""
     path = _sites(tmp_path, "sites:\n  private-1:\n    address: 2001:0:0:0:0:0:0:1\n")

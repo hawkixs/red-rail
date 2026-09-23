@@ -46,6 +46,16 @@ class Site(BaseModel):
             )
         return value
 
+    @field_validator("address")
+    @classmethod
+    def _not_scoped(cls, value: Address) -> Address:
+        if isinstance(value, IPv6Address) and value.scope_id is not None:
+            raise ValueError(
+                f"{value} is a scoped address: Docker can neither bind it to an interface "
+                "by that name, nor can a scope id be written in a URL"
+            )
+        return value
+
 
 class SitesFile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
