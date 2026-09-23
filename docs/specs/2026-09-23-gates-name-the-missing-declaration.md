@@ -62,8 +62,11 @@ These eleven gates depend on the manifest for three fields only:
    defaults of decision 2 apply only when the file is **absent**. An invalid manifest keeps
    today's behaviour: every dependent gate reports the manifest problem.
 
-5. **`open_ledger` without a manifest opens the default file ledger** (`docs/receipts`). With an
-   invalid manifest it still raises.
+5. **`open_ledger` is unchanged.** It keeps refusing a repository without a manifest, same as
+   `origin/main`: absent raises `FileNotFoundError`, invalid raises `ValidationError`. It is a
+   write path, not an observation, and stays fail-closed. The gates observe the default file
+   ledger directly (`FileLedger(repo / RECEIPTS_DIR)`), so no write command can reach receipts
+   without a manifest.
 
 6. **Only `hygiene.rail_config` names the manifest file.** No other gate's details mention
    `rail.yaml` when there is no manifest. They say `default file ledger` or ``needs `stack:` ``.
@@ -83,7 +86,7 @@ These eleven gates depend on the manifest for three fields only:
 | Gate | Observation | Outcome |
 |---|---|---|
 | `build.tests` | `tests/test_*.py` / `*_test.go` counted | always **NEED `stack`** (`stack: docs` needs no tests), the counts in the details |
-| `build.lint` | ruff configuration, `.golangci.yml`, present or not | always **NEED `stack`**, what was found in the details |
+| `build.lint` | ruff configuration and `go.mod`, present or not | always **NEED `stack`**, what was found in the details |
 | `hygiene.mirrors` | none needed | **PASS**: `file ledger (default): the receipts are the ledger` |
 | `intent.contract` | `contract` receipts in `docs/receipts` | none: **FAIL** `no contract recorded in docs/receipts (default file ledger)`; some: **NEED `project`** |
 | `review.verdict`, `integrate.receipt`, `release.released`, `deploy.deployed`, `observe.drill`, `learn.fulfilled` | receipts of the gate's kind, through `_attestations` | none: **FAIL** with today's message, suffixed `in docs/receipts (default file ledger)`; some: **NEED `project`**, `N <kind> receipt(s) in docs/receipts — project: says which are this repository's` |
@@ -104,7 +107,8 @@ does not guess which project they belong to.
   on something nobody declared.
 - **No change to an invalid manifest's output** (decision 4).
 - **No change when a manifest is present.** Gates, messages and scores stay identical. The
-  golden audit matrix does not move.
+  golden audit matrix is unchanged for every repository with a manifest; the manifest-less
+  fixture gains one pass (`hygiene.mirrors`, default file ledger).
 - **No change to `skipped` or to the `not_evaluated` list of PR #33.** "Not evaluated here"
   (scope) and "needs a declaration" (manifest) remain distinct.
 - **The other gates** (`hygiene.*` other than `mirrors`, `design.spec`, `plan.plan`,
@@ -117,11 +121,12 @@ does not guess which project they belong to.
    naming an observed gap or a NEED naming a manifest key. Tested at the CLI level: this is
    red's criterion, which red will run itself.
 2. `rail check` on red-alerts stays 18/18, measured on the real checkout.
-3. The existing suite and the golden audit matrix pass unchanged.
+3. The existing suite passes; the golden audit matrix passes unchanged for every repository
+   with a manifest, and the manifest-less `red-delta` row gains one pass.
 4. A manifest that declares `ledger: brain` but is invalid never reads `docs/receipts` (test).
 5. Mutation counter-proof: each of these mutants turns a test red:
-   - removing the default fallback;
+   - removing `declarations`'s default fallback for an absent manifest;
    - turning a NEED into a FAIL;
-   - letting the fallback apply to an invalid manifest;
+   - letting `declarations`'s fallback apply to an invalid manifest;
    - letting a non-`rail_config` gate mention `rail.yaml`.
 6. `rail check design` passes on this repository with this spec.
