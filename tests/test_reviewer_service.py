@@ -456,6 +456,35 @@ def test_a_rebased_head_or_the_label_gets_a_full_review_again(tmp_path: Path) ->
     assert seen == [DIFF] and not any(c[0] == "compare" for c in github.calls)
 
 
+def test_a_delta_reaching_outside_the_pull_request_gets_a_full_review(tmp_path: Path) -> None:
+    # Measured on hawkixs/red-rail#46: the base branch merged into the head brought another
+    # feature's files into compare(previous, head), and the delta pass judged them as the PR's.
+    repo, ledger = _repo(tmp_path)
+    _earlier_verdict(ledger, sha="0" * 40, check_run_id=11)
+    github = FakeGitHub(
+        compare_text=(
+            "diff --git a/src/x.py b/src/x.py\n+print(2)\n"
+            "diff --git a/docs/other.md b/docs/other.md\n+from the base branch\n"
+        )
+    )
+    seen: list[str] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        seen.append(diff)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
+    assert outcome.verdict.mode != "incremental"
+    assert seen == [DIFF]  # the whole PR diff (base...head), not the delta
+
+
 def test_the_pass_budget_fails_the_check_without_a_judge_until_relabelled(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
     policy = default_policy().model_copy(update={"max_passes_per_pr": 2})
