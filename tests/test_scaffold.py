@@ -673,6 +673,26 @@ def test_render_without_a_pin_still_calls_main(template_dir: Path, tmp_path: Pat
     assert "rail-ci.yml@main" in workflow
 
 
+@pytest.mark.parametrize(
+    "ref",
+    ["0123456789abcdef0123456789abcdef01234567", "1234567890" * 4, "main"],
+    ids=["hex-sha", "all-digit-sha", "main"],
+)
+def test_render_forwards_the_pin_to_rail_ref(template_dir: Path, tmp_path: Path, ref: str) -> None:
+    """The workflow called at `ref` must install the rail at `ref` too, or the gates float on
+    rail-ci's `main` default while the workflow reads as pinned (ticket 2a6781cb). Read as
+    GitHub reads it, parsed: an unquoted all-digit SHA would be a number, not a ref."""
+    import yaml
+
+    dest = render(_project(template_dir, tmp_path / "red-beta", slug="red-beta", rail_ref=ref))
+    workflow = yaml.safe_load(
+        (dest / ".github" / "workflows" / "continuous-integration.yml").read_text()
+    )
+    job = workflow["jobs"]["rail"]
+    assert job["uses"].endswith(f"@{ref}")
+    assert job["with"]["rail-ref"] == ref and isinstance(job["with"]["rail-ref"], str)
+
+
 def test_resolving_the_template_sha_never_falls_back_to_a_branch(tmp_path: Path) -> None:
     """A pin that quietly becomes a moving branch is worse than no pin: it reads as pinned.
     `git describe` output is refused for the same reason — `v0.4.0-44-g4c257be` resolves
