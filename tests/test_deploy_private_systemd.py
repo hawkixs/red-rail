@@ -461,9 +461,11 @@ def test_the_remote_script_runs_the_spec_sequence_in_order(tmp_path: Path) -> No
         'mv --force "$release/.red.new" "$release/red"',
         'ln -sfn "$release" "$root/current"',
         "sudo -n /usr/bin/systemctl daemon-reload",
-        # what systemd loaded, read back before the restart: no drop-in, the linked unit
+        # what systemd loaded, read back before the restart: no drop-in, the same file as
+        # current — never just a path that merely looks right
         "systemctl show --property=DropInPaths --value red-agent.service",
         "systemctl show --property=FragmentPath --value red-agent.service",
+        '"$fragment" -ef "$root/current/red-agent.service"',
         "sudo -n /usr/bin/systemctl restart red-agent.service",
         "systemctl is-active red-agent.service",
     ]
@@ -478,15 +480,15 @@ def test_the_only_privileged_commands_are_the_two_the_sudoers_file_allows(tmp_pa
         "sudo -n /usr/bin/systemctl restart red-agent.service",
     ]
     # the unit is linked at migration, never copied: the script names the link once, and only
-    # compares it with the file systemd reports having loaded
+    # compares what systemd reports having loaded against the release's own file, by identity
     lines = script.splitlines()
     assert [line for line in lines if "/etc/systemd" in line] == [
         "link=/etc/systemd/system/red-agent.service"
     ]
     assert [line.split(";")[0] for line in lines if "$link" in line] == [
-        'if [ "$fragment" != "$link" ] && [ "$fragment" != "$root/current/red-agent.service" ]',
-        '  echo "red-agent.service: systemd loads ${fragment:-no unit file}, not the released '
-        'unit linked from $link" >&2',
+        '  echo "red-agent.service: systemd loads ${fragment:-no unit file}, not the same '
+        "file as $root/current/red-agent.service — $link must be a link to it, not a copy "
+        'or a stale link" >&2',
     ]
 
 
@@ -624,16 +626,23 @@ def _run_remote(
     *,
     cp_fails: bool = False,
     dropins: str = "",
-    fragment: str = LINK,
+    fragment: str | None = None,
 ) -> tuple[subprocess.CompletedProcess, list[str], Path]:
     """The script under bash, with `docker`, `sudo` and `systemctl` stubbed on PATH. The
-    `systemctl show` stub reports `dropins` and `fragment` (default: the link of spec decision
-    6); `{root}` in `fragment` is the scratch stack root."""
+    `systemctl show` stub reports `dropins` and `fragment`; `{root}` in `fragment` is the
+    scratch stack root. Default `fragment`: a real symlink in the scratch tree standing in for
+    `/etc/systemd/system/<unit>`, itself linked to `current` — systemd 249's own way of
+    reporting a unit loaded through a link (measured), the one `-ef` must still accept."""
     if shutil.which("flock") is None or shutil.which("bash") is None:
         pytest.skip("the remote script needs bash and flock (util-linux)")
     root = tmp_path / "opt"
     repo = _systemd_repo(tmp_path / "repo", _unit_for(str(root)), stack_root=str(root))
     script = _target(repo, tmp_path).steps(_artefact(repo))[0].stdin or ""
+    if fragment is None:
+        search_path = tmp_path / "systemd-search-path" / UNIT
+        search_path.parent.mkdir()
+        search_path.symlink_to(root / "red-monitor" / "current" / UNIT)
+        fragment = str(search_path)
     stubs = tmp_path / "bin"
     stubs.mkdir()
     for name in ("docker", "sudo", "systemctl"):
@@ -709,6 +718,40 @@ def test_a_unit_loaded_from_anywhere_else_stops_the_script_before_the_restart(
     assert "systemd loads" in done.stderr and LINK in done.stderr
     if fragment:
         assert fragment in done.stderr
+    assert RESTART not in calls, "the service must not be restarted"
+
+
+def test_a_regular_file_copy_at_the_reported_path_stops_the_script_before_the_restart(
+    tmp_path: Path,
+) -> None:
+    """`systemctl edit --full` (or any hand-edit) leaves a real, ordinary file at the unit's
+    search path: `FragmentPath` then genuinely names it, a path a name-only check would accept
+    on sight. `-ef` compares the file itself against the release's (`$root/current/<unit>`),
+    so a copy is refused however faithful its reported name."""
+    copy = tmp_path / "opt" / "not-the-release" / UNIT
+    copy.parent.mkdir(parents=True)
+    copy.write_text("a hand-edited copy, not a link to current\n")
+    done, calls, _ = _run_remote(tmp_path, fragment=str(copy))
+    assert done.returncode != 0
+    assert "not the same file as" in done.stderr and str(copy) in done.stderr
+    assert RESTART not in calls, "the service must not be restarted"
+
+
+def test_a_symlink_pinned_to_an_old_release_stops_the_script_before_the_restart(
+    tmp_path: Path,
+) -> None:
+    """A link never repointed after a later release still names a real file on disk. `-ef`
+    follows it to the old release's file, not `current`'s, and refuses it even though its
+    reported path looks exactly like the one migration created."""
+    old_unit = tmp_path / "opt" / "red-monitor" / "releases" / "0.0.9" / UNIT
+    old_unit.parent.mkdir(parents=True)
+    old_unit.write_text("an old release's unit, current has since moved on\n")
+    stale_link = tmp_path / "opt" / "stale-search-path" / UNIT
+    stale_link.parent.mkdir(parents=True)
+    stale_link.symlink_to(old_unit)
+    done, calls, _ = _run_remote(tmp_path, fragment=str(stale_link))
+    assert done.returncode != 0
+    assert "not the same file as" in done.stderr
     assert RESTART not in calls, "the service must not be restarted"
 
 

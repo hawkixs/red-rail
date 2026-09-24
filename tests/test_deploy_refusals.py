@@ -201,6 +201,28 @@ def test_a_drill_that_would_apply_a_refused_artefact_never_starts(
     assert _history(case) == before
 
 
+def test_a_failed_verification_whose_rollback_is_also_refused_leaves_an_open_incident(
+    tmp_path: Path,
+) -> None:
+    """A regression guard for a path already implemented: the live release (0.1.0) is itself
+    refused under the current rules (its unit says `User=root`), and the new one (0.1.1) is
+    good but never turns healthy. `forward` cannot roll back to a release it would itself
+    refuse, so the incident stays open alone: one ssh (0.1.1's only), no `rolled_back`,
+    `deployed` or `restored` after `incident_detected`."""
+    case = _systemd(tmp_path)
+    _deployed(case, _artefact(case, "0.1.0", case.bad, D1))
+    _released(case, _artefact(case, "0.1.1", case.good, D2))
+    before = _history(case)
+    host = systemd_case.RecordingHost()
+    outcome = flow.forward(
+        case.repo, load_rail_config(case.repo), _ledger(case), target=case.build(host)
+    )
+    assert len(_ssh(host)) == 1, "only the new release may reach the machine"
+    assert _history(case) == [*before, "incident_detected"]
+    assert outcome.failed is not None and "failed" in outcome.failed
+    assert "the rollback to 0.1.0 failed too" in outcome.failed
+
+
 def _forget_the_ssh_host(repo: Path) -> None:
     manifest = yaml.safe_load((repo / "rail.yaml").read_text())
     del manifest["gates"]["deploy.ssh_host"]

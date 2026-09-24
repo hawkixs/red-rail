@@ -309,8 +309,13 @@ def loaded_unit_checks(unit: str) -> list[str]:
     one at all. Either way `MemoryMax=`, `TimeoutStopSec=` and the hardening would drift
     outside the rail (spec decision 3), so the script stops before the restart.
 
-    systemd reports a unit linked from outside its search path as the link itself (measured
-    on systemd 249) or, on other versions, as the file the link names: both are accepted.
+    `FragmentPath` names a path, not a file: a regular file left at `$link` (`systemctl edit
+    --full`) or `$link` itself pinned to an old release both print as `$link` under systemd
+    249's own reporting quirk (measured) — a name this check would otherwise accept on sight,
+    since every released unit's `ExecStart` already points at `<current>/<binary>` and cannot
+    tell the difference from the outside. `-ef` settles it by device and inode against the
+    released file itself, `$root/current/<unit>`, and follows a symlink to do it, so a stale
+    link pinned to an old release is still caught even though its name looks exactly right.
     `unit` is model-validated (`UNIT_NAME_PATTERN`), so it needs no quoting."""
     return [
         f"dropins=$(systemctl show --property=DropInPaths --value {unit})",
@@ -320,9 +325,9 @@ def loaded_unit_checks(unit: str) -> list[str]:
         "fi",
         f"link=/etc/systemd/system/{unit}",
         f"fragment=$(systemctl show --property=FragmentPath --value {unit})",
-        f'if [ "$fragment" != "$link" ] && [ "$fragment" != "$root/current/{unit}" ]; then',
-        f'  echo "{unit}: systemd loads ${{fragment:-no unit file}}, not the released unit '
-        'linked from $link" >&2',
+        f'if ! [ "$fragment" -ef "$root/current/{unit}" ]; then',
+        f'  echo "{unit}: systemd loads ${{fragment:-no unit file}}, not the same file as '
+        f'$root/current/{unit} — $link must be a link to it, not a copy or a stale link" >&2',
         "  exit 1",
         "fi",
     ]
