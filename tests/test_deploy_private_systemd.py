@@ -108,6 +108,28 @@ def test_the_parser_reads_sections_keys_and_continuations() -> None:
             "EnvironmentFile=/opt/red-monitor/current/release.env\nEnvironmentFile=\n",
             "EnvironmentFile=",
         ),
+        # --- fix round 2: keys and values keep every whitespace systemd keeps (task-4-fix-2.md) ---
+        (
+            "Type=simple\n",
+            "Type=simple\nExecStartPre=+/bin/sh\nExecStartPre=\xa0\n",
+            "full privileges",
+        ),
+        (
+            "Type=simple\n",
+            "Type=simple\nExecStartPre=+/bin/sh\nExecStartPre=\x0c\n",
+            "full privileges",
+        ),
+        (
+            "Type=simple\n",
+            "Type=simple\nExecStartPre=+/bin/sh\nExecStartPre=\x0b\n",
+            "full privileges",
+        ),
+        ("User=red-monitor\n", "User\xa0=red-monitor\n", "User="),
+        ("MemoryMax=64M\n", "MemoryMax\x0b=64M\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=64M\xa0\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=99999999999999999999\n", "MemoryMax="),
+        # --- fix round 2, own finding: word-splitting also keeps every whitespace systemd keeps ---
+        ("current/red agent", "current/red\xa0agent", "ExecStart="),
     ],
 )
 def test_each_rule_refuses_the_unit_and_says_which(old: str, new: str, rule: str) -> None:
@@ -188,3 +210,18 @@ def test_a_vertical_tab_is_not_a_systemd_line_break() -> None:
     also breaks on `\\v`, which would wrongly cut a value in the middle."""
     unit = parse_unit("[Service]\nExecStart=/bin/a\x0b/bin/b\n")
     assert unit["Service"]["ExecStart"] == ["/bin/a\x0b/bin/b"]
+
+
+def test_good_with_crlf_line_ends_is_still_accepted() -> None:
+    """Fix round 2: CRLF line endings are ordinary for systemd, not a way past the parser."""
+    assert _refusals(GOOD.replace("\n", "\r\n")) == []
+
+
+def test_parse_unit_keeps_unicode_whitespace_in_keys_and_values() -> None:
+    """Fix round 2 (task-4-fix-2.md): `parse_unit` strips a key or a value with `" \\t"` only,
+    the same set `_logical_lines` uses, never `str.strip()` with no argument. `User\\xa0` is then
+    an unknown key, not `User` with cosmetic padding, and a lone `\\xa0` value is non-empty, not
+    the empty value that resets a list."""
+    unit = parse_unit("[Service]\nUser\xa0=x\nExecStartPre=+/bin/sh\nExecStartPre=\xa0\n")
+    assert "User" not in unit["Service"]
+    assert unit["Service"]["ExecStartPre"] == ["+/bin/sh", "\xa0"]

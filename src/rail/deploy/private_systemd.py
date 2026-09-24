@@ -53,14 +53,19 @@ _UNSAFE_IN_COMMAND = frozenset("\"'\\")
 
 # Plain POSIX usernames only: refuses `%u`/`%U` specifiers, numeric ids and empty values.
 _USERNAME = re.compile(r"^[a-z_][a-z0-9_-]*$")
-# A byte count with at most one K/M/G/T/P/E suffix: refuses `infinity`, `max`, `100%`, and a
-# multi-letter or lower-case suffix systemd does not recognise (`64MB`, `512m`).
-_MEMORY = re.compile(r"^[1-9][0-9]*[KMGTPE]?$")
+# A byte count with at most one K/M/G/T suffix: refuses `infinity`, `max`, `100%`, and a
+# multi-letter or lower-case suffix systemd does not recognise (`64MB`, `512m`). The bound
+# below catches a count that fullmatches this but is too large for systemd to accept.
+_MEMORY = re.compile(r"^(?P<digits>[1-9][0-9]*)(?P<suffix>[KMGT])?$")
+_MEMORY_MULTIPLIER = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+_MEMORY_MAX_BYTES = 2**62
 # A single positive duration token: refuses `0`, any zero-length span, `infinity`, and a
 # multi-part span systemd would otherwise accept (`1min 30s`).
 _DURATION = re.compile(r"^[1-9][0-9]*(?:ms|s|sec|m|min)?$")
 
 _LINE_BREAK = re.compile(r"\r\n|\r|\n")
+# Command-line words as systemd splits them: runs of ASCII space and tab only.
+_WORD_BREAK = re.compile(r"[ \t]+")
 
 
 def _logical_lines(text: str) -> Iterator[str]:
@@ -95,7 +100,13 @@ def parse_unit(text: str) -> dict[str, dict[str, list[str]]]:
     """Section → key → values, in file order. Only what the refusals read is modelled: this is
     not a systemd parser and does not pretend to be one. A section name is taken verbatim, with
     no stripping — `[ Service ]` is a different, unknown section, not `[Service]` with cosmetic
-    padding, matching systemd's own exact-name lookup."""
+    padding, matching systemd's own exact-name lookup. A key and a value are stripped of spaces
+    and tabs only — the same set `_logical_lines` strips content with, never `str.strip()` with
+    no argument: systemd itself only ever strips ASCII space and tab from an lvalue or rvalue, so
+    a key or value carrying any other whitespace (a NO-BREAK SPACE, a form feed, a vertical tab)
+    must be kept verbatim. `User\\xa0` is then an unknown key, not `User` with cosmetic padding
+    (so `User=` reads as missing); a lone `\\xa0` value is non-empty, not the empty value that
+    resets a list."""
     sections: dict[str, dict[str, list[str]]] = {}
     section: dict[str, list[str]] | None = None
     for line in _logical_lines(text):
@@ -103,7 +114,7 @@ def parse_unit(text: str) -> dict[str, dict[str, list[str]]]:
             section = sections.setdefault(line[1:-1], {})
         elif section is not None and "=" in line:
             key, _, value = line.partition("=")
-            section.setdefault(key.strip(), []).append(value.strip())
+            section.setdefault(key.strip(" \t"), []).append(value.strip(" \t"))
     return sections
 
 
@@ -124,9 +135,29 @@ def _prefix(value: str) -> str:
     return value[:end]
 
 
+def _words(value: str) -> list[str]:
+    """Command-line words as systemd splits them: runs of ASCII space and tab only — never
+    `str.split()` with no argument, whose wider Unicode definition also breaks on `\\xa0`,
+    `\\x0b`, .... A word boundary this check sees but systemd does not would let a value that is
+    really one unbroken (and most likely non-existent) path read as if it were the release
+    binary followed by an argument, or hide a `;`-separated second command inside what systemd
+    reads as a single word."""
+    return [word for word in _WORD_BREAK.split(value) if word]
+
+
 def _program(value: str) -> str:
-    words = value[len(_prefix(value)) :].split()
+    words = _words(value[len(_prefix(value)) :])
     return words[0] if words else ""
+
+
+def _memory_ok(value: str) -> bool:
+    """Whether `value` is a byte count systemd would accept for `MemoryMax=`: digits with an
+    optional K/M/G/T suffix, no larger than `_MEMORY_MAX_BYTES` bytes."""
+    match = _MEMORY.fullmatch(value)
+    if match is None:
+        return False
+    suffix = match.group("suffix") or ""
+    return int(match.group("digits")) * _MEMORY_MULTIPLIER[suffix] <= _MEMORY_MAX_BYTES
 
 
 def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> list[str]:
@@ -154,10 +185,10 @@ def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> li
             f"{unit}: MemoryMax= must bound the service, the host has no swap (no value set)"
         )
     refusals.extend(
-        f"{unit}: MemoryMax={value} must be a byte count with an optional K/M/G/T/P/E suffix, "
-        f"e.g. 64M (got {value!r})"
+        f"{unit}: MemoryMax={value} must be a byte count with an optional K/M/G/T suffix, at "
+        f"most {_MEMORY_MAX_BYTES} bytes, e.g. 64M (got {value!r})"
         for value in memory_values
-        if not _MEMORY.fullmatch(value)
+        if not _memory_ok(value)
     )
 
     # `TimeoutSec=` is a shorthand that sets the start AND the stop timeout, so a bad value
@@ -188,7 +219,7 @@ def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> li
 
     for key in _COMMAND_KEYS:
         for value in _effective(service.get(key, [])):
-            if _UNSAFE_IN_COMMAND & set(value) or ";" in value.split():
+            if _UNSAFE_IN_COMMAND & set(value) or ";" in _words(value):
                 refusals.append(
                     f"{unit}: {key}={value} systemd would read a different command than this "
                     "check sees (quoting, a backslash or a `;` separator)"
