@@ -1,0 +1,25 @@
+# Strict by default. Every widening, a licence, a source or an advisory ignored, is a reviewed
+# line here.
+
+[advisories]
+# vulnerabilities always fail; a yanked crate fails too
+yanked = "deny"
+# unmaintained crates fail for direct dependencies only: a deep transitive one is not ours to fix
+unmaintained = "workspace"
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0"]
+# this project's own crates are `publish = false` and carry no licence
+private = { ignore = true }
+unused-allowed-license = "allow"
+
+[bans]
+wildcards = "deny"
+# members are path dependencies
+allow-wildcard-paths = true
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

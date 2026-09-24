@@ -1199,3 +1199,98 @@ def test_every_rendered_settings_file_parses_and_allows_cargo_for_rust_only(
 ) -> None:
     allow = json.loads((renders[combo] / ".claude" / "settings.json").read_text())
     assert ("Bash(cargo:*)" in allow["permissions"]["allow"]) is (combo.stack is Stack.RUST)
+
+
+RUST_TOOLCHAIN = "1.98.1"  # latest stable on 2026-09-24 (spec 2026-09-24-rust-stack, decision 3)
+DENY_LICENCES = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0"}
+
+
+def _dry_run(dest: Path, *args: str) -> list[str]:
+    """`make -n`: the recipes make would run, in order, executing none of them."""
+    make = shutil.which("make")
+    assert make, "make is required: the Makefile is read by make itself"
+    done = subprocess.run([make, "-n", *args], cwd=dest, capture_output=True, text=True, check=True)
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+
+
+def _after(lines: list[str], *needles: str) -> None:
+    """Each needle appears in a later line than the previous one."""
+    position = -1
+    for needle in needles:
+        index = next((i for i, line in enumerate(lines) if i > position and needle in line), None)
+        assert index is not None, f"{needle!r} missing or out of order in {lines}"
+        position = index
+
+
+def test_render_rust_bootstrap(template_dir: Path, tmp_path: Path) -> None:
+    import tomllib
+
+    dest = render(
+        _project(template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.RUST)
+    )
+
+    cargo = tomllib.loads((dest / "Cargo.toml").read_text())
+    assert cargo["package"]["name"] == "red-throwaway"
+    assert cargo["package"]["edition"] == "2024"
+    assert cargo["package"]["publish"] is False
+    assert cargo["workspace"] == {}
+    assert "rust-version" not in cargo["package"]
+
+    toolchain = tomllib.loads((dest / "rust-toolchain.toml").read_text())["toolchain"]
+    assert toolchain["channel"] == RUST_TOOLCHAIN
+    assert re.fullmatch(r"\d+\.\d+\.\d+", toolchain["channel"])
+    assert {"rustfmt", "clippy"} <= set(toolchain["components"])
+    assert toolchain["profile"] == "minimal"
+
+    deny = tomllib.loads((dest / "deny.toml").read_text())
+    assert set(deny["licenses"]["allow"]) == DENY_LICENCES
+    assert deny["licenses"]["private"]["ignore"] is True
+    assert deny["licenses"]["unused-allowed-license"] == "allow"
+    assert deny["sources"]["unknown-registry"] == "deny"
+    assert deny["sources"]["unknown-git"] == "deny"
+    assert deny["advisories"]["yanked"] == "deny"
+    assert deny["advisories"]["unmaintained"] == "workspace"
+    assert deny["bans"]["wildcards"] == "deny"
+    assert deny["bans"]["allow-wildcard-paths"] is True
+    assert deny["bans"]["multiple-versions"] == "warn"
+
+    # Review Focus 1: Cargo keeps the hyphen in a bin target's name
+    smoke = (dest / "tests" / "smoke.rs").read_text()
+    assert 'env!("CARGO_BIN_EXE_red-throwaway")' in smoke
+    assert '"red-throwaway"' in (dest / "src" / "main.rs").read_text()
+
+    ignored = (dest / ".gitignore").read_text().splitlines()
+    assert "target/" in ignored and ".cargo-tools/" in ignored
+    assert not any("Cargo.lock" in line for line in ignored)
+
+    claude = (dest / "CLAUDE.md").read_text()
+    stack = claude.split("## Stack", 1)[1].split("## Commands", 1)[0]
+    for needle in ("edition 2024", "rust-toolchain.toml", "-D warnings"):
+        assert needle in stack, needle
+    assert "cargo test --locked" in stack and "cargo deny check" in stack
+    structure = claude.split("## Structure", 1)[1]
+    for entry in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deny.toml", "src/main.rs"):
+        assert f"── {entry}" in structure, entry
+    assert "└── tests/" in structure
+    agents = (dest / "AGENTS.md").read_text()
+    gates = agents.split("## Gates", 1)[1].split("## Brain MCP", 1)[0]
+    assert gates.index("`make sync` first") < gates.index("Then `make ci`")
+
+    assert not (dest / "pyproject.toml").exists() and not (dest / "go.mod").exists()
+    assert not (dest / "src" / "red_throwaway" / "__init__.py").exists()
+
+    _after(
+        _dry_run(dest, "ci", "RAIL_FLAGS=--ci"),
+        "fmt --all --check",
+        "clippy --workspace --all-targets --all-features -- -D warnings",
+        "test --workspace --locked",
+        "deny check",
+        "rail check --ci",
+    )
+    _after(
+        _dry_run(dest, "sync"),
+        "cargo fetch",
+        "cargo install cargo-deny --locked --version 0.20.2 --root .cargo-tools",
+    )
+    locked = _dry_run(dest, "sync", "LOCKED=--locked")
+    assert any(line.startswith("cargo fetch --locked") for line in locked)

@@ -1,0 +1,13 @@
+//! The binary runs and names its project: an integration test, since a binary crate has no
+//! library to import.
+
+use std::process::Command;
+
+#[test]
+fn the_binary_runs_and_names_the_project() {
+    let output = Command::new(env!("CARGO_BIN_EXE_{{ project }}"))
+        .output()
+        .expect("the binary runs");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "{{ project }}");
+}
