@@ -990,6 +990,33 @@ def test_rendered_guidance_points_at_the_root(renders: dict[Combo, Path], combo:
             assert target.value not in agents, f"AGENTS.md names the private {target.value}"
 
 
+GITIGNORED = {
+    Stack.PYTHON: [
+        "__pycache__/",
+        "*.py[cod]",
+        ".pytest_cache/",
+        ".ruff_cache/",
+        ".venv/",
+        "build/",
+        "dist/",
+        "*.egg-info/",
+    ],
+    Stack.GO: ["bin/"],
+    Stack.RUST: ["target/", ".cargo-tools/"],
+    Stack.DOCS: [],
+}
+
+
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
+def test_rendered_gitignore_keeps_one_entry_per_line(
+    renders: dict[Combo, Path], combo: Combo
+) -> None:
+    """The stack chain's whitespace control never glues the last stack entry to `.env`."""
+    rendered = (renders[combo] / ".gitignore").read_text()
+    assert rendered.splitlines() == [*GITIGNORED[combo.stack], ".env"]
+    assert rendered.endswith(".env\n")
+
+
 def test_agents_md_does_not_depend_on_tier_ledger_or_target(renders: dict[Combo, Path]) -> None:
     """Copier answers freeze at scaffold time and nothing re-answers `tier` on promotion, so
     the invariant rows are unconditional, each prefixed by the value it applies to (decision
