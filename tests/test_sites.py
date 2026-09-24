@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from rail.deploy import DeployError
-from rail.deploy.sites import load_site, redact_address, sites_file, substitute_address
+from rail.deploy.sites import SiteBinding, load_site, redact_address, sites_file, substitute_address
 
 V4 = "192.0.2.10"  # RFC 5737 and RFC 3849: documentation addresses only
 V6 = "2001:db8::10"
@@ -185,3 +185,10 @@ def test_ipv6_redaction_takes_the_brackets_and_ignores_case() -> None:
         "GET http://private-6:9204/healthz failed; "
         "ssh: connect to host private-6 port 22; 2001:db8::100 is another host"
     )
+
+
+def test_a_binding_fills_urls_and_redacts_with_the_site_name(tmp_path: Path) -> None:
+    path = _sites(tmp_path, f'sites:\n  private-1:\n    address: "{V4}"\n')
+    binding = SiteBinding.load("private-1", path)
+    assert binding.fill("http://${BIND_ADDRESS}:9100/health") == f"http://{V4}:9100/health"
+    assert binding.redact(f"connect to host {V4} port 22") == "connect to host private-1 port 22"

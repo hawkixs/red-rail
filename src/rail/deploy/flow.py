@@ -37,15 +37,22 @@ class Target(Protocol):
     def redact(self, text: str) -> str: ...
 
 
-def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
-    """The manifest names the shape; the flows never branch on it again."""
+def implementations() -> dict[DeployTarget, type]:
+    """Every shape the rail can build, by the manifest value that names it."""
     from rail.deploy.private_compose import PrivateCompose
+    from rail.deploy.private_systemd import PrivateSystemd
     from rail.deploy.vps_traefik import VpsTraefik
 
-    implemented: dict[DeployTarget, type] = {
+    return {
         DeployTarget.VPS_TRAEFIK: VpsTraefik,
         DeployTarget.PRIVATE_COMPOSE: PrivateCompose,
+        DeployTarget.PRIVATE_SYSTEMD: PrivateSystemd,
     }
+
+
+def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
+    """The manifest names the shape; the flows never branch on it again."""
+    implemented = implementations()
     shape = implemented.get(cfg.deploy.target) if cfg.deploy else None
     if shape is None:
         name = cfg.deploy.target.value if cfg.deploy else "none"
@@ -177,6 +184,17 @@ def previous_artefact(ledger: Ledger, project: str, other_than: str) -> Artefact
     return None
 
 
+def build_or_refuse(target: Target, *artefacts: Artefact) -> None:
+    """Build the remote step of every artefact a flow is about to apply, before its first
+    side effect. A target refuses what it will not ship (a unit, a compose file) while it
+    builds that step, so the refusal propagates from here as a plain `DeployError`: no
+    attestation, no incident, no rollback, nothing on the machine (spec
+    2026-09-24-private-systemd-target, success criterion 2). Caught inside a flow, the same
+    refusal would be taken for a failed deployment and answered with a rollback over ssh."""
+    for artefact in artefacts:
+        target.steps(artefact)
+
+
 def deployed_data(
     artefact: Artefact, *, mode: str, domain: str, previous: Artefact | None
 ) -> dict[str, Any]:
@@ -206,6 +224,10 @@ def forward(
     attester = Attester(ledger, cfg.project, cfg.deploy.target.value, issuer, redact=target.redact)
     artefact = newest_release(ledger, cfg.project, version)
     previous = previous_artefact(ledger, cfg.project, artefact.digest)
+    # the previous artefact is not built here: it is applied only if this one fails, and a
+    # refusal of it then fails that rollback, before its ssh, without blocking a deployment
+    # that may be the fix
+    build_or_refuse(target, artefact)
     try:
         live = target.apply(artefact)
     except Locked:
@@ -313,6 +335,7 @@ def rollback(
     previous = previous_artefact(ledger, cfg.project, live.digest) if live else None
     if live is None or previous is None:
         raise DeployError("nothing to roll back to: the ledger names no earlier deployed artefact")
+    build_or_refuse(target, previous)
     started = clock()
     try:
         restored = target.apply(previous)
@@ -386,6 +409,7 @@ def drill(
     previous = previous_artefact(ledger, cfg.project, live.digest) if live else None
     if live is None or previous is None:
         raise DeployError("a drill needs two deployed artefacts: deploy a second release first")
+    build_or_refuse(target, previous, live)  # the rollback, then the roll-forward
     started = clock()
     attester.attest(
         AttestationKind.INCIDENT_DETECTED,

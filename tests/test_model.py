@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from rail.model import LedgerBackend, RailConfig, Stack, Tier, load_rail_config
+from rail.model import DeployTarget, LedgerBackend, RailConfig, Stack, Tier, load_rail_config
 
 MINIMAL = {
     "rail": 1,
@@ -155,7 +155,7 @@ def test_a_site_is_refused_on_a_public_target() -> None:
         "site": "private-1",
         "healthcheck": "https://probe.hawkixs.com/healthz",
     }
-    with pytest.raises(ValidationError, match="private-compose only"):
+    with pytest.raises(ValidationError, match="a private target"):
         RailConfig.model_validate(_prod(public))
 
 
@@ -206,3 +206,87 @@ def test_without_a_site_a_declared_bind_address_still_works() -> None:
     declared = {"target": "private-compose", "healthcheck": "http://192.0.2.10:9204/healthz"}
     cfg = RailConfig.model_validate(_prod(declared, gates))
     assert cfg.deploy is not None and cfg.deploy.site is None
+
+
+# -- private-systemd (spec 2026-09-24-private-systemd-target) ----------------------------
+
+SYSTEMD_DEPLOY = {
+    "target": "private-systemd",
+    "site": "private-1",
+    "healthcheck": "http://${BIND_ADDRESS}:9100/health",
+    "unit": "deploy/red-agent.service",
+    "binary": "/usr/local/bin/red",
+}
+
+
+def test_a_systemd_target_names_its_unit_and_its_binary() -> None:
+    cfg = RailConfig.model_validate(_prod(SYSTEMD_DEPLOY))
+    assert cfg.deploy is not None and cfg.deploy.target is DeployTarget.PRIVATE_SYSTEMD
+    assert cfg.deploy.unit == "deploy/red-agent.service"
+    assert cfg.deploy.binary == "/usr/local/bin/red"
+
+
+@pytest.mark.parametrize("missing", ["unit", "binary"])
+def test_a_systemd_target_without_its_unit_or_binary_is_refused(missing: str) -> None:
+    deploy = {key: value for key, value in SYSTEMD_DEPLOY.items() if key != missing}
+    with pytest.raises(ValidationError, match=f"deploy.{missing} is required"):
+        RailConfig.model_validate(_prod(deploy))
+
+
+@pytest.mark.parametrize("field", ["unit", "binary"])
+def test_a_compose_target_refuses_a_unit_or_a_binary(field: str) -> None:
+    with pytest.raises(ValidationError, match=f"deploy.{field} applies"):
+        RailConfig.model_validate(_prod({**SITE_DEPLOY, field: SYSTEMD_DEPLOY[field]}))
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "/etc/systemd/system/red-agent.service",  # absolute: outside the repository
+        "deploy/../red-agent.service",  # escapes through `..`
+        "deploy/red-agent.timer",  # not a service
+        "deploy/red_agent.service",  # not a plain unit name
+        "deploy/red-agent@.service",  # a template
+        "deploy/red agent.service",  # a space would reach the remote script
+    ],
+)
+def test_the_unit_is_a_plain_service_file_inside_the_repository(unit: str) -> None:
+    with pytest.raises(ValidationError, match="deploy.unit must be"):
+        RailConfig.model_validate(_prod({**SYSTEMD_DEPLOY, "unit": unit}))
+
+
+@pytest.mark.parametrize(
+    "binary",
+    [
+        "usr/local/bin/red",  # relative
+        "/usr/local/bin/../red",  # a `..` component
+        "/usr/local/bin/",  # no file name
+        "/usr/local/bin/r d",  # a space would reach the remote script
+        "/opt/$(id)",  # a substitution would too
+    ],
+)
+def test_the_binary_is_an_absolute_path_of_safe_characters(binary: str) -> None:
+    with pytest.raises(ValidationError, match="deploy.binary must be"):
+        RailConfig.model_validate(_prod({**SYSTEMD_DEPLOY, "binary": binary}))
+
+
+@pytest.mark.parametrize(
+    "binary",
+    ["/usr/local/bin/red-agent.service", "/usr/local/bin/release.env"],
+    ids=["the-unit", "release-env"],
+)
+def test_the_binary_never_takes_the_name_of_a_file_the_release_holds(binary: str) -> None:
+    """The release directory holds the binary, the unit and `release.env` side by side, by
+    file name: a binary named like either would overwrite the file the rail checked or wrote."""
+    with pytest.raises(ValidationError, match="would overwrite"):
+        RailConfig.model_validate(_prod({**SYSTEMD_DEPLOY, "binary": binary}))
+
+
+def test_a_site_is_accepted_on_the_systemd_target_too() -> None:
+    cfg = RailConfig.model_validate(_prod(SYSTEMD_DEPLOY))
+    assert cfg.deploy is not None and cfg.deploy.site == "private-1"
+
+
+def test_the_retired_target_name_no_longer_loads() -> None:
+    with pytest.raises(ValidationError, match="pc-server-systemd"):
+        RailConfig.model_validate(_prod({**SITE_DEPLOY, "target": "pc-server-systemd"}))

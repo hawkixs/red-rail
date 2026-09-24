@@ -567,6 +567,59 @@ def test_visible_names_a_deployed_record_without_digest(
     assert not result.passed and "carries no digest" in result.details
 
 
+def _systemd_deployed_tree(tmp_path: Path) -> Path:
+    repo = _deployed_tree(tmp_path)
+    manifest = (
+        (repo / "rail.yaml")
+        .read_text()
+        .replace(
+            "  target: vps-traefik\n",
+            "  target: private-systemd\n  unit: deploy/red-agent.service\n"
+            "  binary: /usr/local/bin/red\n",
+        )
+    )
+    (repo / "rail.yaml").write_text(manifest)
+    return repo
+
+
+@pytest.mark.parametrize(
+    ("units", "passed", "detail"),
+    [
+        (
+            (monitor.Unit("red-agent.service", "active", "running"),),
+            True,
+            "unit red-agent.service active/running on vps",
+        ),
+        (
+            (monitor.Unit("red-agent.service", "failed", "failed"),),
+            False,
+            "unit red-agent.service on agent vps is failed/failed",
+        ),
+        # active but no longer running: a check of the active state alone would pass it
+        (
+            (monitor.Unit("red-agent.service", "active", "exited"),),
+            False,
+            "unit red-agent.service on agent vps is active/exited",
+        ),
+        # review focus 5: an agent that reports no systemd rows at all
+        ((), False, "red-monitor lists no unit red-agent.service on agent vps"),
+    ],
+)
+def test_visible_reads_the_unit_on_a_systemd_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    units: tuple[monitor.Unit, ...],
+    passed: bool,
+    detail: str,
+) -> None:
+    _sites(monkeypatch, tmp_path, f'sites:\n  red-monitor:\n    address: "{MONITOR}"\n')
+    repo = _systemd_deployed_tree(tmp_path)
+    view = AgentView(agent="vps", status="up", last_seen=T0, containers=(), units=units)
+    monkeypatch.setattr(monitor, "read_agent", lambda base_url, agent, **kwargs: view)
+    result = visible(repo)
+    assert result.passed is passed and detail in result.details, result.details
+
+
 def test_verdict_refuses_a_review_that_did_not_see_the_whole_change(tmp_path: Path) -> None:
     """The reviewer truncates a diff past `max_diff_chars`, records `diff_truncated: true`
     and even writes it into the review body — and the gate read none of it. Measured on the

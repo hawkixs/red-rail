@@ -29,6 +29,21 @@ ADDRESS_TOKEN = "${BIND_ADDRESS}"
 # `other.example`. An optional port is now the only thing allowed between the token and the
 # next path/query/fragment boundary or the end of the string.
 _TOKEN_HOST = re.compile(rf"^https?://{re.escape(ADDRESS_TOKEN)}(?::\d+)?(?=[/?#]|\Z)")
+# A unit file inside the repository: relative, no `.`/`..` segment, and a plain service name
+# (no template, no timer). The file name is the unit's name for systemd and for the sudoers
+# rule alike.
+UNIT_NAME_PATTERN = r"[a-z0-9]+(?:-[a-z0-9]+)*\.service"
+_UNIT_PATH = re.compile(rf"^(?:[A-Za-z0-9._-]+/)*{UNIT_NAME_PATTERN}$")
+# The binary's path inside the released image: absolute and of safe characters, because it
+# reaches the remote script.
+_BINARY_PATH = re.compile(r"^(?:/[A-Za-z0-9._-]+)+$")
+# What a systemd release carries next to the binary and the unit: the values `/version`
+# answers, read through the unit's `EnvironmentFile=`.
+RELEASE_ENV = "release.env"
+
+
+def _has_dot_segment(path: str) -> bool:
+    return any(part in {".", ".."} for part in path.split("/"))
 
 
 def token_is_the_host(url: str) -> bool:
@@ -61,7 +76,10 @@ class LedgerBackend(StrEnum):
 class DeployTarget(StrEnum):
     VPS_TRAEFIK = "vps-traefik"
     PRIVATE_COMPOSE = "private-compose"
-    PC_SERVER_SYSTEMD = "pc-server-systemd"
+    PRIVATE_SYSTEMD = "private-systemd"
+
+
+PRIVATE_TARGETS = frozenset({DeployTarget.PRIVATE_COMPOSE, DeployTarget.PRIVATE_SYSTEMD})
 
 
 class DeployConfig(BaseModel):
@@ -70,11 +88,15 @@ class DeployConfig(BaseModel):
     target: DeployTarget
     healthcheck: str = Field(pattern=r"^https?://")
     site: str | None = Field(default=None, pattern=SITE_PATTERN)
+    unit: str | None = None  # private-systemd: the unit file, read at the released commit
+    binary: str | None = None  # private-systemd: the binary's path inside the released image
 
     @model_validator(mode="after")
     def _a_site_and_its_token_go_together(self) -> DeployConfig:
-        if self.site is not None and self.target is not DeployTarget.PRIVATE_COMPOSE:
-            raise ValueError("deploy.site applies to target private-compose only")
+        if self.site is not None and self.target not in PRIVATE_TARGETS:
+            raise ValueError(
+                "deploy.site applies to a private target only (private-compose, private-systemd)"
+            )
         if self.site is None and ADDRESS_TOKEN in self.healthcheck:
             raise ValueError(
                 f"deploy.healthcheck uses {ADDRESS_TOKEN} but no deploy.site says whose "
@@ -85,6 +107,41 @@ class DeployConfig(BaseModel):
                 f"behind deploy.site the healthcheck host is {ADDRESS_TOKEN}, filled from the "
                 f"host's sites file (got {self.healthcheck})"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _a_systemd_target_names_its_unit_and_its_binary(self) -> DeployConfig:
+        systemd = self.target is DeployTarget.PRIVATE_SYSTEMD
+        for name, value in (("unit", self.unit), ("binary", self.binary)):
+            if systemd and value is None:
+                raise ValueError(f"deploy.{name} is required by target private-systemd")
+            if not systemd and value is not None:
+                raise ValueError(f"deploy.{name} applies to target private-systemd only")
+        if self.unit is not None and (
+            not _UNIT_PATH.fullmatch(self.unit) or _has_dot_segment(self.unit)
+        ):
+            raise ValueError(
+                "deploy.unit must be a relative path inside the repository to a plain service "
+                f"file ({UNIT_NAME_PATTERN}), got {self.unit!r}"
+            )
+        if self.binary is not None and (
+            not _BINARY_PATH.fullmatch(self.binary) or _has_dot_segment(self.binary)
+        ):
+            raise ValueError(
+                "deploy.binary must be an absolute path of safe characters inside the image, "
+                f"got {self.binary!r}"
+            )
+        if self.unit is not None and self.binary is not None:
+            # the release directory holds the binary, the unit and `release.env` side by side
+            # (spec 2026-09-24-private-systemd-target, decision 4), each under its file name
+            name = self.binary.rsplit("/", 1)[-1]
+            held = {self.unit.rsplit("/", 1)[-1]: "the unit", RELEASE_ENV: RELEASE_ENV}
+            if name in held:
+                raise ValueError(
+                    f"deploy.binary is copied into the release as {name!r}, which would "
+                    f"overwrite {held[name]}: the binary's file name must differ from the "
+                    f"unit's and from {RELEASE_ENV}"
+                )
         return self
 
 
