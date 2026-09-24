@@ -1099,3 +1099,63 @@ def test_rendered_files_carry_no_address_literal(renders: dict[Combo, Path]) -> 
     assert not offenders, "address literals in rendered files: " + ", ".join(offenders)
     private = [d for c, d in renders.items() if c.target == DeployTarget.PRIVATE_COMPOSE]
     assert private and all("192.0.2.10" in (d / "rail.yaml").read_text() for d in private)
+
+
+# -- red-rail's own guidance follows its template (spec 2026-09-24-template-alignment, D8/D13) --
+
+_KEY_CLASS = BRAIN_KEY.pattern.removeprefix("^").removesuffix("$")  # the validator's own class
+SESSION_START = re.compile(
+    rf'brain_session_start\("(?P<k>{_KEY_CLASS})", client_key="<harness>-(?P=k)-<YYYY-MM-DD>"\)'
+)
+
+
+def _unkeyed_session_starts(text: str) -> list[str]:
+    """Each `brain_session_start(` that does not open decision 8's call, as its line."""
+    return [
+        text[match.start() :].split("\n", 1)[0]
+        for match in re.finditer(r"brain_session_start\(", text)
+        if not SESSION_START.match(text, match.start())
+    ]
+
+
+def test_the_session_start_check_refuses_a_bare_or_mismatched_call() -> None:
+    assert _unkeyed_session_starts('brain_session_start("red-rail")')
+    assert _unkeyed_session_starts(
+        'brain_session_start("red-rail", client_key="<harness>-red-alpha-<YYYY-MM-DD>")'
+    )
+    assert not _unkeyed_session_starts(
+        'brain_session_start("auto_discord", client_key="<harness>-auto_discord-<YYYY-MM-DD>")'
+    )
+
+
+@pytest.mark.parametrize(
+    "combo", [*COMBOS, None], ids=[*(c.label for c in COMBOS), "red-rail-itself"]
+)
+def test_every_brain_session_start_carries_a_client_key(
+    renders: dict[Combo, Path], combo: Combo | None
+) -> None:
+    """One `client_key` form everywhere (decision 8), on every render and on red-rail's own
+    two files, checked with the same class the key validator accepts."""
+    tree = ROOT if combo is None else renders[combo]
+    for name in GUIDANCE:
+        text = (tree / name).read_text()
+        assert "brain_session_start(" in text, f"{name}: no session-start example"
+        assert not _unkeyed_session_starts(text), f"{name}: {_unkeyed_session_starts(text)}"
+
+
+def test_red_rails_own_guidance_follows_its_template() -> None:
+    """red-rail dogfoods its template (decision 13): the root pointer instead of a skill
+    pipeline, the "Where things live" table, and `AGENTS.md` reaching the root through
+    "Parent project" rather than a relative path that breaks from a nested worktree."""
+    claude = (ROOT / "CLAUDE.md").read_text()
+    agents = (ROOT / "AGENTS.md").read_text()
+    for title in ROOT_TITLES:
+        assert f'§ "{title}"' in claude, title
+    assert "## Where things live\n\n| Question | Where to look |\n|---|---|\n" in claude
+    assert "## Working principles" not in claude
+    assert "`rail check` passes on this repository" in claude
+    assert "`pre-review.js` must pass" in claude
+    for stale in STALE:
+        assert stale not in claude and stale not in agents, stale
+    assert "../../AGENTS.md" not in agents
+    assert 'names as "Parent project"' in agents

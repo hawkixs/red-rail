@@ -163,6 +163,21 @@ red-rail/
   makes the gate require it and the release push to it.
   `hawkixs/red-rail` is public (Apache-2.0) since the same day: every project's CI installs
   `rail` without a token.
+
+## Where things live
+
+| Question | Where to look |
+|---|---|
+| What is this project, what stack, what key? | this file |
+| What tier, which ledger, which target? | `rail.yaml` |
+| What state is it in, what is the focus, what is blocked? | the session-start call in § Brain MCP |
+| What can break here, which gates? | `AGENTS.md` |
+| What was promised, what evidence exists? | `ledger: file`: `docs/receipts/`; `ledger: brain`: the ticket named in `rail.yaml` |
+| Why did we choose Y? | brain decisions, `docs/adr/` |
+| Specs and plans | `docs/specs/`, `docs/plans/` |
+| Which method, which review? | root `CLAUDE.md` § "Workflows — the operator picks the method" |
+| Machines, addresses, access | brain machine records (`brain_recall`), never this file |
+
 - Design spec: `docs/specs/2026-09-14-red-rail-design.md` (ten stages, three tiers,
   `rail.yaml`, end-to-end flow, failure modes, phasing).
 - Attestations come only from the server host; the runner VM never reaches brain or the VPS.
@@ -173,59 +188,34 @@ red-rail/
   project for every attestation, the requester `red` for the contract.
 - No `# rail: ignore`. The only bypass is a `gates:` override in `rail.yaml` with a mandatory reason.
 
-## Working principles
+## How we work
 
-### Workflow
-- Brainstorm → spec → plan → implement, with the skills: `superpowers:brainstorming`,
-  `superpowers:writing-plans` / `writing-plans-parallel`, `superpowers:executing-plans` /
-  `executing-plans-parallel`. Never the built-in plan mode.
-- If it derails mid-way, **stop and re-plan immediately**.
-- TDD: write the failing test first, watch it fail, implement the minimum.
+The method, the review that reads the diff before a commit, and the invariants that hold
+whatever the method live once, in the ReD root `CLAUDE.md` (the "Parent project" above):
+§ "Workflows — the operator picks the method" and § "Invariants — true whatever the method".
+They are not copied here, the review gate included.
 
-### Quality pipeline
-```
-BEFORE writing code
-  → superpowers:test-driven-development  (test first, watch it fail)
+What this repository adds:
 
-implementation done
-  → /reflexion-reflect                   (non-trivial change only)
-  → /code-review-review-local-changes    (multi-agent review, confidence-filtered)
-  → /git-commit                          (conventional commit, English)
-```
-Skip the review for docs-only commits. For a deep bug, `superpowers:systematic-debugging`
-traces symptom to root cause — never fix only the symptom.
-
-### Subagents and workflows
-- Offload research, exploration and parallel analysis to subagents; one task per subagent.
-- Every Workflow `agent()` carries an explicit tier (`wf-scan` / `red-researcher` /
-  `red-implementer` / `red-reviewer` / `wf-judge` / `wf-design`); never an implicit Fable agent.
-- **Every subagent prompt names its perimeter**: a concrete path or glob, an explicit budget,
-  or an explicit output contract. Cost tracks the number of subagents spawned and the size
-  each one accumulates, not session length — a spawn writes a new cache prefix at 1.25–2× the
-  input price. Name the files you already know instead of asking an agent to find them.
-  Enforced by the `tiering_gate.py` hook; escape hatch `tiering: allow-unscoped <why>`.
-
-### Verification before "done"
-- Never declare a task done without proof: run the tests, read the summary line, capture the
-  exit code. `rail check` must pass on this repository.
-
-### Self-improvement (brain MCP)
-- After any correction from the operator: `brain_learn(topic, insight, project_key="red-rail")`.
-- Before solving a problem: `brain_search(query, project_key="red-rail")`.
-
-### Core principles
-- **Build to last**: solid, tested, documented.
-- **No shortcuts**: no quick fixes, no unnecessary dependencies.
-- **Scalable**: think about twenty repositories even while proving one.
-- **From scratch**: prefer building the small thing over adopting the big platform.
+- `rail check` passes on this repository. red-rail is delivered by its own rail, so a red gate
+  here is a real policy failure, not a nuisance.
+- Every Workflow `agent()` in `workflows/` carries an explicit tier: `pre-review.js` must pass
+  the tiering gate.
+- The invariants a change here must not break, the public-repository rules included, are in
+  `AGENTS.md`.
 
 ## Brain MCP — proactive use
 
 Project key: `red-rail`. Use it without being asked.
 
-- **Session start**: `brain_session_start("red-rail")`
-- **During work**: `brain_log_decision` for choices, `brain_save_snippet` for reusable code,
-  `brain_create_runbook` for procedures, `brain_learn` only for pure insights.
+- **Session start**: `brain_session_start("red-rail", client_key="<harness>-red-rail-<YYYY-MM-DD>")`,
+  where `<harness>` is claude-code, codex or opencode. Reuse the key for every retry of that
+  session, and give a parallel session its own suffix.
+- **During work**: the specific tool, never `brain_learn` by default: `brain_log_decision` for
+  a choice, `brain_save_snippet` for reusable code, `brain_create_runbook` for a procedure,
+  `brain_learn` only for a pure insight.
+- **After any correction from the operator**: `brain_learn(topic, insight, project_key="red-rail")`.
+- **Before solving a problem**: `brain_search(query, project_key="red-rail")`.
 - **Session end**: `brain_update_project_focus("red-rail", current_focus="summary + next steps")`
 
 ## Related projects
