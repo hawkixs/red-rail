@@ -17,8 +17,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step
+from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step, domain_of
+from rail.deploy.sites import SiteBinding
 from rail.http import Http, HttpError, http_get
 from rail.model import RailConfig
 from rail.policy import parameter
@@ -104,6 +106,7 @@ class RemoteTarget:
         repo: Path,
         cfg: RailConfig,
         *,
+        sites: Path | None = None,
         run: Runner = subprocess.run,
         http: Http = http_get,
         sleep: Callable[[float], None] = time.sleep,
@@ -114,15 +117,28 @@ class RemoteTarget:
         self.repo = repo
         self.cfg = cfg
         self.params = Parameters.read(repo)
-        self.healthcheck = cfg.deploy.healthcheck
         self._run, self._http, self._sleep, self._clock = run, http, sleep, clock
+        # behind a site the token becomes the site's address here and nowhere earlier: the
+        # manifest carries a label, this host's sites file carries the address
+        site = cfg.deploy.site
+        self.binding = SiteBinding.load(site, sites) if site is not None else None
+        self.healthcheck = cfg.deploy.healthcheck
+        if self.binding is not None:
+            self.healthcheck = self.binding.fill(self.healthcheck)
+        # `Field(pattern=r"^https?://")` is match-at-start, so `https://` passes validation:
+        # the host is checked here, before the first ssh, not after the healthcheck timeout
+        self.domain = domain_of(self.healthcheck)
+        if self.binding is not None:
+            self.domain = self.binding.site  # what records and prompts name: never the address
 
     # -- the seams ------------------------------------------------------------------------
 
     @property
     def origin(self) -> str:
-        """Scheme and authority the verification talks to, without a trailing slash."""
-        raise NotImplementedError
+        """Scheme and authority of the healthcheck: a private service is verified over the
+        address and port it was given. A public shape overrides it."""
+        split = urlsplit(self.healthcheck)
+        return f"{split.scheme}://{split.netloc}"  # netloc, not hostname: the port matters
 
     def script_for(self, artefact: Artefact) -> str:
         """The remote phase as one bash script. Raising here refuses the deployment before
@@ -134,8 +150,8 @@ class RemoteTarget:
         raise NotImplementedError
 
     def redact(self, text: str) -> str:
-        """What a record may say about this target. The default hides nothing."""
-        return text
+        """What a record may say about this target: behind a site, its name, never its address."""
+        return text if self.binding is None else self.binding.redact(text)
 
     # -- the shared mechanics -------------------------------------------------------------
 

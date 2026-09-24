@@ -16,16 +16,13 @@ way.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 import yaml
 
-from rail.deploy import Artefact, DeployError, domain_of
+from rail.deploy import Artefact, DeployError
 from rail.deploy.compose import ComposeTarget, common_env, env_lines
-from rail.deploy.sites import Address, load_site, redact_address, substitute_address
 from rail.model import RailConfig
 from rail.policy import parameter
 
@@ -107,69 +104,41 @@ def published_ports_are_private(compose_text: str, bind_address: str) -> list[tu
     return offenders
 
 
-@dataclass(frozen=True, slots=True)
-class Parameters:
-    bind_address: str
-    site: str | None = None
-    address: Address | None = None  # behind a site: the parsed address, for redaction
-
-    @classmethod
-    def read(cls, repo: Path, cfg: RailConfig, *, sites: Path | None = None) -> Parameters:
-        site = cfg.deploy.site if cfg.deploy is not None else None
-        if site is not None:
-            address = load_site(site, sites).address
-            return cls(bind_address=str(address), site=site, address=address)
-        value = parameter(repo, "deploy.bind_address")
-        if not value:
-            raise DeployError(
-                "deploy.bind_address is not set: a private target must say which address it "
-                "publishes on — name a `deploy.site` this host declares in its sites file, or "
-                "declare the address in rail.yaml under `gates:` with its reason"
-            )
-        return cls(bind_address=str(value))
+def declared_bind_address(repo: Path) -> str:
+    """Without a site, the address a private compose target publishes on is declared in
+    rail.yaml; there is no default, because a target that cannot say where it publishes cannot
+    refuse a compose file that publishes everywhere."""
+    value = parameter(repo, "deploy.bind_address")
+    if not value:
+        raise DeployError(
+            "deploy.bind_address is not set: a private target must say which address it "
+            "publishes on — name a `deploy.site` this host declares in its sites file, or "
+            "declare the address in rail.yaml under `gates:` with its reason"
+        )
+    return str(value)
 
 
 class PrivateCompose(ComposeTarget):
-    def __init__(
-        self, repo: Path, cfg: RailConfig, *, sites: Path | None = None, **kwargs: Any
-    ) -> None:
+    def __init__(self, repo: Path, cfg: RailConfig, **kwargs: Any) -> None:
         super().__init__(repo, cfg, **kwargs)
-        self.private = Parameters.read(repo, cfg, sites=sites)
-        if self.private.address is not None:
-            # the token becomes the site's address here and nowhere earlier: the manifest
-            # carries a label, the host carries the address
-            self.healthcheck = substitute_address(self.healthcheck, self.private.address)
-        # `Field(pattern=r"^https?://")` is match-at-start, so `https://` passes validation:
-        # the host has to be checked here, exactly as `vps-traefik` checks it. Without this
-        # the failure surfaces only after the healthcheck timeout, once ssh has already
-        # changed the machine, and an empty domain reaches the attestation.
-        self.domain = domain_of(self.healthcheck)
-        if self.private.site is not None:
-            self.domain = self.private.site  # what records and prompts name: never the address
-
-    def redact(self, text: str) -> str:
-        if self.private.address is None or self.private.site is None:
-            return text
-        return redact_address(text, self.private.address, self.private.site)
-
-    @property
-    def origin(self) -> str:
-        split = urlsplit(self.healthcheck)
-        return f"{split.scheme}://{split.netloc}"  # netloc, not hostname: the port matters
+        # behind a site the host gives the address; without one, rail.yaml declares it
+        self.bind_address = (
+            str(self.binding.address) if self.binding is not None else declared_bind_address(repo)
+        )
 
     def env_file(self, artefact: Artefact) -> str:
         return env_lines(
-            common_env(self.cfg.project, artefact) + (("BIND_ADDRESS", self.private.bind_address),)
+            common_env(self.cfg.project, artefact) + (("BIND_ADDRESS", self.bind_address),)
         )
 
     def precheck(self, compose_text: str) -> None:
-        offenders = published_ports_are_private(compose_text, self.private.bind_address)
+        offenders = published_ports_are_private(compose_text, self.bind_address)
         if offenders:
             listed = ", ".join(f"{service} → {entry}" for service, entry in offenders)
             raise DeployError(
-                f"the released compose file publishes outside {self.private.bind_address} "
+                f"the released compose file publishes outside {self.bind_address} "
                 f"and loopback: {listed}. Docker bypasses the firewall, so a published port's "
-                f"host address must EQUAL {self.private.bind_address} (or ${{BIND_ADDRESS}}, "
+                f"host address must EQUAL {self.bind_address} (or ${{BIND_ADDRESS}}, "
                 "which the rail writes), not merely be present — 0.0.0.0 names an address and "
                 "publishes everywhere"
             )
