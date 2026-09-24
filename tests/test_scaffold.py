@@ -12,6 +12,8 @@ from click.testing import CliRunner
 from rail import gitrepo
 from rail.brain.client import BrainClient
 from rail.cli import main
+from rail.commands.new import BRAIN_KEY
+from rail.gates.hygiene import DOMAIN_PLACEHOLDER, ROSTER_HEADER, roster_row, table_cells
 from rail.ledger import RECEIPTS_DIR, RecordKind
 from rail.ledger.file import FileLedger
 from rail.model import LedgerBackend, Stack, Tier
@@ -364,6 +366,74 @@ def test_cli_new_and_upgrade(template_dir: Path, tmp_path: Path) -> None:
     assert out.exit_code == 2 and "red-<kebab-case>" in out.output
     out = CliRunner().invoke(main, ["upgrade", "--repo", str(tmp_path / "red-probe")])
     assert out.exit_code == 1 and "_commit" in out.output
+
+
+def test_cli_new_prints_a_roster_row_shaped_like_the_header(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """The row fits the root's four-column table: slug first, the domain left to the operator,
+    the brain key last. The output says what fails until the row is in (decision 5)."""
+    out = CliRunner().invoke(
+        main,
+        [
+            "new",
+            "red-probe",
+            "--description",
+            "A disposable HTTP probe.",
+            "--brain-key",
+            "red_probe",
+            "--dest",
+            str(tmp_path / "red-probe"),
+            "--template",
+            str(template_dir),
+            "--rail-ref",
+            FIXTURE_PIN,
+            "--no-remotes",
+        ],
+    )
+    assert out.exit_code == 0, out.output
+    row = next(line for line in out.output.splitlines() if line.startswith("| red-probe |"))
+    cells = table_cells(row)
+    assert cells is not None and len(cells) == len(ROSTER_HEADER)
+    assert cells[:2] == ("red-probe", DOMAIN_PLACEHOLDER)
+    assert cells[-1] == "`red_probe`"
+    assert "`rail check` fails hygiene.roster_entry" in out.output
+
+
+def test_a_pipe_in_the_description_keeps_the_row_as_wide_as_the_header() -> None:
+    """Review focus 3: a `|` in the description is escaped, so the pasted row does not
+    shift the root's columns, and the gate reads it back as one cell."""
+    cells = table_cells(roster_row("red-probe", "reads a | b", "red-probe"))
+    assert cells is not None and len(cells) == len(ROSTER_HEADER)
+    assert cells[2] == "reads a \\| b"
+
+
+@pytest.mark.parametrize("key", ["Red-Probe", "red.probe"], ids=["uppercase", "dotted"])
+def test_new_refuses_a_brain_key_outside_the_pattern(
+    template_dir: Path, tmp_path: Path, key: str
+) -> None:
+    """The key is rendered into `brain_session_start("<key>", …)` and checked by one regex
+    (decision 8): the CLI callback and the copier validator refuse the same keys, and use
+    the same pattern."""
+    out = CliRunner().invoke(
+        main,
+        [
+            "new",
+            "red-probe",
+            "--description",
+            "x.",
+            "--brain-key",
+            key,
+            "--no-remotes",
+            "--dest",
+            str(tmp_path / "cli"),
+        ],
+    )
+    assert out.exit_code == 2 and "[a-z0-9][a-z0-9_-]*" in out.output
+    assert not (tmp_path / "cli").exists()
+    with pytest.raises(ScaffoldError, match="brain_key"):
+        render(_project(template_dir, tmp_path / "copier", brain_key=key))
+    assert BRAIN_KEY.pattern in (ROOT / "copier.yml").read_text()
 
 
 def test_render_wraps_copier_failures(template_dir: Path, tmp_path: Path) -> None:

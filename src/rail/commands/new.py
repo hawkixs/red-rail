@@ -7,6 +7,7 @@ from pathlib import Path
 
 import click
 
+from rail.gates.hygiene import DOMAIN_PLACEHOLDER, roster_row
 from rail.ledger import LedgerError
 from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.policy import stages_for
@@ -14,11 +15,22 @@ from rail.remotes import RemoteError
 from rail.scaffold import TEMPLATE_SOURCE, NewProject, ScaffoldError, new_project
 
 SLUG = re.compile(r"^red-[a-z0-9]+(-[a-z0-9]+)*$")
+# Every key of the root roster fits, `auto_discord` included. It is rendered into
+# `brain_session_start("<key>", …)` and checked there by one regex (decision 8).
+BRAIN_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def _slug(ctx: click.Context, param: click.Parameter, value: str) -> str:
     if not SLUG.match(value):
         raise click.BadParameter("must match red-<kebab-case>")
+    return value
+
+
+def _brain_key(ctx: click.Context, param: click.Parameter, value: str | None) -> str | None:
+    if value is not None and not BRAIN_KEY.fullmatch(value):
+        raise click.BadParameter(
+            "must match [a-z0-9][a-z0-9_-]*: lowercase letters, digits, '-' and '_'"
+        )
     return value
 
 
@@ -31,7 +43,12 @@ def _slug(ctx: click.Context, param: click.Parameter, value: str) -> str:
 @click.option(
     "--stack", type=click.Choice([s.value for s in Stack]), default="python", show_default=True
 )
-@click.option("--brain-key", default=None, help="brain-v42 project key (default: the slug).")
+@click.option(
+    "--brain-key",
+    default=None,
+    callback=_brain_key,
+    help="brain-v42 project key (default: the slug).",
+)
 @click.option(
     "--deploy-target",
     type=click.Choice([d.value for d in DeployTarget]),
@@ -138,7 +155,12 @@ def command(
         click.echo(f"remaining stages of tier {tier}: {', '.join(remaining)}")
     click.echo("")
     click.echo(
-        "Add this row to the ReD root roster (CLAUDE.md, operator's gesture — the root is "
-        "not under git):"
+        "Add this row to the ReD root roster (CLAUDE.md, the operator's gesture: the root is "
+        f"not under git), with {DOMAIN_PLACEHOLDER} replaced by the project's domain:"
     )
-    click.echo(f"| {slug} | <domain> | bootstrap (tier {tier}) | n/a | `{project.brain_key}` |")
+    click.echo(roster_row(slug, description, project.brain_key))
+    click.echo(
+        "Until the row is in the root with its domain filled in, `rail check` fails "
+        "hygiene.roster_entry. `rail new` cannot see the root: it checked this tree with the "
+        "workstation gates skipped."
+    )

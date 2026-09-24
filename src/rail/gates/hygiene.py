@@ -83,6 +83,18 @@ def roster_header() -> str:
     return table_row(ROSTER_HEADER) + "\n|" + "---|" * len(ROSTER_HEADER)
 
 
+def roster_row(project: str, description: str, brain_key: str) -> str:
+    """The row `rail new` prints for the root: one cell per header column, in the header's
+    order, the domain left to the operator (decision 5)."""
+    cells = {
+        "Project": project,
+        "Domain": DOMAIN_PLACEHOLDER,
+        "What it is": description,
+        "Brain key": f"`{brain_key}`",
+    }
+    return table_row(cells[column] for column in ROSTER_HEADER)
+
+
 def roster_rows(text: str) -> list[tuple[str, ...]] | None:
     """The rows of the identity table in `text`: the header, its separator, then consecutive
     table lines. None when no header line is followed by a separator."""
