@@ -464,6 +464,9 @@ def test_the_remote_script_runs_the_spec_sequence_in_order(tmp_path: Path) -> No
         'mv --force "$release/.red.new" "$release/red"',
         'ln -sfn "$release" "$root/current"',
         "sudo -n /usr/bin/systemctl daemon-reload",
+        # what systemd loaded, read back before the restart: no drop-in, the linked unit
+        "systemctl show --property=DropInPaths --value red-agent.service",
+        "systemctl show --property=FragmentPath --value red-agent.service",
         "sudo -n /usr/bin/systemctl restart red-agent.service",
         "systemctl is-active red-agent.service",
     ]
@@ -477,7 +480,17 @@ def test_the_only_privileged_commands_are_the_two_the_sudoers_file_allows(tmp_pa
         "sudo -n /usr/bin/systemctl daemon-reload",
         "sudo -n /usr/bin/systemctl restart red-agent.service",
     ]
-    assert "/etc/systemd" not in script, "the unit is linked at migration, never copied"
+    # the unit is linked at migration, never copied: the script names the link once, and only
+    # compares it with the file systemd reports having loaded
+    lines = script.splitlines()
+    assert [line for line in lines if "/etc/systemd" in line] == [
+        "link=/etc/systemd/system/red-agent.service"
+    ]
+    assert [line.split(";")[0] for line in lines if "$link" in line] == [
+        'if [ "$fragment" != "$link" ] && [ "$fragment" != "$root/current/red-agent.service" ]',
+        '  echo "red-agent.service: systemd loads ${fragment:-no unit file}, not the released '
+        'unit linked from $link" >&2',
+    ]
 
 
 def test_release_env_carries_what_version_reads_and_no_secret(tmp_path: Path) -> None:
@@ -594,22 +607,31 @@ def test_plan_names_the_site_and_prints_the_resolved_steps(tmp_path: Path) -> No
 
 STUB = """#!/bin/sh
 echo "$(basename "$0") $*" >> "$RAIL_TEST_LOG"
-if [ "$(basename "$0")" = docker ]; then
-  case "$1" in
-    create) echo fake-container ;;
-    cp)
-      [ -n "$RAIL_TEST_CP_FAILS" ] && exit 1
-      for last in "$@"; do :; done
-      echo binary > "$last" ;;
-  esac
-fi
+case "$(basename "$0") $1 $2" in
+  "docker create "*) echo fake-container ;;
+  "docker cp "*)
+    [ -n "$RAIL_TEST_CP_FAILS" ] && exit 1
+    for last in "$@"; do :; done
+    echo binary > "$last" ;;
+  "systemctl show --property=DropInPaths") echo "$RAIL_TEST_DROPINS" ;;
+  "systemctl show --property=FragmentPath") echo "$RAIL_TEST_FRAGMENT" ;;
+esac
 exit 0
 """
 
+LINK = f"/etc/systemd/system/{UNIT}"
+
 
 def _run_remote(
-    tmp_path: Path, *, cp_fails: bool
+    tmp_path: Path,
+    *,
+    cp_fails: bool = False,
+    dropins: str = "",
+    fragment: str = LINK,
 ) -> tuple[subprocess.CompletedProcess, list[str], Path]:
+    """The script under bash, with `docker`, `sudo` and `systemctl` stubbed on PATH. The
+    `systemctl show` stub reports `dropins` and `fragment` (default: the link of spec decision
+    6); `{root}` in `fragment` is the scratch stack root."""
     if shutil.which("flock") is None or shutil.which("bash") is None:
         pytest.skip("the remote script needs bash and flock (util-linux)")
     root = tmp_path / "opt"
@@ -621,7 +643,12 @@ def _run_remote(
         (stubs / name).write_text(STUB)
         (stubs / name).chmod(0o755)
     log = tmp_path / "calls.log"
-    env = {"PATH": f"{stubs}:/usr/bin:/bin", "RAIL_TEST_LOG": str(log)}
+    env = {
+        "PATH": f"{stubs}:/usr/bin:/bin",
+        "RAIL_TEST_LOG": str(log),
+        "RAIL_TEST_DROPINS": dropins,
+        "RAIL_TEST_FRAGMENT": fragment.replace("{root}", str(root)),
+    }
     if cp_fails:
         env["RAIL_TEST_CP_FAILS"] = "1"
     done = subprocess.run(
@@ -643,6 +670,49 @@ def test_the_remote_script_delivers_the_binary_and_restarts_through_sudo(tmp_pat
     reload = calls.index("sudo -n /usr/bin/systemctl daemon-reload")
     assert reload < calls.index("sudo -n /usr/bin/systemctl restart red-agent.service")
     assert calls[-1] == "docker rm --force fake-container"
+
+
+RESTART = f"sudo -n /usr/bin/systemctl restart {UNIT}"
+
+
+def test_a_unit_linked_to_current_is_accepted_under_either_name(tmp_path: Path) -> None:
+    """systemd reports a linked unit's fragment as the link (measured on systemd 249) or, on
+    other versions, as the file the link names: both are the released unit."""
+    done, calls, _ = _run_remote(tmp_path, fragment=f"{{root}}/red-monitor/current/{UNIT}")
+    assert done.returncode == 0, done.stderr
+    assert RESTART in calls
+
+
+def test_a_drop_in_stops_the_script_before_the_restart(tmp_path: Path) -> None:
+    """A drop-in (`systemctl set-property` writes one under `system.control/`, an old
+    `override.conf` may linger) overrides the checked unit once systemd reloads it, so its
+    `MemoryMax=` or `User=` would drift outside the rail (spec decision 3)."""
+    dropin = f"/etc/systemd/system.control/{UNIT}.d/50-MemoryMax.conf"
+    done, calls, _ = _run_remote(tmp_path, dropins=dropin)
+    assert done.returncode != 0
+    assert dropin in done.stderr and "drop-in" in done.stderr
+    assert RESTART not in calls, "the service must not be restarted"
+    assert f"systemctl show --property=DropInPaths --value {UNIT}" in calls
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        f"/lib/systemd/system/{UNIT}",  # a packaged copy wins over the link
+        f"/etc/systemd/system/other-{UNIT}",  # the name is an alias of another unit
+        "",  # systemd knows no such unit: the link is missing
+    ],
+    ids=["another-directory", "another-file", "none"],
+)
+def test_a_unit_loaded_from_anywhere_else_stops_the_script_before_the_restart(
+    tmp_path: Path, fragment: str
+) -> None:
+    done, calls, _ = _run_remote(tmp_path, fragment=fragment)
+    assert done.returncode != 0
+    assert "systemd loads" in done.stderr and LINK in done.stderr
+    if fragment:
+        assert fragment in done.stderr
+    assert RESTART not in calls, "the service must not be restarted"
 
 
 def test_the_container_is_removed_even_when_the_copy_fails(tmp_path: Path) -> None:

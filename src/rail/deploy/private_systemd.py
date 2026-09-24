@@ -5,7 +5,9 @@ The artefact is the project's released image. The target copies the binary out o
 digest, writes the project's unit (read at the released commit) and `release.env` next to
 it, points `current` at the release, and restarts the unit through the two commands the
 host's sudoers file allows. systemd loads the unit through a link to `current`, made once at
-migration, so the unit on disk is always the live release's.
+migration, so the unit on disk is always the live release's. Between the reload and the
+restart, the script asks systemd what it loaded, and stops on a drop-in or on a unit loaded
+from any other file.
 
 Before anything reaches the machine, the unit is refused when it would run as root, run
 unbounded, or run something other than the release (decision 7). That guards against a
@@ -299,10 +301,38 @@ def release_env(artefact: Artefact) -> str:
     )
 
 
+def loaded_unit_checks(unit: str) -> list[str]:
+    """What systemd actually loaded, read back after the reload and before the restart, as
+    the deploy account: no new privileged command. The rules above read the released file,
+    but a drop-in (`systemctl set-property` writes one, an old `override.conf` may linger)
+    overrides it after the reload, and a unit loaded from another file is not the released
+    one at all. Either way `MemoryMax=`, `TimeoutStopSec=` and the hardening would drift
+    outside the rail (spec decision 3), so the script stops before the restart.
+
+    systemd reports a unit linked from outside its search path as the link itself (measured
+    on systemd 249) or, on other versions, as the file the link names: both are accepted.
+    `unit` is model-validated (`UNIT_NAME_PATTERN`), so it needs no quoting."""
+    return [
+        f"dropins=$(systemctl show --property=DropInPaths --value {unit})",
+        'if [ -n "$dropins" ]; then',
+        f'  echo "{unit}: drop-ins override the released unit, remove them: $dropins" >&2',
+        "  exit 1",
+        "fi",
+        f"link=/etc/systemd/system/{unit}",
+        f"fragment=$(systemctl show --property=FragmentPath --value {unit})",
+        f'if [ "$fragment" != "$link" ] && [ "$fragment" != "$root/current/{unit}" ]; then',
+        f'  echo "{unit}: systemd loads ${{fragment:-no unit file}}, not the released unit '
+        'linked from $link" >&2',
+        "  exit 1",
+        "fi",
+    ]
+
+
 def remote_script(
     project: str, artefact: Artefact, unit: str, unit_text: str, binary: str, params: Parameters
 ) -> str:
-    """The remote phase as one bash script, in the order of spec decision 5."""
+    """The remote phase as one bash script, in the order of spec decision 5, with what systemd
+    loaded read back between the reload and the restart (`loaded_unit_checks`)."""
     root = f"{params.stack_root}/{project}"
     release = f"{root}/releases/{artefact.version}"
     name = PurePosixPath(binary).name
@@ -325,6 +355,7 @@ def remote_script(
             f'mv --force {staged} "$release/{name}"',
             'ln -sfn "$release" "$root/current"',
             "sudo -n /usr/bin/systemctl daemon-reload",
+            *loaded_unit_checks(unit),
             f"sudo -n /usr/bin/systemctl restart {unit}",
             f"systemctl is-active {unit}",
             "",

@@ -65,7 +65,11 @@ the ticket asks for systemd.
    4. `docker cp` the binary into the release directory, under a temporary name, then `chmod 0755`
       and rename it. The container is removed on every exit path.
    5. Point `current` at the release.
-   6. Through sudo: `systemctl daemon-reload`, then `systemctl restart` the unit.
+   6. Through sudo: `systemctl daemon-reload`, then `systemctl restart` the unit. Between the
+      two, unprivileged, `systemctl show` reads back what systemd loaded. The script stops
+      before the restart when a drop-in applies to the unit (`DropInPaths` is not empty), or
+      when its `FragmentPath` is neither the link of decision 6 nor `current/<unit>`, the file
+      that link names: a drop-in or another file would override what decision 7 checked.
    7. `systemctl is-active` the unit, unprivileged.
 
    The restart is unconditional. Redeploying the same version restarts the service and so applies
