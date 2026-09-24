@@ -30,8 +30,12 @@ tier:
   help: Maturity tier the project is scored against
 stack:
   type: str
-  choices: [python, go, docs]
+  choices: [python, go, rust, docs]
   default: python
+  validator: >-
+    {% if stack == 'rust' and tier == 'prod' %}
+    rust at tier prod is not templated yet (no image, no service): scaffold at dev and promote when the rust prod template lands
+    {% endif %}
 rail_ref:
   type: str
   default: main

@@ -6,7 +6,6 @@ import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
 
 import pytest
 from click.testing import CliRunner
@@ -22,6 +21,7 @@ from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.remotes import RemoteError
 from rail.scaffold import ANSWERS_FILE, NewProject, ScaffoldError, new_project, render, upgrade
 from tests.addresses import _foreign
+from tests.combinations import COMBINATIONS, EXCLUDED, Combo
 from tests.fake_brain import FakeBrain
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -841,33 +841,6 @@ def test_new_project_resolves_the_pin_before_rendering(template_dir: Path, tmp_p
 
 PRIVATE_HEALTHCHECK = "http://192.0.2.10:9204/healthz"  # RFC 5737: typed, never assumed
 BRAIN_TICKET = "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"
-TARGET_FAMILIES = (DeployTarget.VPS_TRAEFIK.value, DeployTarget.PRIVATE_COMPOSE.value)
-
-
-class Combo(NamedTuple):
-    """One answer set of the template. Every guidance test reads the same renders."""
-
-    stack: Stack
-    tier: Tier
-    ledger: LedgerBackend
-    target: str | None = None  # prod only: one target per family, public and private
-    brain_key: str = "red-probe"
-
-    @property
-    def label(self) -> str:
-        parts = [self.stack.value, self.tier.value, self.ledger.value]
-        parts += [self.target] if self.target else []
-        parts += [self.brain_key] if self.brain_key != "red-probe" else []
-        return "-".join(parts)
-
-
-COMBOS = [
-    Combo(stack, tier, ledger, target)
-    for stack in Stack
-    for tier in Tier
-    for ledger in LedgerBackend
-    for target in (TARGET_FAMILIES if tier is Tier.PROD else (None,))
-] + [Combo(Stack.PYTHON, Tier.BOOTSTRAP, LedgerBackend.FILE, brain_key="red_probe")]
 ROOT_TITLES = (
     "Workflows — the operator picks the method",
     "Invariants — true whatever the method",
@@ -875,18 +848,29 @@ ROOT_TITLES = (
 STACK_LINE = {
     Stack.PYTHON: "Python 3.12+, uv, pytest, ruff.",
     Stack.GO: "Go 1.22+, `go test`, `go vet`, `gofmt`.",
+    Stack.RUST: (
+        "Rust, edition 2024, toolchain pinned by `rust-toolchain.toml`: `cargo fmt`, clippy with "
+        "`-D warnings`, `cargo test --locked`, `cargo deny check`."
+    ),
     Stack.DOCS: "Documentation only (Markdown).",
 }
 STACK_CHAIN = re.compile(
     r"\{#-?\s*stack-chain:\s*(?P<name>[a-z-]+)\s*-?#\}(?P<body>.*?)\{#-?\s*/stack-chain\s*-?#\}",
     re.DOTALL,
 )
-STACK_CHAINS = {"CLAUDE.md.jinja": {"stack", "structure"}, "AGENTS.md.jinja": {"gates"}}
+STACK_CHAINS = {
+    "CLAUDE.md.jinja": {"stack", "structure"},
+    "AGENTS.md.jinja": {"gates"},
+    "Makefile.jinja": {"makefile"},
+    ".gitignore.jinja": {"gitignore"},
+    ".claude/settings.json.jinja": {"settings"},
+}
 _ELSE = re.compile(r"\{%-?\s*else\s*-?%\}")
 GUIDANCE = ("CLAUDE.md", "AGENTS.md")
 STACK_GATES = {
     Stack.PYTHON: "`uv run pytest -q`",
     Stack.GO: "`go test -race -count=1 ./...`",
+    Stack.RUST: "`cargo test --workspace --locked`",
     Stack.DOCS: "no stack command of its own",
 }
 # D9's sections and D10's rows, in the order AGENTS.md must hold them
@@ -950,10 +934,10 @@ def renders(tmp_path_factory: pytest.TempPathFactory) -> dict[Combo, Path]:
     template.mkdir()
     shutil.copy(ROOT / "copier.yml", template / "copier.yml")
     shutil.copytree(ROOT / "template", template / "template")
-    return {combo: _render_combo(template, base / combo.label, combo) for combo in COMBOS}
+    return {combo: _render_combo(template, base / combo.label, combo) for combo in COMBINATIONS}
 
 
-@pytest.mark.parametrize("combo", COMBOS, ids=[c.label for c in COMBOS])
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
 def test_rendered_guidance_points_at_the_root(renders: dict[Combo, Path], combo: Combo) -> None:
     """The method, the review and the invariants that hold whatever the method live once, in
     the ReD root: `CLAUDE.md` points at their sections and copies neither (decisions 6-8).
@@ -1068,7 +1052,7 @@ def test_skill_extraction_reads_whole_code_spans_only() -> None:
     }
 
 
-@pytest.mark.parametrize("combo", COMBOS, ids=[c.label for c in COMBOS])
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
 def test_rendered_guidance_cites_only_allowed_skills(
     renders: dict[Combo, Path], combo: Combo
 ) -> None:
@@ -1129,7 +1113,7 @@ def test_the_session_start_check_refuses_a_bare_or_mismatched_call() -> None:
 
 
 @pytest.mark.parametrize(
-    "combo", [*COMBOS, None], ids=[*(c.label for c in COMBOS), "red-rail-itself"]
+    "combo", [*COMBINATIONS, None], ids=[*(c.label for c in COMBINATIONS), "red-rail-itself"]
 )
 def test_every_brain_session_start_carries_a_client_key(
     renders: dict[Combo, Path], combo: Combo | None
@@ -1161,3 +1145,57 @@ def test_red_rails_own_guidance_follows_its_template() -> None:
         assert stale not in claude and stale not in agents, stale
     assert "../../AGENTS.md" not in agents
     assert 'names as "Parent project"' in agents
+
+
+def test_rust_at_prod_is_the_only_excluded_combination() -> None:
+    """Every stack × tier pair is rendered by some combination, except exactly (rust, prod)."""
+    covered = {(c.stack, c.tier) for c in COMBINATIONS}
+    assert {(s, t) for s in Stack for t in Tier} - covered == {(Stack.RUST, Tier.PROD)}
+    assert EXCLUDED == {(Stack.RUST, Tier.PROD)}
+
+
+def test_rust_at_prod_is_refused(template_dir: Path, tmp_path: Path) -> None:
+    """Refused before copier by `rail new` (a bare message, not wrapped in "copier could not
+    render"), and by copier's own validator for a direct run (decision 1)."""
+    import copier
+
+    from rail.scaffold import RUST_PROD_REFUSAL
+
+    project = _project(
+        template_dir, tmp_path / "red-life", slug="red-life", stack=Stack.RUST, tier=Tier.PROD
+    )
+    with pytest.raises(ScaffoldError) as raised:
+        _ = project.answers
+    assert str(raised.value) == RUST_PROD_REFUSAL
+    with pytest.raises(Exception, match="rust at tier prod is not templated yet"):
+        copier.run_copy(
+            str(template_dir),
+            tmp_path / "direct",
+            data={
+                "project": "red-life",
+                "description": "d",
+                "brain_key": "red-life",
+                "tier": "prod",
+                "stack": "rust",
+                "deploy_target": "vps-traefik",
+                "healthcheck": "https://life.example.invalid/healthz",
+            },
+            defaults=True,
+            quiet=True,
+            unsafe=False,
+        )
+    assert not (tmp_path / "direct" / "rail.yaml").exists()
+
+
+def test_the_copier_validator_says_what_rail_new_says() -> None:
+    from rail.scaffold import RUST_PROD_REFUSAL
+
+    assert RUST_PROD_REFUSAL in (ROOT / "copier.yml").read_text()
+
+
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
+def test_every_rendered_settings_file_parses_and_allows_cargo_for_rust_only(
+    renders: dict[Combo, Path], combo: Combo
+) -> None:
+    allow = json.loads((renders[combo] / ".claude" / "settings.json").read_text())
+    assert ("Bash(cargo:*)" in allow["permissions"]["allow"]) is (combo.stack is Stack.RUST)

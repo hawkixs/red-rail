@@ -1,9 +1,10 @@
 # {{ project }} task runner. Every target is what CI runs, nothing more.
 
-.PHONY: sync lint test check ci serve image{% if stack == 'go' %} vuln{% endif %}
+.PHONY: sync lint test check ci serve image{% if stack == 'go' %} vuln{% elif stack == 'rust' %} deny{% endif %}
 
 RAIL_FLAGS ?=
 
+{# stack-chain: makefile -#}
 {% if stack == 'python' -%}
 ## Install the project and its dev dependency group
 sync:
@@ -59,7 +60,36 @@ test:
 ## Known vulnerabilities reachable from this module's call graph
 vuln:
 	$(GO) tool govulncheck ./...
-{% else -%}
+{% elif stack == 'rust' -%}
+## The one way every target reaches the toolchain. On a host with no Rust installed,
+## `make CARGO=<wrapper> ci` runs all of them through the wrapper — a container, for instance.
+CARGO ?= cargo
+## CI runs `make sync LOCKED=--locked`: a missing or stale Cargo.lock fails there instead of
+## being written. Empty here, so `cargo fetch` writes the lock, or refreshes a stale one.
+LOCKED ?=
+## cargo-deny lives in this project's .cargo-tools, never in the shared $CARGO_HOME/bin: two
+## projects pinning different versions would replace each other's binary on every sync.
+export PATH := $(CURDIR)/.cargo-tools/bin:$(PATH)
+
+## Fetch the dependencies (writes Cargo.lock), then install the pinned cargo-deny.
+## Reinstalling the installed version is a no-op.
+sync:
+	$(CARGO) fetch $(LOCKED)
+	$(CARGO) install cargo-deny --locked --version 0.20.2 --root .cargo-tools
+
+## Format check, then clippy with warnings as errors, on every target of every member
+lint:
+	$(CARGO) fmt --all --check
+	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
+
+## Run the test suite against the committed lock
+test:
+	$(CARGO) test --workspace --locked
+
+## Licences, advisories, bans and sources, as deny.toml declares them
+deny:
+	$(CARGO) deny check
+{% elif stack == 'docs' -%}
 ## Nothing to install for a documentation project
 sync:
 	@true
@@ -72,9 +102,10 @@ lint:
 test:
 	@true
 {% endif %}
+{#- /stack-chain #}
 ## Run the rail gates against this repository (RAIL_FLAGS=--ci in CI)
 check:
 	rail check $(RAIL_FLAGS)
 
 ## What CI runs, in order
-ci: lint test {% if stack == 'go' %}vuln {% endif %}check
+ci: lint test {% if stack == 'go' %}vuln {% elif stack == 'rust' %}deny {% endif %}check

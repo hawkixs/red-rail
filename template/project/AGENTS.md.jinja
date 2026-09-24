@@ -50,6 +50,13 @@ This stack's own commands: `uv run pytest -q`, `uv run ruff check src/ tests/`,
 This stack's own commands: `go test -race -count=1 ./...`, `go vet ./...`,
 `go tool staticcheck ./...`, `go tool govulncheck ./...`; on a host with no Go installed,
 `make GO=<wrapper> ci` runs them all through the wrapper.
+{%- elif stack == 'rust' -%}
+Run `make sync` first: it writes `Cargo.lock` and installs the pinned cargo-deny into
+`.cargo-tools/`. Then `make ci`. This stack's own commands: `cargo fmt --all --check`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+`cargo test --workspace --locked`, `cargo deny check`; on a host with no Rust installed,
+`make CARGO=<wrapper> ci` runs them all through the wrapper. A new licence or source is a
+reviewed line in `deny.toml`.
 {%- elif stack == 'docs' -%}
 A documentation project has no stack command of its own: `make ci` runs the rail's gates.
 {%- endif %}

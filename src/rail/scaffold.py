@@ -24,6 +24,12 @@ from rail.policy import parameter, stages_for
 
 TEMPLATE_SOURCE = "git@github.com:hawkixs/red-rail.git"
 ANSWERS_FILE = ".copier-answers.yml"
+# Rust at tier prod needs a release image and a service the template does not carry yet
+# (spec 2026-09-24-rust-stack, decision 1). copier.yml's validator on `stack` says the same.
+RUST_PROD_REFUSAL = (
+    "rust at tier prod is not templated yet (no image, no service): scaffold at dev and "
+    "promote when the rust prod template lands"
+)
 # the independent reviewer's check, and the CI job the template wires (job `rail` calling the
 # reusable workflow's `make ci + rail check`) — each named with the App that publishes it
 REVIEW_CHECK = RequiredCheck(name="red-rail/review", app_slug="red-rail-reviewer")
@@ -61,6 +67,8 @@ class NewProject:
 
     @property
     def answers(self) -> dict[str, Any]:
+        if self.stack is Stack.RUST and self.tier is Tier.PROD:
+            raise ScaffoldError(RUST_PROD_REFUSAL)
         data: dict[str, Any] = {
             "project": self.slug,
             "description": self.description,
