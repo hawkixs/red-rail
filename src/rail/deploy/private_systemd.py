@@ -11,31 +11,77 @@ Before anything reaches the machine, the unit is refused when it would run as ro
 unbounded, or run something other than the release (decision 7). That guards against a
 mistake, not against a compromised deploy account: that account is in the docker group, which
 is root already.
+
+The check cannot always tell what systemd will actually do with a value: systemd ignores a
+value it cannot parse and silently keeps the previous or default one, it normalises what it
+does accept (zero-length time spans, `%` specifiers, boolean spellings, quoting, C-style
+escapes, `;` command separators), and it splits lines differently from a naive reader. So
+every rule below is an ALLOW-list, never a deny-list: a value this check cannot read with
+certainty is refused, even when the unit would in fact have been safe. A false refusal of an
+unusual-but-safe unit is an accepted cost; a false acceptance of a unit that would run as root
+or unbounded is not.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 # `+`, `!` and `!!` run a command with full privileges whatever `User=` says; `@`, `-` and `:`
-# change how it runs, not who runs it (systemd.service, "Command lines")
+# change how it runs, not who runs it (systemd.service, "Command lines").
 _EXEC_PREFIXES = frozenset("@-:+!")
 _PRIVILEGED = frozenset("+!")
-_TRUE = frozenset({"1", "yes", "true", "on"})
+
+# The directives that name a command systemd runs. Deliberately not every `Exec*=` key:
+# `ExecPaths=` and `ExecSearchPath=` name search paths, not a command, and must not be read
+# as one.
+_COMMAND_KEYS = (
+    "ExecCondition",
+    "ExecStartPre",
+    "ExecStart",
+    "ExecStartPost",
+    "ExecReload",
+    "ExecStop",
+    "ExecStopPost",
+)
+
+# Quoting or a backslash can change how systemd splits or unescapes a command line (a `\x2b`
+# escape can turn into a `+` prefix after this check has already decided the value looks
+# unprivileged); a standalone `;` word starts a second command that systemd runs and this
+# check would otherwise never see. All three make a value unreadable with certainty.
+_UNSAFE_IN_COMMAND = frozenset("\"'\\")
+
+# Plain POSIX usernames only: refuses `%u`/`%U` specifiers, numeric ids and empty values.
+_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]*$")
+# A byte count with at most one K/M/G/T/P/E suffix: refuses `infinity`, `max`, `100%`, and a
+# multi-letter or lower-case suffix systemd does not recognise (`64MB`, `512m`).
+_MEMORY = re.compile(r"^[1-9][0-9]*[KMGTPE]?$")
+# A single positive duration token: refuses `0`, any zero-length span, `infinity`, and a
+# multi-part span systemd would otherwise accept (`1min 30s`).
+_DURATION = re.compile(r"^[1-9][0-9]*(?:ms|s|sec|m|min)?$")
+
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
 
 
 def _logical_lines(text: str) -> Iterator[str]:
-    """Lines as systemd reads them: comments dropped, inside a continuation too, and a trailing
-    backslash joining a line to the next with a space."""
+    """Lines as systemd reads them: split on a bare CR, LF or CRLF only — never the wider set
+    `str.splitlines()` breaks on (`\\v`, `\\f`, ...). A physical line continues only behind an
+    ODD number of trailing backslashes on the RAW line (one behind trailing whitespace, or an
+    even count, ends the line for systemd, same as no backslash at all); the final backslash is
+    then dropped and any others are kept. A comment is a line whose content, stripped of spaces
+    and tabs only, starts with `#` or `;` — dropped even inside a continuation, without ending
+    it."""
     parts: list[str] = []
-    for raw in text.splitlines():
-        stripped = raw.strip()
-        if stripped[:1] in ("#", ";"):
+    for raw in _LINE_BREAK.split(text):
+        trailing = len(raw) - len(raw.rstrip("\\"))
+        continues = trailing % 2 == 1
+        body = raw[:-1] if continues else raw
+        content = body.strip(" \t")
+        if content[:1] in ("#", ";"):
             continue
-        if stripped.endswith("\\"):
-            parts.append(stripped[:-1].strip())
+        parts.append(content)
+        if continues:
             continue
-        parts.append(stripped)
         line = " ".join(part for part in parts if part)
         parts = []
         if line:
@@ -47,16 +93,27 @@ def _logical_lines(text: str) -> Iterator[str]:
 
 def parse_unit(text: str) -> dict[str, dict[str, list[str]]]:
     """Section → key → values, in file order. Only what the refusals read is modelled: this is
-    not a systemd parser and does not pretend to be one."""
+    not a systemd parser and does not pretend to be one. A section name is taken verbatim, with
+    no stripping — `[ Service ]` is a different, unknown section, not `[Service]` with cosmetic
+    padding, matching systemd's own exact-name lookup."""
     sections: dict[str, dict[str, list[str]]] = {}
     section: dict[str, list[str]] | None = None
     for line in _logical_lines(text):
         if line.startswith("[") and line.endswith("]"):
-            section = sections.setdefault(line[1:-1].strip(), {})
+            section = sections.setdefault(line[1:-1], {})
         elif section is not None and "=" in line:
             key, _, value = line.partition("=")
             section.setdefault(key.strip(), []).append(value.strip())
     return sections
+
+
+def _effective(values: list[str]) -> list[str]:
+    """Only the values assigned after the last empty one: systemd resets a list-valued
+    directive to empty on a bare `Key=`, so nothing assigned before that reset survives."""
+    for index in range(len(values) - 1, -1, -1):
+        if values[index] == "":
+            return values[index + 1 :]
+    return list(values)
 
 
 def _prefix(value: str) -> str:
@@ -79,39 +136,67 @@ def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> li
     if service is None:
         return [f"{unit} has no [Service] section"]
 
-    def last(key: str) -> str | None:
-        values = service.get(key)
-        return values[-1] if values else None  # systemd keeps the last assignment
-
     refusals: list[str] = []
-    user = last("User")
-    if user in (None, "", "root", "0"):
-        refusals.append(f"{unit}: User= must name a user other than root (got {user!r})")
-    memory = last("MemoryMax")
-    if memory in (None, "", "infinity"):
+
+    users = service.get("User", [])
+    if not users:
+        refusals.append(f"{unit}: User= must name a user other than root (no value set)")
+    refusals.extend(
+        f"{unit}: User={value} must be a plain username other than root, e.g. red-monitor "
+        f"(got {value!r})"
+        for value in users
+        if value == "root" or not _USERNAME.fullmatch(value)
+    )
+
+    memory_values = service.get("MemoryMax", [])
+    if not memory_values:
         refusals.append(
-            f"{unit}: MemoryMax= must bound the service, the host has no swap (got {memory!r})"
+            f"{unit}: MemoryMax= must bound the service, the host has no swap (no value set)"
         )
-    stop = last("TimeoutStopSec")
-    if stop in (None, "", "0", "infinity"):
-        refusals.append(f"{unit}: TimeoutStopSec= must bound the stop (got {stop!r})")
+    refusals.extend(
+        f"{unit}: MemoryMax={value} must be a byte count with an optional K/M/G/T/P/E suffix, "
+        f"e.g. 64M (got {value!r})"
+        for value in memory_values
+        if not _MEMORY.fullmatch(value)
+    )
+
+    # `TimeoutSec=` is a shorthand that sets the start AND the stop timeout, so a bad value
+    # there is refused exactly like a bad `TimeoutStopSec=`.
+    timeouts = [("TimeoutStopSec", value) for value in service.get("TimeoutStopSec", [])] + [
+        ("TimeoutSec", value) for value in service.get("TimeoutSec", [])
+    ]
+    if not timeouts:
+        refusals.append(f"{unit}: TimeoutStopSec= must bound the stop (no value set)")
+    refusals.extend(
+        f"{unit}: {key}={value} must be a positive duration such as 15 or 15s (got {value!r})"
+        for key, value in timeouts
+        if not _DURATION.fullmatch(value)
+    )
+
     program = f"{current}/{binary_name}"
-    starts = [value for value in service.get("ExecStart", []) if value]
+    starts = _effective(service.get("ExecStart", []))
     if len(starts) != 1 or _program(starts[0]) != program:
         refusals.append(f"{unit}: exactly one ExecStart= must run {program} (got {starts!r})")
+
     environment = f"{current}/release.env"
-    if environment not in service.get("EnvironmentFile", []):
+    files = _effective(service.get("EnvironmentFile", []))
+    if environment not in files:
         refusals.append(
             f"{unit}: EnvironmentFile={environment} is missing, without the `-` prefix: "
             "the file must exist"
         )
-    for key, values in service.items():
-        if key.startswith("Exec"):
-            refusals.extend(
-                f"{unit}: {key}={value} runs with full privileges (prefix + or !)"
-                for value in values
-                if _PRIVILEGED & set(_prefix(value))
-            )
-    if (last("PermissionsStartOnly") or "").lower() in _TRUE:
+
+    for key in _COMMAND_KEYS:
+        for value in _effective(service.get(key, [])):
+            if _UNSAFE_IN_COMMAND & set(value) or ";" in value.split():
+                refusals.append(
+                    f"{unit}: {key}={value} systemd would read a different command than this "
+                    "check sees (quoting, a backslash or a `;` separator)"
+                )
+            elif _PRIVILEGED & set(_prefix(value)):
+                refusals.append(f"{unit}: {key}={value} runs with full privileges (prefix + or !)")
+
+    if "PermissionsStartOnly" in service:
         refusals.append(f"{unit}: PermissionsStartOnly= runs the Exec*Pre/Post commands as root")
+
     return refusals

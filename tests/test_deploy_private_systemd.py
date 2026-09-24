@@ -66,6 +66,48 @@ def test_the_parser_reads_sections_keys_and_continuations() -> None:
         ("Type=simple\n", "Type=simple\nExecStartPost=!!/bin/true\n", "full privileges"),
         ("ExecStart=/opt", "ExecStart=+/opt", "full privileges"),
         ("Type=simple\n", "Type=simple\nPermissionsStartOnly=yes\n", "PermissionsStartOnly"),
+        # --- fix round 1: allow-lists instead of deny-lists (task-4-fix-1.md) ---
+        ("MemoryMax=64M\n", "MemoryMax=512m\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=64MB\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=1Gi\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=max\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=0\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=64M # bound it\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=100%\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=infinity\nMemoryMax=64MB\n", "MemoryMax="),
+        ("MemoryMax=64M\n", "MemoryMax=\n", "MemoryMax="),
+        ("TimeoutStopSec=15\n", "TimeoutStopSec=0s\n", "TimeoutStopSec="),
+        ("TimeoutStopSec=15\n", "TimeoutStopSec=15\nTimeoutSec=0\n", "TimeoutSec="),
+        ("User=red-monitor\n", "User=%u\n", "User="),
+        ("User=red-monitor\n", "User=%U\n", "User="),
+        ("User=red-monitor\n", "User=\n", "User="),
+        ("Type=simple\n", "Type=simple\nPermissionsStartOnly=y\n", "PermissionsStartOnly"),
+        ("Type=simple\n", "Type=simple\nPermissionsStartOnly=T\n", "PermissionsStartOnly"),
+        (
+            "Type=simple\n",
+            "Type=simple\nExecStartPre=/bin/true ; +/bin/sh -c id\n",
+            "different command",
+        ),
+        (
+            "Type=simple\n",
+            'Type=simple\nExecStartPre="+/bin/sh" -c id\n',
+            "different command",
+        ),
+        (
+            "Type=simple\n",
+            "Type=simple\nExecStartPre=\\x2b/bin/sh -c id\n",
+            "different command",
+        ),
+        (
+            "/opt/red-monitor/current/red agent",
+            "/opt/red-monitor/current/red ; /usr/bin/other",
+            "different command",
+        ),
+        (
+            "EnvironmentFile=/opt/red-monitor/current/release.env\n",
+            "EnvironmentFile=/opt/red-monitor/current/release.env\nEnvironmentFile=\n",
+            "EnvironmentFile=",
+        ),
     ],
 )
 def test_each_rule_refuses_the_unit_and_says_which(old: str, new: str, rule: str) -> None:
@@ -90,3 +132,59 @@ def test_a_privilege_prefix_behind_a_continuation_and_a_comment_is_seen() -> Non
     hidden = "Type=simple\nExecStartPre=\\\n# looks harmless\n  +/bin/sh -c id\n"
     refusals = _refusals(GOOD.replace("Type=simple\n", hidden, 1))
     assert any("full privileges" in refusal for refusal in refusals), refusals
+
+
+def test_a_semicolon_comment_behind_a_continuation_is_also_seen() -> None:
+    """Fix round 1, test gap: a `;` comment is dropped inside a continuation exactly like `#`,
+    then the hidden `+…` still runs with full privileges."""
+    hidden = "Type=simple\nExecStartPre=\\\n; looks harmless\n  +/bin/sh -c id\n"
+    refusals = _refusals(GOOD.replace("Type=simple\n", hidden, 1))
+    assert any("full privileges" in refusal for refusal in refusals), refusals
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "ExecStart=/opt/red-monitor/current/red agent -config /etc/red-monitor/agent.yaml\n",
+            "ExecStart=/usr/bin/other\nExecStart=\n"
+            "ExecStart=/opt/red-monitor/current/red agent -config /etc/red-monitor/agent.yaml\n",
+        ),
+        ("ProtectSystem=strict\n", "ProtectSystem=strict\nExecPaths=+/srv\n"),
+    ],
+)
+def test_a_reset_list_or_a_non_command_key_is_still_accepted(old: str, new: str) -> None:
+    """Fix round 1: `ExecStart=` resets like any list (only what follows the last empty
+    assignment counts), and `ExecPaths=` is not a command key, so a `+` prefix there is inert."""
+    assert old in GOOD, "the fixture must contain what the case replaces"
+    assert _refusals(GOOD.replace(old, new, 1)) == []
+
+
+def test_a_backslash_before_trailing_whitespace_does_not_continue_the_line() -> None:
+    """Fix round 1, finding 6: systemd continues a line only behind a backslash that is its
+    very last character — trailing whitespace after it ends the line for systemd, so the next
+    line is read as its own directive, not swallowed into the first."""
+    unit = parse_unit("[Service]\nExecStartPre=/bin/a \\ \nExecStartPost=/bin/b\n")
+    assert unit["Service"]["ExecStartPost"] == ["/bin/b"]
+
+
+def test_a_double_backslash_does_not_continue_the_line() -> None:
+    """Fix round 1, finding 6: an EVEN number of trailing backslashes is not a continuation for
+    systemd — only an odd count is — so `\\\\` ends the line like any other."""
+    unit = parse_unit("[Service]\nExecStartPre=/bin/a \\\\\nExecStartPost=/bin/b\n")
+    assert unit["Service"]["ExecStartPost"] == ["/bin/b"]
+
+
+def test_a_padded_section_header_is_not_merged_with_the_real_one() -> None:
+    """Fix round 1, finding 6: a section name is read verbatim — `[ Service ]` is a different,
+    unknown section for systemd, not `[Service]` with cosmetic padding."""
+    unit = parse_unit("[Service]\nUser=red-monitor\n[ Service ]\nUser=intruder\n")
+    assert unit["Service"]["User"] == ["red-monitor"]
+    assert unit[" Service "]["User"] == ["intruder"]
+
+
+def test_a_vertical_tab_is_not_a_systemd_line_break() -> None:
+    """Fix round 1, finding 6: systemd splits a unit only on CR, LF or CRLF; `str.splitlines()`
+    also breaks on `\\v`, which would wrongly cut a value in the middle."""
+    unit = parse_unit("[Service]\nExecStart=/bin/a\x0b/bin/b\n")
+    assert unit["Service"]["ExecStart"] == ["/bin/a\x0b/bin/b"]
