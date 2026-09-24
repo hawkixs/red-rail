@@ -17,13 +17,14 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 from urllib.parse import urlsplit
 
 from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step, domain_of
 from rail.deploy.sites import SiteBinding
 from rail.http import Http, HttpError, http_get
 from rail.model import RailConfig
-from rail.policy import parameter
+from rail.policy import effective, parameter
 
 LOCKED = 75  # the remote script's exit code when the lock is taken (EX_TEMPFAIL)
 POLL_SECONDS = 3.0
@@ -98,8 +99,14 @@ def ssh_argv(params: Parameters) -> tuple[str, ...]:
 
 
 class RemoteTarget:
-    """The shared half of every target. A shape supplies `script_for`, `describe` and
-    `origin`, and may say what its records must hide in `redact`."""
+    """The shared half of every target. A shape supplies `script_for` and `describe`; a public
+    shape overrides `origin`. Behind a site, `redact` hides the site's address in every
+    record, so a shape that overrides it must call `super().redact(text)`."""
+
+    # The policy's `deploy.ssh_host` default is the border VPS. A private shape sets this, and
+    # its manifest must then name its own machine: without it, a manifest that forgets the
+    # parameter would write, pull and create on the edge before anything failed.
+    ssh_host_must_be_declared: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -117,6 +124,12 @@ class RemoteTarget:
         self.repo = repo
         self.cfg = cfg
         self.params = Parameters.read(repo)
+        if self.ssh_host_must_be_declared and effective(repo, "deploy.ssh_host")[1] is None:
+            raise DeployError(
+                f"deploy.ssh_host is not declared: target {cfg.deploy.target.value} reaches a "
+                "private machine, so rail.yaml names its ssh alias under `gates:` with its "
+                "reason — the policy default is the border VPS"
+            )
         self._run, self._http, self._sleep, self._clock = run, http, sleep, clock
         # behind a site the token becomes the site's address here and nowhere earlier: the
         # manifest carries a label, this host's sites file carries the address

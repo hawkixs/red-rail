@@ -270,6 +270,18 @@ def test_the_binary_is_an_absolute_path_of_safe_characters(binary: str) -> None:
         RailConfig.model_validate(_prod({**SYSTEMD_DEPLOY, "binary": binary}))
 
 
+@pytest.mark.parametrize(
+    "binary",
+    ["/usr/local/bin/red-agent.service", "/usr/local/bin/release.env"],
+    ids=["the-unit", "release-env"],
+)
+def test_the_binary_never_takes_the_name_of_a_file_the_release_holds(binary: str) -> None:
+    """The release directory holds the binary, the unit and `release.env` side by side, by
+    file name: a binary named like either would overwrite the file the rail checked or wrote."""
+    with pytest.raises(ValidationError, match="would overwrite"):
+        RailConfig.model_validate(_prod({**SYSTEMD_DEPLOY, "binary": binary}))
+
+
 def test_a_site_is_accepted_on_the_systemd_target_too() -> None:
     cfg = RailConfig.model_validate(_prod(SYSTEMD_DEPLOY))
     assert cfg.deploy is not None and cfg.deploy.site == "private-1"

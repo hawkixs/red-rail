@@ -166,7 +166,14 @@ the ticket asks for systemd.
     healthcheck: "http://${BIND_ADDRESS}:9100/health"
     unit: deploy/red-agent.service
     binary: /usr/local/bin/red
+  gates:
+    deploy.ssh_host:
+      value: <ssh alias>
+      reason: "the host's ssh alias for the deploy account on the site"
   ```
+
+  `deploy.ssh_host` has to be declared. Its policy default is the border VPS, so a private
+  target refuses a manifest that does not name its own machine, before the first ssh.
 
 - **Honouring SIGTERM.** This is not blocking: the restart waits for `TimeoutStopSec` inside the
   remote timeout.

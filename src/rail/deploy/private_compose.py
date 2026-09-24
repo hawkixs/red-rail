@@ -119,6 +119,8 @@ def declared_bind_address(repo: Path) -> str:
 
 
 class PrivateCompose(ComposeTarget):
+    ssh_host_must_be_declared = True
+
     def __init__(self, repo: Path, cfg: RailConfig, **kwargs: Any) -> None:
         super().__init__(repo, cfg, **kwargs)
         # behind a site the host gives the address; without one, rail.yaml declares it

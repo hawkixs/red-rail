@@ -34,7 +34,7 @@ from typing import Any
 
 from rail.deploy import Artefact, DeployError
 from rail.deploy.remote import Parameters, RemoteTarget, env_lines, heredoc, lock_preamble
-from rail.model import RailConfig
+from rail.model import RELEASE_ENV, RailConfig
 
 # `+`, `!` and `!!` run a command with full privileges whatever `User=` says; `@`, `-` and `:`
 # change how it runs, not who runs it (systemd.service, "Command lines").
@@ -265,7 +265,7 @@ def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> li
     if len(starts) != 1 or _program(starts[0]) != program:
         refusals.append(f"{unit}: exactly one ExecStart= must run {program} (got {starts!r})")
 
-    environment = f"{current}/release.env"
+    environment = f"{current}/{RELEASE_ENV}"
     files = _effective(service.get("EnvironmentFile", []))
     if environment not in files:
         refusals.append(
@@ -341,8 +341,8 @@ def remote_script(
         [
             *lock_preamble(root, release),
             heredoc(unit, unit_text),
-            heredoc("release.env", release_env(artefact)),
-            f"chmod 0644 {unit} release.env",
+            heredoc(RELEASE_ENV, release_env(artefact)),
+            f"chmod 0644 {unit} {RELEASE_ENV}",
             f"docker pull --quiet {artefact.image}",
             # an explicit command: `docker create` refuses an image without CMD otherwise
             f"container=$(docker create {artefact.image} {binary})",
@@ -364,6 +364,8 @@ def remote_script(
 
 
 class PrivateSystemd(RemoteTarget):
+    ssh_host_must_be_declared = True
+
     def __init__(self, repo: Path, cfg: RailConfig, **kwargs: Any) -> None:
         super().__init__(repo, cfg, **kwargs)
         deploy = cfg.deploy

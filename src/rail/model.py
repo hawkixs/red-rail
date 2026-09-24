@@ -37,6 +37,9 @@ _UNIT_PATH = re.compile(rf"^(?:[A-Za-z0-9._-]+/)*{UNIT_NAME_PATTERN}$")
 # The binary's path inside the released image: absolute and of safe characters, because it
 # reaches the remote script.
 _BINARY_PATH = re.compile(r"^(?:/[A-Za-z0-9._-]+)+$")
+# What a systemd release carries next to the binary and the unit: the values `/version`
+# answers, read through the unit's `EnvironmentFile=`.
+RELEASE_ENV = "release.env"
 
 
 def _has_dot_segment(path: str) -> bool:
@@ -127,6 +130,17 @@ class DeployConfig(BaseModel):
                 "deploy.binary must be an absolute path of safe characters inside the image, "
                 f"got {self.binary!r}"
             )
+        if self.unit is not None and self.binary is not None:
+            # the release directory holds the binary, the unit and `release.env` side by side
+            # (spec 2026-09-24-private-systemd-target, decision 4), each under its file name
+            name = self.binary.rsplit("/", 1)[-1]
+            held = {self.unit.rsplit("/", 1)[-1]: "the unit", RELEASE_ENV: RELEASE_ENV}
+            if name in held:
+                raise ValueError(
+                    f"deploy.binary is copied into the release as {name!r}, which would "
+                    f"overwrite {held[name]}: the binary's file name must differ from the "
+                    f"unit's and from {RELEASE_ENV}"
+                )
         return self
 
 

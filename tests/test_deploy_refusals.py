@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
 
 from rail.deploy import Artefact, DeployError, flow
 from rail.deploy.private_compose import PrivateCompose
@@ -198,3 +199,25 @@ def test_a_drill_that_would_apply_a_refused_artefact_never_starts(
         flow.drill(case.repo, load_rail_config(case.repo), _ledger(case), target=case.build(host))
     assert _ssh(host) == []
     assert _history(case) == before
+
+
+def _forget_the_ssh_host(repo: Path) -> None:
+    manifest = yaml.safe_load((repo / "rail.yaml").read_text())
+    del manifest["gates"]["deploy.ssh_host"]
+    (repo / "rail.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_a_private_target_that_does_not_name_its_ssh_host_is_refused(
+    tmp_path: Path, shape: str
+) -> None:
+    """The policy's default `deploy.ssh_host` is the border VPS. A private manifest that does
+    not name its machine would write, pull and create there before anything failed; the
+    target refuses to be built instead, before the first ssh, naming the parameter."""
+    case = SHAPES[shape](tmp_path)
+    _forget_the_ssh_host(case.repo)
+    assert "deploy.ssh_host" not in load_rail_config(case.repo).gates, "the manifest still loads"
+    host = systemd_case.RecordingHost()
+    with pytest.raises(DeployError, match="deploy.ssh_host"):
+        case.build(host)
+    assert _ssh(host) == []
