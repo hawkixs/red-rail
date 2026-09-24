@@ -15,14 +15,14 @@ from rail.scaffold import ScaffoldError, upgrade
 @repo_option
 @click.option(
     "--stack",
-    type=click.Choice([s.value for s in Stack]),
+    type=click.Choice([s.value for s in Stack if s is not Stack.DOCS]),
     default=None,
     help="Leave stack docs for this stack (the only switch the template supports).",
 )
 def command(repo: Path, stack: str | None) -> None:
     """Resorb template drift: bring the repository to the template's latest version."""
     try:
-        version = upgrade(repo, stack=Stack(stack)) if stack else upgrade(repo)
+        version = upgrade(repo, stack=Stack(stack) if stack else None)
     except ScaffoldError as exc:
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc

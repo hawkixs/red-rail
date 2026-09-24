@@ -1498,3 +1498,17 @@ def test_cli_upgrade_takes_a_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert result.exit_code == 0, result.output
     assert calls == [{"stack": Stack.RUST}]
     assert "make sync" in result.output
+
+
+def test_cli_upgrade_rejects_docs_as_a_switch_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--stack docs` is always refused by `_switchable`: offering it in the CLI's own Choice
+    only lets an operator hit a refusal copier could have avoided at the option-parsing level."""
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "rail.commands.upgrade.upgrade", lambda repo, **kw: calls.append(kw) or "v0.6.0"
+    )
+    result = CliRunner().invoke(main, ["upgrade", "--repo", str(tmp_path), "--stack", "docs"])
+    assert result.exit_code == 2, result.output
+    assert calls == []
