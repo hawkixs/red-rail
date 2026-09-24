@@ -284,14 +284,19 @@ def _rust_profile(repo: Path) -> GateResult:
     toolchain = _toml(repo / "rust-toolchain.toml")
     if isinstance(toolchain, str):
         return fail(toolchain)
-    pinned = toolchain.get("toolchain", {})
+    pinned = toolchain.get("toolchain")
+    if not isinstance(pinned, dict):
+        return fail("rust-toolchain.toml has no [toolchain] table")
     channel = str(pinned.get("channel", ""))
     if not _EXACT_CHANNEL.match(channel):
         return fail(
             f"rust-toolchain.toml channel {channel!r} is not an exact version (X.Y.Z): a floating "
             "channel changes clippy's lints under a green project"
         )
-    missing = sorted({"rustfmt", "clippy"} - set(pinned.get("components", [])))
+    components = pinned.get("components", [])
+    if not isinstance(components, list) or not all(isinstance(c, str) for c in components):
+        components = []  # the wrong shape is treated as absent, never as a crash
+    missing = sorted({"rustfmt", "clippy"} - set(components))
     if missing:
         return fail(f"rust-toolchain.toml components lack {', '.join(missing)}")
     if not (repo / "Cargo.toml").is_file():

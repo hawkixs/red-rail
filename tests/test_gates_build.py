@@ -497,3 +497,23 @@ def test_rust_lint_fails_and_names_the_broken_file(tmp_path: Path, broken: str) 
     (dest / broken).write_text("[toolchain\nchannel = \n")
     result = lint(dest)
     assert not result.passed and broken in result.details, result.details
+
+
+@pytest.mark.parametrize(
+    "toolchain_text",
+    [
+        'toolchain = "stable"\n',
+        '[toolchain]\nchannel = "1.98.1"\ncomponents = "rustfmt"\n',
+    ],
+    ids=["toolchain-not-a-table", "components-not-a-list"],
+)
+def test_rust_lint_fails_and_names_the_file_when_toolchain_is_malformed(
+    tmp_path: Path, toolchain_text: str
+) -> None:
+    """Valid TOML whose shape is wrong (`toolchain` not a table, or `components` not a list of
+    strings) is a FAIL naming rust-toolchain.toml, never an AttributeError (the gate never
+    raises)."""
+    dest = _rendered_rust(tmp_path)
+    (dest / "rust-toolchain.toml").write_text(toolchain_text)
+    result = lint(dest)
+    assert not result.passed and "rust-toolchain.toml" in result.details, result.details
