@@ -880,8 +880,45 @@ STACK_CHAIN = re.compile(
     r"\{#-?\s*stack-chain:\s*(?P<name>[a-z-]+)\s*-?#\}(?P<body>.*?)\{#-?\s*/stack-chain\s*-?#\}",
     re.DOTALL,
 )
-STACK_CHAINS = {"CLAUDE.md.jinja": {"stack", "structure"}}
+STACK_CHAINS = {"CLAUDE.md.jinja": {"stack", "structure"}, "AGENTS.md.jinja": {"gates"}}
 _ELSE = re.compile(r"\{%-?\s*else\s*-?%\}")
+GUIDANCE = ("CLAUDE.md", "AGENTS.md")
+STACK_GATES = {
+    Stack.PYTHON: "`uv run pytest -q`",
+    Stack.GO: "`go test -race -count=1 ./...`",
+    Stack.DOCS: "no stack command of its own",
+}
+# D9's sections and D10's rows, in the order AGENTS.md must hold them
+AGENTS_ORDER = (
+    "Read `CLAUDE.md` first",
+    'names as "Parent project"',
+    "the `graph` method is **unavailable**",
+    "A pre-review never satisfies the review gate",
+    "## The invariants you must not break",
+    "**Always: `rail check` is the verdict**",
+    "**Always: the only bypass is a `gates:` override",
+    "**With `ledger: file`:",
+    "**With `ledger: brain`:",
+    "**At `tier: prod`:",
+    "**At `prod` with `deploy.target: vps-traefik`:",
+    "**At `prod` with any other target:",
+    "| project-specific: fill in |",
+    "## Gates",
+    "make ci        # exactly what CI runs",
+    "rail check     # the rail's gates",
+    "## Brain MCP",
+    "never `brain_learn` by default",
+    "## Subagents",
+    "Every subagent prompt names its perimeter",
+)
+
+
+def _in_order(text: str, needles: tuple[str, ...]) -> None:
+    position = 0
+    for needle in needles:
+        found = text.find(needle, position)
+        assert found >= 0, f"missing, or out of order: {needle!r}"
+        position = found + len(needle)
 
 
 def _render_combo(template: Path, dest: Path, combo: Combo) -> Path:
@@ -918,8 +955,12 @@ def renders(tmp_path_factory: pytest.TempPathFactory) -> dict[Combo, Path]:
 @pytest.mark.parametrize("combo", COMBOS, ids=[c.label for c in COMBOS])
 def test_rendered_guidance_points_at_the_root(renders: dict[Combo, Path], combo: Combo) -> None:
     """The method, the review and the invariants that hold whatever the method live once, in
-    the ReD root: `CLAUDE.md` points at their sections and copies neither, and says where
-    each moving fact is read (decisions 6-8)."""
+    the ReD root: `CLAUDE.md` points at their sections and copies neither (decisions 6-8).
+    `AGENTS.md` carries what Codex cannot reach from a sub-project's git root, and points at
+    the rest (decisions 9-10)."""
+    key = combo.brain_key
+    call = f'brain_session_start("{key}", client_key="<harness>-{key}-<YYYY-MM-DD>")'
+
     claude = (renders[combo] / "CLAUDE.md").read_text()
     for title in ROOT_TITLES:
         assert f'§ "{title}"' in claude, title
@@ -929,13 +970,36 @@ def test_rendered_guidance_points_at_the_root(renders: dict[Combo, Path], combo:
     assert table in claude
     assert claude.index("## Project") < claude.index(table) < claude.index("## Language")
     assert "| What tier, which ledger, which target? | `rail.yaml` |" in claude
-    key = combo.brain_key
-    call = f'brain_session_start("{key}", client_key="<harness>-{key}-<YYYY-MM-DD>")'
     assert f"`{call}`" in claude and claude.count("brain_session_start(") == 1
     lesson = f'brain_learn(topic, insight, project_key="{key}")'
     assert claude.index("## Brain MCP") < claude.index(lesson)
     assert f"## Stack\n\n{STACK_LINE[combo.stack]}\n\n## Commands" in claude
     assert "stack-chain" not in claude
+
+    agents = (renders[combo] / "AGENTS.md").read_text()
+    _in_order(agents, AGENTS_ORDER)
+    assert f"`{call}`" in agents and agents.count("brain_session_start(") == 1
+    assert agents.index("## Brain MCP") < agents.index(call)
+    assert STACK_GATES[combo.stack] in agents
+    assert "../../AGENTS.md" not in agents and "~/" not in agents
+    assert "stack-chain" not in agents
+    for target in DeployTarget:
+        if target is not DeployTarget.VPS_TRAEFIK:
+            assert target.value not in agents, f"AGENTS.md names the private {target.value}"
+
+
+def test_agents_md_does_not_depend_on_tier_ledger_or_target(renders: dict[Combo, Path]) -> None:
+    """Copier answers freeze at scaffold time and nothing re-answers `tier` on promotion, so
+    the invariant rows are unconditional, each prefixed by the value it applies to (decision
+    10): for one stack and one key, one `AGENTS.md`, whatever the tier, ledger and target."""
+    texts: dict[tuple[Stack, str], set[str]] = {}
+    for combo, dest in renders.items():
+        texts.setdefault((combo.stack, combo.brain_key), set()).add(
+            (dest / "AGENTS.md").read_text()
+        )
+    assert {stack for stack, _ in texts} == set(Stack)
+    varying = sorted(f"{s.value}/{key}" for (s, key), seen in texts.items() if len(seen) != 1)
+    assert not varying, f"AGENTS.md varies with tier, ledger or target for {varying}"
 
 
 def test_every_stack_chain_names_every_stack() -> None:
