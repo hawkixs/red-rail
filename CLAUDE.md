@@ -18,6 +18,20 @@ GitHub is the only remote that counts: ReD is GitHub only (decision `30acbbde`, 
 nothing pushes to it. A project that keeps a mirror declares its host (`gates: hygiene.mirror_host`)
 and the rail then requires it and pushes release tags to it; `rail new` creates GitHub alone.
 
+## Where things live
+
+| Question | Where to look |
+|---|---|
+| What is this project, what stack, what key? | this file |
+| What tier, which ledger, which target? | `rail.yaml` |
+| What state is it in, what is the focus, what is blocked? | the session-start call in § Brain MCP |
+| What can break here, which gates? | `AGENTS.md` |
+| What was promised, what evidence exists? | `ledger: file`: `docs/receipts/`; `ledger: brain`: the ticket named in `rail.yaml` |
+| Why did we choose Y? | brain decisions, `docs/adr/` |
+| Specs and plans | `docs/specs/`, `docs/plans/` |
+| Which method, which review? | root `CLAUDE.md` § "Workflows — the operator picks the method" |
+| Machines, addresses, access | brain machine records (`brain_recall`), never this file |
+
 ## Language
 
 Everything pushed to a remote is written in **English**: commits, branches, PRs, docs, code
@@ -163,21 +177,6 @@ red-rail/
   makes the gate require it and the release push to it.
   `hawkixs/red-rail` is public (Apache-2.0) since the same day: every project's CI installs
   `rail` without a token.
-
-## Where things live
-
-| Question | Where to look |
-|---|---|
-| What is this project, what stack, what key? | this file |
-| What tier, which ledger, which target? | `rail.yaml` |
-| What state is it in, what is the focus, what is blocked? | the session-start call in § Brain MCP |
-| What can break here, which gates? | `AGENTS.md` |
-| What was promised, what evidence exists? | `ledger: file`: `docs/receipts/`; `ledger: brain`: the ticket named in `rail.yaml` |
-| Why did we choose Y? | brain decisions, `docs/adr/` |
-| Specs and plans | `docs/specs/`, `docs/plans/` |
-| Which method, which review? | root `CLAUDE.md` § "Workflows — the operator picks the method" |
-| Machines, addresses, access | brain machine records (`brain_recall`), never this file |
-
 - Design spec: `docs/specs/2026-09-14-red-rail-design.md` (ten stages, three tiers,
   `rail.yaml`, end-to-end flow, failure modes, phasing).
 - Attestations come only from the server host; the runner VM never reaches brain or the VPS.

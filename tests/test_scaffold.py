@@ -1151,7 +1151,9 @@ def test_red_rails_own_guidance_follows_its_template() -> None:
     agents = (ROOT / "AGENTS.md").read_text()
     for title in ROOT_TITLES:
         assert f'§ "{title}"' in claude, title
-    assert "## Where things live\n\n| Question | Where to look |\n|---|---|\n" in claude
+    table = "## Where things live\n\n| Question | Where to look |\n|---|---|\n"
+    assert table in claude
+    assert claude.index("## Project") < claude.index(table) < claude.index("## Language")
     assert "## Working principles" not in claude
     assert "`rail check` passes on this repository" in claude
     assert "`pre-review.js` must pass" in claude
