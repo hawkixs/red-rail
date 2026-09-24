@@ -186,11 +186,18 @@ def changed_lines(diff: str) -> int:
 
 
 def _delta(
-    pr: PullRequest, previous: Record | None, *, github: GitHubLike, policy: ReviewPolicy
+    pr: PullRequest,
+    previous: Record | None,
+    whole: str,
+    *,
+    github: GitHubLike,
+    policy: ReviewPolicy,
 ) -> str | None:
     """The diff since the last verdict's head, or None when the whole PR must be judged
     again: no earlier verdict, incremental off, the rerun label, the same head, a base
-    GitHub no longer knows (rebase / force-push)."""
+    GitHub no longer knows (rebase / force-push), or a delta touching a file the PR's own
+    diff (`whole`, base...head) does not — the base branch merged into the head, whose
+    changes are not the PR's to judge (measured on hawkixs/red-rail#46)."""
     if previous is None or not policy.incremental or policy.rerun_label in pr.labels:
         return None
     base = str(previous.data.get("sha") or "")
@@ -200,7 +207,10 @@ def _delta(
         delta = github.compare_diff(pr.repository, base, pr.head_sha)
     except GitHubError:
         return None
-    return delta if delta.strip() else None
+    if not delta.strip():
+        return None
+    own = set(_files(whole))
+    return delta if set(_files(delta)) <= own else None
 
 
 def _notes(pr: PullRequest, previous: Record, *, github: GitHubLike) -> str:
@@ -455,13 +465,14 @@ def _review_started(
         )
     failures: list[str] = []
     previous = history[-1] if history else None
-    delta = _delta(pr, previous, github=github, policy=policy)
+    whole = github.diff(pr.repository, pr.number)
+    delta = _delta(pr, previous, whole, github=github, policy=policy)
     if delta is not None:
         assert previous is not None
         diff, notes = delta, _notes(pr, previous, github=github)
         light = changed_lines(delta) <= policy.light_max_changed_lines
     else:
-        diff, notes = github.diff(pr.repository, pr.number), ""
+        diff, notes = whole, ""
         light = policy.mode_for(pr, docs_only=docs_only(diff, policy)) == "light"
     producer = producer_provider(github.commit_messages(pr.repository, pr.number))
     chain = policy.chain_for(producer=producer)
