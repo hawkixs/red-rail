@@ -122,3 +122,48 @@ def test_the_template_never_inherits_every_secret() -> None:
     # fail a text search for it, and what matters is what the workflow is handed
     assert job.get("secrets") != "inherit", "hand over a declared secret, not the whole box"
     assert "secrets" not in job, "no secret is needed at all: the fallback is github.token"
+
+
+def test_rail_ci_installs_rust_from_the_project_pin() -> None:
+    """rustup by version and checksum, the toolchain from the project's rust-toolchain.toml
+    (the one pin), a cache keyed on what decides its content, then the lock checked by
+    `--locked` (spec 2026-09-24-rust-stack, decision 8)."""
+    wf = _load("rail-ci.yml")
+    assert "rust" in wf["on"]["workflow_call"]["inputs"]["stack"]["description"]
+    steps = _steps(wf)
+    rust = [s for s in steps if s.get("if") == "inputs.stack == 'rust'"]
+    assert [s["name"] for s in rust] == [
+        "Set up Rust (rustup pinned, checksum verified)",
+        "Cache the cargo registry and the pinned cargo-deny",
+        "Fetch against the committed lock, install cargo-deny",
+    ]
+    setup, cache, sync = rust
+    assert re.fullmatch(r"[0-9a-f]{64}", setup["env"]["RUSTUP_INIT_SHA256"])
+    assert setup["env"]["RUSTUP_VERSION"] == "1.29.1"
+    run = setup["run"]
+    assert "sha256sum -c" in run
+    assert "--default-toolchain none" in run
+    assert re.search(r'"\$HOME/\.cargo/bin/rustup" toolchain install\s*$', run, re.MULTILINE)
+    assert '"$HOME/.cargo/bin/rustup" component add rustfmt clippy' in run
+    assert run.index("cargo fmt --version") < run.index("cargo clippy --version")
+    assert not re.search(r"\b1\.\d+\.\d+\b", run), "the toolchain version lives in the project"
+    assert run.rstrip().endswith('echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"')
+
+    assert PINNED.match(cache["uses"])
+    key = cache["with"]["key"]
+    for name in ("rust-toolchain.toml", "Cargo.lock", "Makefile"):
+        assert f"'{name}'" in key, name
+    paths = cache["with"]["path"].split()
+    assert ".cargo-tools" in paths and not any("target" in p for p in paths)
+    assert sync["run"].strip() == "make sync LOCKED=--locked"
+
+    names = [s.get("name") for s in steps]
+    assert names.index(sync["name"]) < names.index("Project CI (make ci, rail gates in CI scope)")
+
+
+def test_the_template_ci_passes_no_runner() -> None:
+    """GitHub-hosted by default: a project moves to red-ci by its own choice (decision 9)."""
+    template = (
+        ROOT / "template" / "project" / ".github" / "workflows" / "continuous-integration.yml.jinja"
+    )
+    assert "runs-on" not in template.read_text()

@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       stack:
-        description: "python | go | docs — must match rail.yaml"
+        description: "python | go | rust | docs — must match rail.yaml"
         type: string
         required: true
       rail-ref:
@@ -72,6 +72,49 @@ jobs:
           # nothing to cache: the template ships no go.sum, and `make sync` is what writes
           # one. `cache: true` would only warn that it found no dependency file to key on.
           cache: false
+
+      # Rust: rustup pinned by version and sha256, as gitleaks is below, and the toolchain read
+      # from the project's own rust-toolchain.toml, the one pin, never repeated here. rustup is
+      # called by absolute path: a $GITHUB_PATH write reaches later steps only. `component add`
+      # acts on that file's toolchain; the bare `toolchain install` does not reliably add its
+      # components (rustup #4216). The two --version calls fail setup, not lint, on a missing one.
+      - name: Set up Rust (rustup pinned, checksum verified)
+        if: inputs.stack == 'rust'
+        env:
+          RUSTUP_VERSION: "1.29.1"
+          RUSTUP_INIT_SHA256: "dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71"
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init"
+          echo "${RUSTUP_INIT_SHA256}  /tmp/rustup-init" | sha256sum -c -
+          chmod 0755 /tmp/rustup-init
+          /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none
+          "$HOME/.cargo/bin/rustup" toolchain install
+          "$HOME/.cargo/bin/rustup" component add rustfmt clippy
+          $HOME/.cargo/bin/cargo fmt --version
+          $HOME/.cargo/bin/cargo clippy --version
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      # Keyed on what decides the content: the toolchain, the lock, and the Makefile that pins
+      # cargo-deny. target/ is not cached. A prefix restore is safe: `cargo install --version`
+      # replaces an older cargo-deny, and `--locked` still judges the lock.
+      - name: Cache the cargo registry and the pinned cargo-deny
+        if: inputs.stack == 'rust'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            .cargo-tools
+          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'Makefile') }}
+          restore-keys: |
+            rust-${{ runner.os }}-
+
+      # A missing (uncommitted) or stale Cargo.lock fails here instead of being written.
+      - name: Fetch against the committed lock, install cargo-deny
+        if: inputs.stack == 'rust'
+        run: make sync LOCKED=--locked
 
       - name: Install gitleaks (pinned, checksum verified)
         env:
