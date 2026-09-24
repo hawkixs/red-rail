@@ -27,6 +27,12 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Iterator
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+from rail.deploy import Artefact, DeployError
+from rail.deploy.remote import Parameters, RemoteTarget, env_lines, heredoc, lock_preamble
+from rail.model import RailConfig
 
 # `+`, `!` and `!!` run a command with full privileges whatever `User=` says; `@`, `-` and `:`
 # change how it runs, not who runs it (systemd.service, "Command lines").
@@ -279,3 +285,87 @@ def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> li
         refusals.append(f"{unit}: PermissionsStartOnly= runs the Exec*Pre/Post commands as root")
 
     return refusals
+
+
+def release_env(artefact: Artefact) -> str:
+    """What the binary reads through `EnvironmentFile=` to answer `/version`, never a secret."""
+    return env_lines(
+        (
+            ("VERSION", artefact.version),
+            ("GIT_SHA", artefact.sha),
+            ("IMAGE_DIGEST", artefact.digest),
+            ("IMAGE_REFERENCE", artefact.image),
+        )
+    )
+
+
+def remote_script(
+    project: str, artefact: Artefact, unit: str, unit_text: str, binary: str, params: Parameters
+) -> str:
+    """The remote phase as one bash script, in the order of spec decision 5."""
+    root = f"{params.stack_root}/{project}"
+    release = f"{root}/releases/{artefact.version}"
+    name = PurePosixPath(binary).name
+    staged = f'"$release/.{name}.new"'
+    return "\n".join(
+        [
+            *lock_preamble(root, release),
+            heredoc(unit, unit_text),
+            heredoc("release.env", release_env(artefact)),
+            f"chmod 0644 {unit} release.env",
+            f"docker pull --quiet {artefact.image}",
+            # an explicit command: `docker create` refuses an image without CMD otherwise
+            f"container=$(docker create {artefact.image} {binary})",
+            # set before the first command that can fail with a container to clean up
+            "trap 'docker rm --force \"$container\" >/dev/null 2>&1 || true' EXIT",
+            f'docker cp --follow-link "$container:{binary}" {staged}',
+            f"chmod 0755 {staged}",
+            # a rename, never a write into the file: redeploying the running version must not
+            # hit `Text file busy`
+            f'mv --force {staged} "$release/{name}"',
+            'ln -sfn "$release" "$root/current"',
+            "sudo -n /usr/bin/systemctl daemon-reload",
+            f"sudo -n /usr/bin/systemctl restart {unit}",
+            f"systemctl is-active {unit}",
+            "",
+        ]
+    )
+
+
+class PrivateSystemd(RemoteTarget):
+    def __init__(self, repo: Path, cfg: RailConfig, **kwargs: Any) -> None:
+        super().__init__(repo, cfg, **kwargs)
+        deploy = cfg.deploy
+        if deploy is None or deploy.unit is None or deploy.binary is None:
+            # unreachable through a manifest: the model requires both for this target
+            raise DeployError("target private-systemd needs deploy.unit and deploy.binary")
+        self.unit_path = deploy.unit
+        self.unit = PurePosixPath(deploy.unit).name
+        self.binary = deploy.binary
+
+    @property
+    def current(self) -> str:
+        return f"{self.params.stack_root}/{self.cfg.project}/current"
+
+    def script_for(self, artefact: Artefact) -> str:
+        unit_text = self.file_at(artefact.sha, self.unit_path, "the unit file")
+        refusals = unit_refusals(
+            unit_text,
+            unit=self.unit,
+            current=self.current,
+            binary_name=PurePosixPath(self.binary).name,
+        )
+        if refusals:
+            raise DeployError(
+                "the released unit is refused before the first ssh — " + "; ".join(refusals)
+            )
+        return remote_script(
+            self.cfg.project, artefact, self.unit, unit_text, self.binary, self.params
+        )
+
+    def describe(self, artefact: Artefact) -> str:
+        stack = f"{self.params.stack_root}/{self.cfg.project}"
+        return (
+            f"ssh {self.params.ssh_host}: release {artefact.version} under {stack}, "
+            f"restart {self.unit}"
+        )

@@ -156,11 +156,14 @@ class RemoteTarget:
     # -- the shared mechanics -------------------------------------------------------------
 
     def file_at(self, sha: str, path: str, what: str) -> str:
-        """A file exactly as released: `git show <sha>:<path>`, never the working tree."""
+        """A file exactly as released: `git show <sha>:<path>`, never the working tree. Read as
+        bytes, never `text=True`: a decoding error must be this check's own refusal, not
+        Python's silent best-effort substitution of whatever the platform default happens to
+        be. Decoded strictly as UTF-8 — a file that is not valid UTF-8 is refused by name,
+        before the first ssh, rather than reaching the target mangled or truncated."""
         done = self._run(
             ["git", "-C", str(self.repo), "show", f"{sha}:{path}"],
             capture_output=True,
-            text=True,
             check=False,
             env={**os.environ, "LC_ALL": "C"},  # git's own words, one language
         )
@@ -169,7 +172,12 @@ class RemoteTarget:
                 f"{path} is not committed at {sha[:12]} — {what} is read at the released "
                 "commit, never from the working tree"
             )
-        return done.stdout
+        try:
+            return done.stdout.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise DeployError(
+                f"{path} at {sha[:12]} is not UTF-8 — {what} is refused before the first ssh"
+            ) from exc
 
     def steps(self, artefact: Artefact) -> list[Step]:
         script = self.script_for(artefact)

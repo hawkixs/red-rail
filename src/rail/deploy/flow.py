@@ -37,15 +37,22 @@ class Target(Protocol):
     def redact(self, text: str) -> str: ...
 
 
-def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
-    """The manifest names the shape; the flows never branch on it again."""
+def implementations() -> dict[DeployTarget, type]:
+    """Every shape the rail can build, by the manifest value that names it."""
     from rail.deploy.private_compose import PrivateCompose
+    from rail.deploy.private_systemd import PrivateSystemd
     from rail.deploy.vps_traefik import VpsTraefik
 
-    implemented: dict[DeployTarget, type] = {
+    return {
         DeployTarget.VPS_TRAEFIK: VpsTraefik,
         DeployTarget.PRIVATE_COMPOSE: PrivateCompose,
+        DeployTarget.PRIVATE_SYSTEMD: PrivateSystemd,
     }
+
+
+def make_target(repo: Path, cfg: RailConfig, **kwargs: Any) -> Target:
+    """The manifest names the shape; the flows never branch on it again."""
+    implemented = implementations()
     shape = implemented.get(cfg.deploy.target) if cfg.deploy else None
     if shape is None:
         name = cfg.deploy.target.value if cfg.deploy else "none"

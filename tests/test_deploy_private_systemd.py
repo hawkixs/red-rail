@@ -1,9 +1,22 @@
 """Target `private-systemd`: a binary that systemd runs (spec
 2026-09-24-private-systemd-target). Addresses are RFC 5737 documentation addresses only."""
 
-import pytest
+import json
+import shutil
+import subprocess
+from pathlib import Path
 
-from rail.deploy.private_systemd import parse_unit, unit_refusals
+import pytest
+from click.testing import CliRunner
+
+from rail.cli import main
+from rail.deploy import Artefact, DeployError
+from rail.deploy.flow import implementations, make_target
+from rail.deploy.private_systemd import PrivateSystemd, parse_unit, unit_refusals
+from rail.ledger import RECEIPTS_DIR, AttestationKind
+from rail.ledger.file import FileLedger
+from rail.model import DeployTarget, load_rail_config
+from tests.helpers import commit_all, conforming_tree, write_manifest
 
 CURRENT = "/opt/red-monitor/current"
 UNIT = "red-agent.service"
@@ -349,3 +362,294 @@ def test_a_printable_non_ascii_letter_is_still_accepted() -> None:
         "Description=ReD Monitoring Agent", "Description=Agent ReD, réseau privé", 1
     )
     assert _refusals(text) == []
+
+
+# -- the target ---------------------------------------------------------------------------
+
+BIND = "192.0.2.10"  # RFC 5737 TEST-NET-1: a documentation address, never a real host
+DIGEST = "sha256:" + "c" * 64
+IMAGE = f"ghcr.io/hawkixs/red-monitor@{DIGEST}"
+
+
+def _unit_for(stack_root: str) -> str:
+    return GOOD.replace("/opt/red-monitor", f"{stack_root}/red-monitor")
+
+
+def _systemd_repo(tmp_path: Path, unit_text: str = GOOD, *, stack_root: str | None = None) -> Path:
+    repo = conforming_tree(tmp_path, "red-monitor", "prod")
+    gates: dict[str, tuple[object, str]] = {
+        "deploy.ssh_host": ("private-1-deploy", "the host's ssh alias for the site")
+    }
+    if stack_root is not None:
+        gates["deploy.stack_root"] = (stack_root, "a scratch root for a test run")
+    write_manifest(repo, project="red-monitor", tier="prod", gates=gates, deploy=True)
+    manifest = (
+        (repo / "rail.yaml")
+        .read_text()
+        .replace(
+            "  target: vps-traefik\n",
+            "  target: private-systemd\n  site: private-1\n"
+            "  unit: deploy/red-agent.service\n  binary: /usr/local/bin/red\n",
+        )
+    )
+    manifest = "\n".join(
+        '  healthcheck: "http://${BIND_ADDRESS}:9100/health"'
+        if line.strip().startswith("healthcheck:")
+        else line
+        for line in manifest.splitlines()
+    )
+    (repo / "rail.yaml").write_text(manifest + "\n")
+    (repo / "deploy").mkdir(exist_ok=True)
+    (repo / "deploy" / "red-agent.service").write_text(unit_text)
+    commit_all(repo, "feat: the agent's unit")
+    return repo
+
+
+def _host(tmp_path: Path) -> Path:
+    path = tmp_path / "sites.yaml"
+    path.write_text(f'sites:\n  private-1:\n    address: "{BIND}"\n')
+    path.chmod(0o600)
+    return path
+
+
+class RecordingHost:
+    def __init__(self) -> None:
+        self.argv: list[list[str]] = []
+
+    def __call__(self, args, **kwargs):
+        self.argv.append(list(args))
+        if args[0] == "ssh":
+            return subprocess.CompletedProcess(args, 0, stdout="active\n", stderr="")
+        return subprocess.run(args, **kwargs)
+
+
+def _artefact(repo: Path) -> Artefact:
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return Artefact(version="0.1.0", sha=head, digest=DIGEST, image=IMAGE)
+
+
+def _target(repo: Path, tmp_path: Path, *, run=None, http=None) -> PrivateSystemd:
+    kwargs: dict[str, object] = {"run": run or RecordingHost()}
+    if http is not None:
+        kwargs["http"] = http
+    return PrivateSystemd(repo, load_rail_config(repo), sites=_host(tmp_path), **kwargs)
+
+
+def _script(tmp_path: Path) -> str:
+    repo = _systemd_repo(tmp_path / "repo")
+    return _target(repo, tmp_path).steps(_artefact(repo))[0].stdin or ""
+
+
+def test_the_steps_name_the_site_and_restart_the_unit(tmp_path: Path) -> None:
+    repo = _systemd_repo(tmp_path / "repo")
+    steps = _target(repo, tmp_path).steps(_artefact(repo))
+    assert "private-1-deploy" in steps[0].title and "restart red-agent.service" in steps[0].title
+    assert steps[0].argv[0] == "ssh"
+    assert steps[1].argv == ("GET", f"http://{BIND}:9100/health")
+    assert steps[2].argv == ("GET", f"http://{BIND}:9100/version")
+
+
+def test_the_remote_script_runs_the_spec_sequence_in_order(tmp_path: Path) -> None:
+    script = _script(tmp_path)
+    sequence = [
+        "flock -n 9",
+        "cat > red-agent.service",
+        "cat > release.env",
+        f"docker pull --quiet {IMAGE}",
+        f"container=$(docker create {IMAGE} /usr/local/bin/red)",
+        "trap ",
+        'docker cp --follow-link "$container:/usr/local/bin/red"',
+        'mv --force "$release/.red.new" "$release/red"',
+        'ln -sfn "$release" "$root/current"',
+        "sudo -n /usr/bin/systemctl daemon-reload",
+        "sudo -n /usr/bin/systemctl restart red-agent.service",
+        "systemctl is-active red-agent.service",
+    ]
+    positions = [script.index(fragment) for fragment in sequence]
+    assert positions == sorted(positions), list(zip(sequence, positions, strict=True))
+
+
+def test_the_only_privileged_commands_are_the_two_the_sudoers_file_allows(tmp_path: Path) -> None:
+    script = _script(tmp_path)
+    assert [line for line in script.splitlines() if "sudo" in line] == [
+        "sudo -n /usr/bin/systemctl daemon-reload",
+        "sudo -n /usr/bin/systemctl restart red-agent.service",
+    ]
+    assert "/etc/systemd" not in script, "the unit is linked at migration, never copied"
+
+
+def test_release_env_carries_what_version_reads_and_no_secret(tmp_path: Path) -> None:
+    script = _script(tmp_path)
+    body = script.split("cat > release.env <<'__RAIL_RELEASE.ENV__'\n", 1)[1].split("__RAIL_")[0]
+    keys = [line.split("=", 1)[0] for line in body.splitlines()]
+    assert keys == ["VERSION", "GIT_SHA", "IMAGE_DIGEST", "IMAGE_REFERENCE"]
+
+
+def test_a_running_binary_is_replaced_by_rename_never_written_in_place(tmp_path: Path) -> None:
+    """Review focus 3: redeploying the running version must not write into the executable
+    systemd is running (`Text file busy`). The copy lands under a temporary name, then a
+    rename swaps it in."""
+    script = _script(tmp_path)
+    assert 'docker cp --follow-link "$container:/usr/local/bin/red" "$release/.red.new"' in script
+    assert '"$release/red"' not in script.split("mv --force", 1)[0]
+
+
+def test_a_refused_unit_never_reaches_the_machine(tmp_path: Path) -> None:
+    repo = _systemd_repo(tmp_path / "repo", GOOD.replace("User=red-monitor\n", "User=root\n"))
+    host = RecordingHost()
+    with pytest.raises(DeployError, match="User="):
+        _target(repo, tmp_path, run=host).apply(_artefact(repo))
+    assert [argv for argv in host.argv if argv[0] == "ssh"] == []
+
+
+def test_a_unit_that_is_not_utf8_is_refused_before_the_first_ssh(tmp_path: Path) -> None:
+    """Amendment (c): `RemoteTarget.file_at` decodes the released file strictly as UTF-8. A unit
+    committed with an invalid byte must be refused by name before the first ssh, never decoded
+    best-effort and shipped mangled to the machine."""
+    repo = _systemd_repo(tmp_path / "repo")
+    (repo / "deploy" / "red-agent.service").write_bytes(GOOD.encode("utf-8") + b"\xff")
+    commit_all(repo, "fix: corrupt the unit with an invalid UTF-8 byte")
+    host = RecordingHost()
+    with pytest.raises(DeployError, match=r"deploy/red-agent\.service"):
+        _target(repo, tmp_path, run=host).apply(_artefact(repo))
+    assert [argv for argv in host.argv if argv[0] == "ssh"] == []
+
+
+def test_the_deployment_is_verified_like_every_other_target(tmp_path: Path) -> None:
+    repo = _systemd_repo(tmp_path / "repo")
+    artefact = _artefact(repo)
+    asked: list[str] = []
+
+    def web(url: str, timeout: float) -> tuple[int, bytes]:
+        asked.append(url)
+        if url.endswith("/health"):
+            return 200, b'{"status":"ok"}'
+        return 200, json.dumps(
+            {
+                "project": "red-monitor",
+                "version": artefact.version,
+                "git_sha": artefact.sha,
+                "image_digest": artefact.digest,
+            }
+        ).encode()
+
+    live = _target(repo, tmp_path, http=web).apply(artefact)
+    assert live.image_digest == DIGEST
+    assert asked == [f"http://{BIND}:9100/health", f"http://{BIND}:9100/version"]
+
+
+def test_records_name_the_site_never_its_address(tmp_path: Path) -> None:
+    repo = _systemd_repo(tmp_path / "repo")
+    target = _target(repo, tmp_path)
+    assert target.domain == "private-1"
+    assert target.redact(f"connect to host {BIND} port 22") == "connect to host private-1 port 22"
+
+
+def test_the_flows_build_the_systemd_target_from_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _systemd_repo(tmp_path / "repo")
+    monkeypatch.setenv("RAIL_SITES_FILE", str(_host(tmp_path)))
+    assert isinstance(make_target(repo, load_rail_config(repo)), PrivateSystemd)
+
+
+def test_every_target_the_manifest_can_declare_is_implemented() -> None:
+    """513e109b, criterion 1: a declarable target without an implementation must show. With
+    `private-systemd` none is left, and this keeps it so."""
+    assert set(implementations()) == set(DeployTarget)
+
+
+def _released(repo: Path) -> None:
+    artefact = _artefact(repo)
+    FileLedger(repo / RECEIPTS_DIR).attest(
+        "red-monitor",
+        AttestationKind.RELEASED,
+        {
+            "version": artefact.version,
+            "sha": artefact.sha,
+            "digest": artefact.digest,
+            "image": artefact.image,
+            "tag": "v0.1.0",
+        },
+        issuer="op",
+        idempotency_key="released:0.1.0",
+    )
+
+
+def test_plan_names_the_site_and_prints_the_resolved_steps(tmp_path: Path) -> None:
+    repo = _systemd_repo(tmp_path / "repo")
+    _released(repo)
+    env = {"RAIL_SITES_FILE": str(_host(tmp_path))}
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--plan"], env=env)
+    assert out.exit_code == 0, out.output
+    assert "on private-1" in out.output and "private-1-deploy" in out.output
+    assert f"GET http://{BIND}:9100/health" in out.output
+    assert f"GET http://{BIND}:9100/version" in out.output
+    assert BIND not in (repo / "rail.yaml").read_text()
+
+
+# -- the script, run under bash with stubs ---------------------------------------------------
+
+STUB = """#!/bin/sh
+echo "$(basename "$0") $*" >> "$RAIL_TEST_LOG"
+if [ "$(basename "$0")" = docker ]; then
+  case "$1" in
+    create) echo fake-container ;;
+    cp)
+      [ -n "$RAIL_TEST_CP_FAILS" ] && exit 1
+      for last in "$@"; do :; done
+      echo binary > "$last" ;;
+  esac
+fi
+exit 0
+"""
+
+
+def _run_remote(
+    tmp_path: Path, *, cp_fails: bool
+) -> tuple[subprocess.CompletedProcess, list[str], Path]:
+    if shutil.which("flock") is None or shutil.which("bash") is None:
+        pytest.skip("the remote script needs bash and flock (util-linux)")
+    root = tmp_path / "opt"
+    repo = _systemd_repo(tmp_path / "repo", _unit_for(str(root)), stack_root=str(root))
+    script = _target(repo, tmp_path).steps(_artefact(repo))[0].stdin or ""
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    for name in ("docker", "sudo", "systemctl"):
+        (stubs / name).write_text(STUB)
+        (stubs / name).chmod(0o755)
+    log = tmp_path / "calls.log"
+    env = {"PATH": f"{stubs}:/usr/bin:/bin", "RAIL_TEST_LOG": str(log)}
+    if cp_fails:
+        env["RAIL_TEST_CP_FAILS"] = "1"
+    done = subprocess.run(
+        ["bash", "-s"], input=script, env=env, capture_output=True, text=True, timeout=30
+    )
+    calls = log.read_text().splitlines() if log.exists() else []
+    return done, calls, root / "red-monitor"
+
+
+def test_the_remote_script_delivers_the_binary_and_restarts_through_sudo(tmp_path: Path) -> None:
+    done, calls, project = _run_remote(tmp_path, cp_fails=False)
+    assert done.returncode == 0, done.stderr
+    release = project / "releases" / "0.1.0"
+    assert (project / "current").resolve() == release.resolve()
+    assert (release / "red").read_text() == "binary\n"
+    assert (release / "red").stat().st_mode & 0o777 == 0o755
+    assert not (release / ".red.new").exists()
+    assert "VERSION=0.1.0" in (release / "release.env").read_text()
+    reload = calls.index("sudo -n /usr/bin/systemctl daemon-reload")
+    assert reload < calls.index("sudo -n /usr/bin/systemctl restart red-agent.service")
+    assert calls[-1] == "docker rm --force fake-container"
+
+
+def test_the_container_is_removed_even_when_the_copy_fails(tmp_path: Path) -> None:
+    """Review focus 4, run rather than read: with a failing `docker cp` the script exits
+    non-zero, the trap still removes the container, and nothing is restarted."""
+    done, calls, project = _run_remote(tmp_path, cp_fails=True)
+    assert done.returncode != 0
+    assert calls[-1] == "docker rm --force fake-container"
+    assert not any(call.startswith("sudo") for call in calls)
+    assert not (project / "current").exists()
