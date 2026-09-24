@@ -46,9 +46,10 @@ the ticket asks for systemd.
 
 3. **The unit file is versioned in the project and delivered by the rail.** `deploy.unit` names it
    (for example `deploy/red-agent.service`), and it is read at the released commit, like the
-   compose file. The file's name is the unit's name. A rollback restores the previous unit along
-   with the previous binary, so `MemoryMax`, `TimeoutStopSec` and the hardening never drift
-   outside the rail. `deploy.unit` is a relative path inside the repository, with no `..`
+   compose file. The file's name is the unit's name. systemd loads it through a link that points
+   at the live release (decision 6), so a rollback restores the previous unit along with the
+   previous binary. `MemoryMax`, `TimeoutStopSec` and the hardening therefore never drift outside
+   the rail. `deploy.unit` is a relative path inside the repository, with no `..`
    component. `private-systemd` requires both `unit` and `binary`, and every other target refuses
    them when the manifest loads.
 
@@ -64,25 +65,35 @@ the ticket asks for systemd.
    4. `docker cp` the binary into the release directory, under a temporary name, then `chmod 0755`
       and rename it. The container is removed on every exit path.
    5. Point `current` at the release.
-   6. Through sudo: install the unit, `daemon-reload`, `restart` the unit.
+   6. Through sudo: `systemctl daemon-reload`, then `systemctl restart` the unit.
    7. `systemctl is-active` the unit, unprivileged.
 
    The restart is unconditional. Redeploying the same version restarts the service and so applies
    a changed host file, which the compose targets do not do (ticket `e3278ea3`).
 
-6. **Three privileged commands, with fixed arguments, installed per unit by red-watcher.** The
-   rail never edits sudoers. For red-monitor's agent, in `/etc/sudoers.d/`, mode 0440, checked with
-   `visudo -cf`:
+6. **The unit is linked, never copied: two privileged commands, with fixed arguments.**
+   `/etc/systemd/system/<unit>` is a symbolic link to `<stack_root>/<project>/current/<unit>`,
+   created once at migration. Moving `current` therefore moves the unit with the binary. What
+   systemd reads, at a `daemon-reload` as after a reboot, is always the live release's unit, and
+   there is no copy that could disagree with it.
+
+   The only privileged actions left are the reload and the restart. red-watcher installs them per
+   unit; the rail never edits sudoers. For red-monitor's agent, in `/etc/sudoers.d/`, mode 0440,
+   checked with `visudo -cf`:
 
    ```
-   <deploy-user> ALL=(root) NOPASSWD: /usr/bin/install -m 0644 /opt/red-monitor/current/red-agent.service /etc/systemd/system/red-agent.service
    <deploy-user> ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
    <deploy-user> ALL=(root) NOPASSWD: /usr/bin/systemctl restart red-agent.service
    ```
 
-   To be plain about what this buys: the deploy account is already in the docker group, which is
-   equivalent to root. The rule adds no power it does not already have. It makes each privileged
-   action bounded, named and logged by sudo, which red-watcher can audit.
+   Copying the unit with `sudo install` was considered and set aside, for two reasons found on the
+   host on 2026-09-24. `sudo` there is sudo-rs, and `/usr/bin/install` is a symbolic link into
+   uutils' coreutils; sudo-rs does not document how it matches a command reached through a link.
+   A copy could also disagree with `current` after a partial run.
+
+   To be plain about what the rule buys: the deploy account is already in the docker group, which
+   is equivalent to root. The rule adds no power it does not already have. It makes each
+   privileged action bounded, named and logged by sudo, which red-watcher can audit.
 
 7. **The unit is refused before the first ssh when it would run as root, run unbounded, or run
    something other than the release.** Each refusal names the unit and the rule:
@@ -124,10 +135,11 @@ the ticket asks for systemd.
     rows. The digest is proven at deployment by `/version`; the observation proves the service
     stayed up. Compose targets are unchanged.
 
-12. **Rollback and drill are the existing flows.** Re-applying the previous artefact reinstalls
-    its unit and its binary, then restarts. On a first delivery the ledger has no previous
-    artefact. A failure then leaves the incident open, as it does today, and the way back is manual:
-    migration step 1 keeps the hand-installed unit.
+12. **Rollback and drill are the existing flows.** Re-applying the previous artefact points
+    `current` back at its release, which brings back its unit and its binary together, then reloads
+    and restarts. On a first delivery the ledger has no previous artefact. A failure then leaves
+    the incident open, as it does today, and the way back is manual: migration step 1 keeps the
+    hand-installed unit.
 
 ## What the first project provides (red-monitor)
 
@@ -164,7 +176,13 @@ the ticket asks for systemd.
    to the deploy account.
 3. Hand `/opt/red-monitor` to the deploy account (decision `5c874978`).
 4. Install the sudoers file of decision 6.
-5. As the deploy account, check that `sudo -n -l` lists exactly those three commands.
+5. As the deploy account, check that `sudo -n -l` lists exactly those two commands.
+6. **Immediately before the first `rail deploy`, in the same sitting**, replace
+   `/etc/systemd/system/red-agent.service` with the link of decision 6. The existing
+   `multi-user.target.wants` link already points at that path, so the unit stays enabled. Until
+   the first delivery creates `current`, the link points at nothing. The running agent is not
+   affected, because systemd keeps the unit it loaded, but a reboot in that window would leave the
+   agent stopped.
 
 The first drill needs two red-monitor releases, because a drill rolls back to a previous one.
 
@@ -187,8 +205,8 @@ The first drill needs two red-monitor releases, because a drill rolls back to a 
    and the resolved healthcheck and `/version` URLs. The manifest carries no address.
 2. Each refusal of decision 7 fails before the first ssh, naming the unit and the rule.
 3. The remote script runs the steps of decision 5 in that order. It removes the container on
-   failure, and it calls the three commands of decision 6 with exactly the arguments the sudoers
-   file allows.
+   failure, and it calls the two commands of decision 6 with exactly the arguments the sudoers
+   file allows. It never writes outside `<stack_root>/<project>`.
 4. `tests/test_deploy_vps_traefik.py` and `tests/test_deploy_private_compose.py` pass unchanged,
    except the test that used `pc-server-systemd` as its example of an unimplemented target.
 5. `deploy/flow.py` builds all three targets from the manifest. Forward, rollback and drill write
