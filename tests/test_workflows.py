@@ -145,7 +145,7 @@ def test_rail_ci_installs_rust_from_the_project_pin() -> None:
     assert "--default-toolchain none" in run
     assert re.search(r'"\$HOME/\.cargo/bin/rustup" toolchain install\s*$', run, re.MULTILINE)
     assert '"$HOME/.cargo/bin/rustup" component add rustfmt clippy' in run
-    assert run.index("cargo fmt --version") < run.index("cargo clippy --version")
+    assert run.index("fmt --version") < run.index("clippy --version")
     assert not re.search(r"\b1\.\d+\.\d+\b", run), "the toolchain version lives in the project"
     assert run.rstrip().endswith('echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"')
 

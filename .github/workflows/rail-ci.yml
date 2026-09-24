@@ -91,8 +91,8 @@ jobs:
           /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none
           "$HOME/.cargo/bin/rustup" toolchain install
           "$HOME/.cargo/bin/rustup" component add rustfmt clippy
-          $HOME/.cargo/bin/cargo fmt --version
-          $HOME/.cargo/bin/cargo clippy --version
+          "$HOME/.cargo/bin/cargo" fmt --version
+          "$HOME/.cargo/bin/cargo" clippy --version
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       # Keyed on what decides the content: the toolchain, the lock, and the Makefile that pins
