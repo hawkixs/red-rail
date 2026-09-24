@@ -7,7 +7,7 @@ from __future__ import annotations
 import fnmatch
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -18,6 +18,7 @@ from rail.ledger import (
     Record,
     RecordKind,
     Unattested,
+    bindings_of,
     idempotency_key_for,
 )
 from rail.ledger.file import receipt_filename
@@ -92,11 +93,79 @@ def docs_only(diff: str, policy: ReviewPolicy) -> bool:
     return bool(paths) and all(any(fnmatch.fnmatch(p, g) for g in policy.docs_globs) for p in paths)
 
 
-def _criteria(ledger: Ledger, project: str) -> list[str]:
+def _criteria(ledger: Ledger, project: str, pr: PullRequest) -> list[str] | None:
+    """The contract's acceptance criteria when `rail bind` tied this pull request to it; None
+    when nothing did. The contract is the manifest ticket's, which may describe other work:
+    measured on red-rail#46 and #47, both blocked for "not meeting" the criteria of an accepted
+    phase they were never part of (ticket 155d3d67)."""
+    if not bindings_of(ledger, project, pr.repository, pr.number):
+        return None
     contracts = ledger.list(project, kind=RecordKind.CONTRACT)
     if not contracts:
         return []
     return [str(c) for c in contracts[-1].data.get("contract", {}).get("acceptance_criteria", [])]
+
+
+def _files(diff: str) -> list[str]:
+    return _DIFF_HEADER.findall(diff)
+
+
+# Bytes of other parts' file names a part's notes may list: with the fixed sentence around
+# them, the part marker stays inside PROMPT_MARGIN, which the split budget leaves free.
+_OTHER_FILES_BYTES = 480
+
+
+def _part_notes(notes: str, index: int, chunks: list[str]) -> str:
+    """What a judge of one part must know about the others: their files exist and are judged
+    separately, so nothing it cannot see is absent from the change."""
+    others = sorted({f for i, c in enumerate(chunks, start=1) if i != index for f in _files(c)})
+    listed: list[str] = []
+    for name in others:
+        if len(", ".join([*listed, name]).encode("utf-8")) > _OTHER_FILES_BYTES:
+            break
+        listed.append(name)
+    left_out = len(others) - len(listed)
+    names = ", ".join(listed) + (f" and {left_out} more" if left_out else "")
+    part = (
+        f"_Part {index} of {len(chunks)} of this change._ Other parts, judged separately, touch: "
+        f"{names or '(no file)'}. You read one part only: never conclude that "
+        "something is absent from the change, and never block on a file you did not read."
+    )
+    return f"{notes}\n\n{part}".strip()
+
+
+def _path(name: str) -> str:
+    """A judge's spelling of a path, as the diff header writes it."""
+    for prefix in ("./", "a/", "b/"):
+        if name.startswith(prefix):
+            return name[len(prefix) :]
+    return name
+
+
+def _within_part(reply: JudgeReply, files: list[str]) -> JudgeReply:
+    """A judge that read one part cannot block on a file it did not read (measured on #46: three
+    "missing" findings about code that sat in other parts). Such a finding stays, as important;
+    a reply left with no blocking finding approves."""
+    if reply.verdict is None:
+        return reply
+    moved = False
+    findings: list[Finding] = []
+    for f in reply.verdict.findings:
+        if f.severity == "blocking" and _path(f.file) not in files:
+            moved = True
+            f = f.model_copy(
+                update={
+                    "severity": "important",
+                    "evidence": f"{f.evidence} [not in the part this judge read]",
+                }
+            )
+        findings.append(f)
+    if not moved:
+        return reply
+    verdict = reply.verdict.model_copy(update={"findings": findings})
+    if not any(f.severity == "blocking" for f in findings):
+        verdict = verdict.model_copy(update={"verdict": "approve"})
+    return replace(reply, verdict=verdict)
 
 
 def previous_verdicts(ledger: Ledger, project: str, pr: PullRequest) -> list[Record]:
@@ -396,7 +465,7 @@ def _review_started(
         light = policy.mode_for(pr, docs_only=docs_only(diff, policy)) == "light"
     producer = producer_provider(github.commit_messages(pr.repository, pr.number))
     chain = policy.chain_for(producer=producer)
-    criteria = _criteria(ledger, project)
+    criteria = _criteria(ledger, project, pr)
     common = dict(criteria=criteria, run_judge=run_judge, root=root, failures=failures, notes=notes)
     # One depth for the whole review, computed once from the change. The chunked path below
     # used to hardcode `deep` and never read `light`, so a docs-only pull request big enough
@@ -416,9 +485,10 @@ def _review_started(
     if len(chunks) > 1:
         replies = []
         for index, chunk in enumerate(chunks, start=1):
-            part = f"{notes}\n\n_Part {index} of {len(chunks)} of this change._".strip()
+            part = _part_notes(notes, index, chunks)
             replies.extend(
-                _judge_chain(
+                _within_part(reply, _files(chunk))
+                for reply in _judge_chain(
                     pr,
                     chunk,
                     policy,

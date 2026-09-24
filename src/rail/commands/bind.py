@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from rail.commands._options import json_option, repo_option
 from rail.commands.attest import echo_record
 from rail.commands.contract import canonical_slug
-from rail.ledger import LedgerError, PullRequestRef, RecordKind, open_ledger
+from rail.ledger import LedgerError, PullRequestRef, bindings_of, open_ledger
 from rail.model import load_rail_config
 
 RUN: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run  # injectable in tests
@@ -52,11 +52,7 @@ def command(repo: Path, number: int, head_sha: str | None, issuer: str, as_json:
         if slug is None:
             raise LedgerError("no GitHub remote: the pull request's repository is unknown")
         ledger = open_ledger(repo)
-        bound = [
-            r
-            for r in ledger.list(project, kind=RecordKind.BINDING)
-            if r.payload.get("repository") == slug and int(r.payload.get("number") or 0) == number
-        ]
+        bound = bindings_of(ledger, project, slug, number)
         if bound:
             click.echo(
                 f"note: already bound: {slug}#{number} ({bound[-1].idempotency_key})", err=True

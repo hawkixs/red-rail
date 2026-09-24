@@ -365,3 +365,14 @@ def test_prompt_frames_the_review_context_as_data() -> None:
     assert "Review\ncontext" in prompt or "Review context" in prompt  # the rubric names it
     plain, _ = build_prompt(PR, DIFF, default_policy(), criteria=[])
     assert "Review context" not in plain.split("BEGIN DIFF")[0].split("Acceptance criteria")[-1]
+
+
+def test_an_unbound_prompt_says_no_contract_is_bound() -> None:
+    """criteria=None: no binding ties this pull request to the contract, so the judge is told
+    to judge the change on its merits and never against a contract (ticket 155d3d67)."""
+    prompt, _ = build_prompt(PR, DIFF, default_policy(), criteria=None)
+    head = prompt.split("BEGIN DIFF")[0]
+    assert "No delivery contract is bound to this pull request" in head
+    assert "(none declared)" not in head
+    declared, _ = build_prompt(PR, DIFF, default_policy(), criteria=[])
+    assert "(none declared)" in declared.split("BEGIN DIFF")[0]

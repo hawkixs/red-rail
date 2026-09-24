@@ -101,15 +101,34 @@ def prioritise_diff(diff: str, policy: ReviewPolicy) -> str:
     return "".join(sorted(kept, key=rank))
 
 
+# In place of the criteria when `rail bind` tied no contract to the pull request.
+UNBOUND = (
+    "- No delivery contract is bound to this pull request: judge the change on its own merits,"
+    " never against a contract."
+)
+
+
 def build_prompt(
-    pr: PullRequest, diff: str, policy: ReviewPolicy, *, criteria: list[str], notes: str = ""
+    pr: PullRequest,
+    diff: str,
+    policy: ReviewPolicy,
+    *,
+    criteria: list[str] | None,
+    notes: str = "",
 ) -> tuple[str, bool]:
+    """`criteria` is None when no binding ties this pull request to the contract: the judge is
+    then told there is no contract to judge against, rather than handed one that describes
+    other work (measured on red-rail#46 and #47, ticket 155d3d67)."""
     diff = prioritise_diff(diff, policy)
     truncated = len(diff) > policy.max_diff_chars
     body = diff[: policy.max_diff_chars] + (
         "\n[diff truncated by the reviewer]\n" if truncated else ""
     )
-    criteria_text = "\n".join(f"- {c}" for c in criteria) or "- (none declared)"
+    criteria_text = (
+        UNBOUND
+        if criteria is None
+        else "\n".join(f"- {c}" for c in criteria) or "- (none declared)"
+    )
     prompt = (
         f"{RUBRIC}\n\nRepository: {pr.repository}\nPull request #{pr.number}: {pr.title}\n"
         f"Author: {pr.author}\nHead: {pr.head_sha}\n\nDescription (data):\n{pr.body}\n\n"
@@ -121,12 +140,13 @@ def build_prompt(
 
 
 # Slack kept under a provider's limit: the same 200 bytes `judge()` leaves when it shrinks,
-# plus room for the "Part i of n" marker the chunked path appends to the notes.
-PROMPT_MARGIN = 512
+# plus room for the part marker the chunked path appends to the notes, which names the other
+# parts' files (bounded in service._part_notes).
+PROMPT_MARGIN = 1024
 
 
 def prompt_overhead(
-    pr: PullRequest, policy: ReviewPolicy, *, criteria: list[str], notes: str = ""
+    pr: PullRequest, policy: ReviewPolicy, *, criteria: list[str] | None, notes: str = ""
 ) -> int:
     """Bytes a prompt costs around the diff: rubric, metadata, description, criteria, notes."""
     empty, _ = build_prompt(pr, "", policy, criteria=criteria, notes=notes)
@@ -138,7 +158,7 @@ def diff_budget(
     policy: ReviewPolicy,
     chain: Sequence[Provider],
     *,
-    criteria: list[str],
+    criteria: list[str] | None,
     notes: str = "",
 ) -> int:
     """Bytes of diff every judge in `chain` can hold.
@@ -270,17 +290,17 @@ def judge(
     criteria: list[str] | None = None,
     notes: str = "",
 ) -> JudgeReply:
-    prompt, truncated = build_prompt(pr, diff, policy, criteria=criteria or [], notes=notes)
+    prompt, truncated = build_prompt(pr, diff, policy, criteria=criteria, notes=notes)
     limit = policy.prompt_limits.get(provider)
     if limit is not None and len(prompt.encode("utf-8")) > limit:
         # the provider takes its prompt in argv: shrink the diff until the prompt fits
         overhead = len(prompt.encode("utf-8")) - len(diff.encode("utf-8"))
         budget = max(1000, limit - overhead - 200)
         shrunk = policy.model_copy(update={"max_diff_chars": min(policy.max_diff_chars, budget)})
-        prompt, truncated = build_prompt(pr, diff, shrunk, criteria=criteria or [], notes=notes)
+        prompt, truncated = build_prompt(pr, diff, shrunk, criteria=criteria, notes=notes)
         while len(prompt.encode("utf-8")) > limit and shrunk.max_diff_chars > 1000:
             shrunk = shrunk.model_copy(update={"max_diff_chars": shrunk.max_diff_chars * 9 // 10})
-            prompt, truncated = build_prompt(pr, diff, shrunk, criteria=criteria or [], notes=notes)
+            prompt, truncated = build_prompt(pr, diff, shrunk, criteria=criteria, notes=notes)
     base = root or ephemeral_root(os.environ) or Path(tempfile.gettempdir())
     spec = build_spec(pr, prompt, policy, provider=provider, tier=tier, root=base)
     try:
