@@ -1,10 +1,12 @@
 """A fresh scaffold passes its own `rail check` at `bootstrap`; `rail upgrade` follows the tags."""
 
 import json
+import re
 import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from click.testing import CliRunner
@@ -16,7 +18,7 @@ from rail.commands.new import BRAIN_KEY
 from rail.gates.hygiene import DOMAIN_PLACEHOLDER, ROSTER_HEADER, roster_row, table_cells
 from rail.ledger import RECEIPTS_DIR, RecordKind
 from rail.ledger.file import FileLedger
-from rail.model import LedgerBackend, Stack, Tier
+from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.remotes import RemoteError
 from rail.scaffold import ANSWERS_FILE, NewProject, ScaffoldError, new_project, render, upgrade
 from tests.fake_brain import FakeBrain
@@ -677,8 +679,6 @@ def test_every_deploy_target_the_cli_offers_is_a_copier_choice() -> None:
     or the command fails inside copier after the operator has already answered."""
     import yaml
 
-    from rail.model import DeployTarget
-
     questions = yaml.safe_load((ROOT / "copier.yml").read_text())
     assert set(questions["deploy_target"]["choices"]) == {t.value for t in DeployTarget}
 
@@ -834,3 +834,120 @@ def test_new_project_resolves_the_pin_before_rendering(template_dir: Path, tmp_p
     )
     workflow = project.dest / ".github" / "workflows" / "continuous-integration.yml"
     assert f"rail-ci.yml@{sha}" in workflow.read_text()
+
+
+# -- rendered guidance (spec 2026-09-24-template-alignment) ------------------------------
+
+PRIVATE_HEALTHCHECK = "http://192.0.2.10:9204/healthz"  # RFC 5737: typed, never assumed
+BRAIN_TICKET = "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"
+TARGET_FAMILIES = (DeployTarget.VPS_TRAEFIK.value, DeployTarget.PRIVATE_COMPOSE.value)
+
+
+class Combo(NamedTuple):
+    """One answer set of the template. Every guidance test reads the same renders."""
+
+    stack: Stack
+    tier: Tier
+    ledger: LedgerBackend
+    target: str | None = None  # prod only: one target per family, public and private
+    brain_key: str = "red-probe"
+
+    @property
+    def label(self) -> str:
+        parts = [self.stack.value, self.tier.value, self.ledger.value]
+        parts += [self.target] if self.target else []
+        parts += [self.brain_key] if self.brain_key != "red-probe" else []
+        return "-".join(parts)
+
+
+COMBOS = [
+    Combo(stack, tier, ledger, target)
+    for stack in Stack
+    for tier in Tier
+    for ledger in LedgerBackend
+    for target in (TARGET_FAMILIES if tier is Tier.PROD else (None,))
+] + [Combo(Stack.PYTHON, Tier.BOOTSTRAP, LedgerBackend.FILE, brain_key="red_probe")]
+ROOT_TITLES = (
+    "Workflows — the operator picks the method",
+    "Invariants — true whatever the method",
+)
+STACK_LINE = {
+    Stack.PYTHON: "Python 3.12+, uv, pytest, ruff.",
+    Stack.GO: "Go 1.22+, `go test`, `go vet`, `gofmt`.",
+    Stack.DOCS: "Documentation only (Markdown).",
+}
+STACK_CHAIN = re.compile(
+    r"\{#-?\s*stack-chain:\s*(?P<name>[a-z-]+)\s*-?#\}(?P<body>.*?)\{#-?\s*/stack-chain\s*-?#\}",
+    re.DOTALL,
+)
+STACK_CHAINS = {"CLAUDE.md.jinja": {"stack", "structure"}}
+_ELSE = re.compile(r"\{%-?\s*else\s*-?%\}")
+
+
+def _render_combo(template: Path, dest: Path, combo: Combo) -> Path:
+    private = combo.target == DeployTarget.PRIVATE_COMPOSE
+    return render(
+        NewProject(
+            slug="red-probe",
+            description="A disposable HTTP probe.",
+            tier=combo.tier,
+            stack=combo.stack,
+            brain_key=combo.brain_key,
+            dest=dest,
+            template=str(template),
+            deploy_target=combo.target or DeployTarget.VPS_TRAEFIK.value,
+            healthcheck=PRIVATE_HEALTHCHECK if private else None,
+            ledger=combo.ledger,
+            ticket=BRAIN_TICKET if combo.ledger is LedgerBackend.BRAIN else None,
+        )
+    )
+
+
+@pytest.fixture(scope="module")
+def renders(tmp_path_factory: pytest.TempPathFactory) -> dict[Combo, Path]:
+    """Every combination rendered once for the module, from a copy of the working tree's
+    template (uncommitted edits included, as with `template_dir`)."""
+    base = tmp_path_factory.mktemp("renders")
+    template = base / "template-src"
+    template.mkdir()
+    shutil.copy(ROOT / "copier.yml", template / "copier.yml")
+    shutil.copytree(ROOT / "template", template / "template")
+    return {combo: _render_combo(template, base / combo.label, combo) for combo in COMBOS}
+
+
+@pytest.mark.parametrize("combo", COMBOS, ids=[c.label for c in COMBOS])
+def test_rendered_guidance_points_at_the_root(renders: dict[Combo, Path], combo: Combo) -> None:
+    """The method, the review and the invariants that hold whatever the method live once, in
+    the ReD root: `CLAUDE.md` points at their sections and copies neither, and says where
+    each moving fact is read (decisions 6-8)."""
+    claude = (renders[combo] / "CLAUDE.md").read_text()
+    for title in ROOT_TITLES:
+        assert f'§ "{title}"' in claude, title
+    assert "## Working principles" not in claude
+    assert not re.search(r"^\|\s*`(?:spec|graph|direct)`\s*\|", claude, re.MULTILINE)
+    table = "## Where things live\n\n| Question | Where to look |\n|---|---|\n"
+    assert table in claude
+    assert claude.index("## Project") < claude.index(table) < claude.index("## Language")
+    assert "| What tier, which ledger, which target? | `rail.yaml` |" in claude
+    key = combo.brain_key
+    call = f'brain_session_start("{key}", client_key="<harness>-{key}-<YYYY-MM-DD>")'
+    assert f"`{call}`" in claude and claude.count("brain_session_start(") == 1
+    lesson = f'brain_learn(topic, insight, project_key="{key}")'
+    assert claude.index("## Brain MCP") < claude.index(lesson)
+    assert f"## Stack\n\n{STACK_LINE[combo.stack]}\n\n## Commands" in claude
+    assert "stack-chain" not in claude
+
+
+def test_every_stack_chain_names_every_stack() -> None:
+    """A render cannot see a missing stack branch (§ Structure and § Gates always render
+    stack-independent lines). Each marked chain names every `Stack` member and has no
+    catch-all `else`, so spec B's `rust` is refused chain by chain until it is added
+    (decision 11). This test reads the template source on purpose."""
+    for source, expected in STACK_CHAINS.items():
+        text = (ROOT / "template" / "project" / source).read_text()
+        chains = {m["name"]: m["body"] for m in STACK_CHAIN.finditer(text)}
+        assert set(chains) == expected, f"{source}: marked chains {sorted(chains)}"
+        for name, body in chains.items():
+            missing = [s.value for s in Stack if f"stack == '{s.value}'" not in body]
+            assert not missing, f"{source}, chain {name!r}: no branch for {missing}"
+            assert not _ELSE.search(body), f"{source}, chain {name!r}: a catch-all else"
