@@ -326,6 +326,46 @@ def test_the_agy_profile_carries_its_credentials(tmp_path: Path) -> None:
     assert spec.profile.credentials.paths == ()
 
 
+@pytest.mark.parametrize(
+    ("provider", "credentials"),
+    [("claude", ".claude/.credentials.json"), ("codex", ".codex/auth.json")],
+)
+def test_a_judge_seat_is_its_home_and_holds_nothing_but_its_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, credentials: str
+) -> None:
+    """ClaudeProvider and CodexProvider use `spec.environment` verbatim: the seat is the only
+    thing between a judge and the operator's instructions, settings, skills and keys. Pinned
+    before the headless-agents migration (eb4ce232, ac273bd6) so a new version cannot widen it."""
+    from rail.reviewer.judges import build_spec
+
+    real_home = tmp_path / "real-home"
+    (real_home / credentials).parent.mkdir(parents=True)
+    (real_home / credentials).write_text("{}")
+    (real_home / ".claude" / "skills").mkdir(parents=True)
+    (real_home / ".claude" / "plugins").mkdir(parents=True)
+    (real_home / ".claude" / "CLAUDE.md").write_text("operator instructions")
+    (real_home / ".claude" / "settings.json").write_text("{}")
+    (real_home / ".claude" / "skills" / "leak.md").write_text("a skill")
+    monkeypatch.setenv("HOME", str(real_home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(real_home / ".claude"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-must-not-leak")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://must-not-leak.invalid")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-must-not-leak")
+
+    seats = tmp_path / "seats"
+    spec = build_spec(PR, "prompt", default_policy(), provider=provider, tier="light", root=seats)
+    seat = Path(spec.environment["HOME"])
+
+    assert seat.parent == seats
+    assert spec.environment["TMPDIR"] == str(seat)
+    assert set(spec.environment) == {"HOME", "TMPDIR", "PATH", "LANG", "LC_ALL"}
+    assert "must-not-leak" not in json.dumps(spec.environment)
+    files = {p.relative_to(seat).as_posix() for p in seat.rglob("*") if p.is_file()}
+    assert files == {credentials, ".gemini/config/mcp_config.json"}
+    mcp = json.loads((seat / ".gemini" / "config" / "mcp_config.json").read_text())
+    assert mcp == {"mcpServers": {}}
+
+
 def test_parse_verdict_survives_braces_around_the_json_object() -> None:
     """Found by the independent reviewer (PR #3, sixth pass): a greedy `\\{.*\\}` swallowed
     conversational braces after the object."""
