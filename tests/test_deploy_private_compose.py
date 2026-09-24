@@ -232,15 +232,19 @@ def test_the_flows_build_either_target_from_the_manifest(tmp_path: Path) -> None
     assert isinstance(make_target(public, load_rail_config(public)), VpsTraefik)
 
 
-def test_an_unimplemented_target_is_still_refused_by_name(tmp_path: Path) -> None:
+def test_a_target_the_rail_does_not_know_is_refused_when_the_manifest_loads(
+    tmp_path: Path,
+) -> None:
+    """`pc-server-systemd` was declarable and unimplemented. Its successor is implemented
+    (spec 2026-09-24-private-systemd-target), so the old name no longer loads at all."""
+    from pydantic import ValidationError
+
     repo = _private_repo(tmp_path, SAFE)
     (repo / "rail.yaml").write_text(
         (repo / "rail.yaml").read_text().replace("private-compose", "pc-server-systemd")
     )
-    from rail.deploy.flow import make_target
-
-    with pytest.raises(DeployError, match="pc-server-systemd"):
-        make_target(repo, load_rail_config(repo))
+    with pytest.raises(ValidationError, match="pc-server-systemd"):
+        load_rail_config(repo)
 
 
 # -- what "private" must mean, pinned ------------------------------------------------------

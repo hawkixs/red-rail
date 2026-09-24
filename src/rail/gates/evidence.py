@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from rail import gitrepo, monitor
 from rail.deploy import DeployError
@@ -20,6 +20,7 @@ from rail.model import (
     ADDRESS_TOKEN,
     SITE_PATTERN,
     Declarations,
+    DeployTarget,
     declarations,
     token_is_the_host,
 )
@@ -255,6 +256,13 @@ def visible(repo: Path) -> GateResult:
         return GateResult(
             Stage.OBSERVE, "visible", False, f"agent {agent} is {view.status or 'unknown'}"
         )
+    shape = decl.cfg.deploy if decl.cfg is not None else None
+    if (
+        shape is not None
+        and shape.target is DeployTarget.PRIVATE_SYSTEMD
+        and shape.unit is not None
+    ):
+        return _unit_visible(view, agent, PurePosixPath(shape.unit).name)
     running = [c for c in monitor.stack_containers(view, project) if c.state == "running"]
     if not running:
         return GateResult(
@@ -287,6 +295,28 @@ def visible(repo: Path) -> GateResult:
         "visible",
         True,
         f"{len(running)} running container(s) of {project} on {agent}, {digest}",
+    )
+
+
+def _unit_visible(view: monitor.AgentView, agent: str, unit: str) -> GateResult:
+    """A systemd target runs no container: red-monitor's view of the unit is the observation
+    (spec 2026-09-24-private-systemd-target, decision 11). The digest was proven at deployment
+    by `/version`; this proves the service stayed up."""
+    found = monitor.find_unit(view, unit)
+    if found is None:
+        return GateResult(
+            Stage.OBSERVE, "visible", False, f"red-monitor lists no unit {unit} on agent {agent}"
+        )
+    state = f"{found.active_state}/{found.sub_state}"
+    if state != "active/running":
+        return GateResult(
+            Stage.OBSERVE, "visible", False, f"unit {unit} on agent {agent} is {state}"
+        )
+    return GateResult(
+        Stage.OBSERVE,
+        "visible",
+        True,
+        f"unit {unit} active/running on {agent}; its digest was verified at deployment by /version",
     )
 
 

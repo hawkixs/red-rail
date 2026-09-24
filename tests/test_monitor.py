@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from rail.http import HttpError
-from rail.monitor import MonitorError, image_digest, read_agent, stack_containers
+from rail.monitor import MonitorError, Unit, find_unit, image_digest, read_agent, stack_containers
 
 LATEST = {
     "updated_at": "2026-09-19T22:07:27.848307277+02:00",
@@ -88,3 +88,25 @@ def test_image_digest_reads_a_pinned_reference_only() -> None:
     assert image_digest("ghcr.io/hawkixs/red-probe@sha256:" + "a" * 64) == "sha256:" + "a" * 64
     assert image_digest("ghcr.io/hawkixs/red-probe:0.1.0") is None
     assert image_digest("traefik:v2.11.51") is None
+
+
+def test_read_agent_reads_the_systemd_units_too() -> None:
+    snapshot = json.loads(json.dumps(LATEST))
+    snapshot["agents"]["vps"]["systemd"] = [
+        {
+            "name": "red-agent.service",
+            "load_state": "loaded",
+            "active_state": "active",
+            "sub_state": "running",
+        },
+        "not a row",
+    ]
+    view = read_agent("http://192.0.2.2:8081", "vps", http=_http(body=snapshot))
+    running = Unit(name="red-agent.service", active_state="active", sub_state="running")
+    assert view.units == (running,)
+    assert find_unit(view, "red-agent.service") == view.units[0]
+    assert find_unit(view, "other.service") is None
+
+
+def test_an_agent_without_systemd_rows_has_no_units() -> None:
+    assert read_agent("http://192.0.2.2:8081", "vps", http=_http()).units == ()

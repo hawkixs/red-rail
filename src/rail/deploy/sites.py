@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
 
@@ -147,3 +148,22 @@ def redact_address(text: str, address: Address, label: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SiteBinding:
+    """A private target's site as a deployment uses it: its name is what records say, its
+    address is what URLs reach. Loaded once, before any step is planned."""
+
+    site: str
+    address: Address
+
+    @classmethod
+    def load(cls, site: str, path: Path | None = None) -> SiteBinding:
+        return cls(site=site, address=load_site(site, path).address)
+
+    def fill(self, url: str) -> str:
+        return substitute_address(url, self.address)
+
+    def redact(self, text: str) -> str:
+        return redact_address(text, self.address, self.site)
