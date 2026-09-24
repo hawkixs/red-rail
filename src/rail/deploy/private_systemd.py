@@ -25,6 +25,7 @@ or unbounded is not.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterator
 
 # `+`, `!` and `!!` run a command with full privileges whatever `User=` says; `@`, `-` and `:`
@@ -67,10 +68,17 @@ _LINE_BREAK = re.compile(r"\r\n|\r|\n")
 # Command-line words as systemd splits them: runs of ASCII space and tab only.
 _WORD_BREAK = re.compile(r"[ \t]+")
 
-# Every C0 control other than tab, newline and carriage return, plus DEL and the C1 range:
-# systemd's own line reader (`read_line_full`) treats a NUL byte as an end of line, and this
-# check does not know what systemd would make of any of the others, so all are refused outright.
-_CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x9f]")
+# The invisible characters, by Unicode category: every control character (Cc: C0, DEL, C1) and
+# every format character (Cf: the byte order mark, the zero-width characters, the soft hyphen,
+# the bidirectional overrides and isolates, ...). systemd's line reader treats a NUL byte as an
+# end of line, and strips a U+FEFF at the start of the file and at the start of a line, so
+# either can turn what this check reads as one value, or as an unknown key, into a separate and
+# possibly winning assignment. This check does not know what systemd makes of the others, so a
+# whole category is refused, never a list of the characters known to be abused.
+_INVISIBLE_KINDS = {"Cc": "control", "Cf": "format"}
+# Tab, newline and carriage return are control characters that systemd reads as whitespace and
+# line ends, which `_logical_lines` and `_words` model.
+_ORDINARY_CONTROLS = frozenset("\t\n\r")
 
 
 def _logical_lines(text: str) -> Iterator[str]:
@@ -174,26 +182,34 @@ def _memory_ok(value: str) -> bool:
     return int(digits) * _MEMORY_MULTIPLIER[suffix] <= _MEMORY_MAX_BYTES
 
 
-def _control_character_refusal(text: str, unit: str) -> str | None:
-    """The unit's raw text, before any parsing: `None` when it carries none of
-    `_CONTROL_CHARACTER`'s characters, otherwise one sentence naming the first offending code
-    point. Checked ahead of everything else so no other refusal depends on a parse this check
-    cannot trust — a NUL byte, in particular, ends a line for systemd but not for
-    `_logical_lines`, so a second assignment hidden behind one would otherwise be read as part
-    of the previous line's value instead of the separate, possibly last-and-winning line systemd
-    sees it as."""
-    match = _CONTROL_CHARACTER.search(text)
-    if match is None:
-        return None
-    return f"{unit}: control character U+{ord(match.group()):04X} is not allowed in a unit file"
+def _invisible_character_refusal(text: str, unit: str) -> str | None:
+    """The unit's raw text, in one pass before any parsing: `None` when it carries no invisible
+    character (`_INVISIBLE_KINDS`, less `_ORDINARY_CONTROLS`), otherwise one sentence naming the
+    first one by its kind and code point. Checked ahead of everything else so no other refusal
+    depends on a parse this check cannot trust: a NUL byte ends a line for systemd but not for
+    `_logical_lines`, and a leading U+FEFF is stripped by systemd but read by `parse_unit` as
+    part of a key or a section header, so an assignment hidden behind either would otherwise be
+    missed, although systemd reads it as its own, possibly last-and-winning, line."""
+    for character in text:
+        kind = _INVISIBLE_KINDS.get(unicodedata.category(character))
+        if kind is not None and character not in _ORDINARY_CONTROLS:
+            return f"{unit}: {kind} character U+{ord(character):04X} is not allowed in a unit file"
+    return None
 
 
 def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> list[str]:
-    """Every rule of spec decision 7 the unit breaks, one sentence each, each starting with the
-    unit's name; empty means accepted. `current` is `<stack_root>/<project>/current`."""
-    control_refusal = _control_character_refusal(text, unit)
-    if control_refusal is not None:
-        return [control_refusal]
+    """The rules of spec decision 7 the unit breaks, one sentence each, each starting with the
+    unit's name; empty means accepted. `current` is `<stack_root>/<project>/current`.
+
+    One rule stops the check before any parsing, and is then the only sentence returned: an
+    invisible character (a control or a format character). After one, the parse cannot be
+    trusted, since systemd may read a line, a key or a section where `parse_unit` does not, so
+    no other rule's verdict would mean anything. A unit with no `[Service]` section is refused
+    on that alone, since every other rule reads that section. Otherwise every rule the unit
+    breaks is reported."""
+    invisible_refusal = _invisible_character_refusal(text, unit)
+    if invisible_refusal is not None:
+        return [invisible_refusal]
 
     service = parse_unit(text).get("Service")
     if service is None:

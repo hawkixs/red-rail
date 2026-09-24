@@ -255,9 +255,9 @@ def test_a_c1_control_character_is_refused() -> None:
 
 
 def test_a_tab_inside_an_unchecked_value_is_still_accepted() -> None:
-    """Fix round 3, finding 1: `\\t` is ordinary systemd whitespace, kept out of
-    `_CONTROL_CHARACTER` on purpose. `Type=` is not itself examined by any rule, so a tab inside
-    its value shows the new check does not over-refuse an ordinary one."""
+    """Fix round 3, finding 1: `\\t` is ordinary systemd whitespace, kept in `_ORDINARY_CONTROLS`
+    on purpose (round 4). `Type=` is not itself examined by any rule, so a tab inside its value
+    shows the new check does not over-refuse an ordinary one."""
     text = GOOD.replace("Type=simple\n", "Type=sim\tple\n", 1)
     assert _refusals(text) == []
 
@@ -270,3 +270,82 @@ def test_a_huge_memorymax_digit_run_is_refused_without_raising() -> None:
     text = GOOD.replace("MemoryMax=64M\n", f"MemoryMax={'1' * 5000}\n", 1)
     refusals = _refusals(text)
     assert any("MemoryMax=" in refusal for refusal in refusals), refusals
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        GOOD.replace("MemoryMax=64M\n", "MemoryMax=64M\n\ufeffUser=root\n", 1),
+        GOOD.replace("MemoryMax=64M\n", "MemoryMax=64M\n\ufeffExecStartPre=+/bin/sh\n", 1),
+        "\ufeff[Service]\nExecStartPre=+/bin/sh\n" + GOOD,
+    ],
+    ids=["a-last-user-root", "a-privileged-command", "a-service-section-ahead-of-good"],
+)
+def test_a_byte_order_mark_cannot_hide_an_assignment(text: str) -> None:
+    """Fix round 4, finding 1: systemd strips a U+FEFF at the start of the file and the first one
+    at the start of any line, then reads the rest as an ordinary line. This check read
+    `\\ufeffUser` as an unknown key, so a last-and-winning `User=root`, a `+` command or a whole
+    `[Service]` section went unseen. Refused before parsing, naming the code point."""
+    assert _refusals(text) == [f"{UNIT}: format character U+FEFF is not allowed in a unit file"]
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "character"),
+    [
+        (
+            "Description=ReD Monitoring",
+            "Description=ReD\u200bMonitoring",
+            "format character U+200B",
+        ),
+        # a right-to-left override: the argument displays as `agent.yaml` and is not
+        (
+            "/etc/red-monitor/agent.yaml",
+            "/etc/red-monitor/\u202elmay.tnega",
+            "format character U+202E",
+        ),
+        # fix round 4, finding 3: a C0 control between `\x0e` and `\x1f`, here an ANSI escape
+        ("Type=simple\n", "Type=simple\x1b[8m\n", "control character U+001B"),
+    ],
+    ids=["zero-width-space", "right-to-left-override", "escape"],
+)
+def test_an_invisible_character_inside_a_value_is_refused(
+    old: str, new: str, character: str
+) -> None:
+    """Fix round 4: an invisible character reads differently for a person, a terminal, this check
+    and systemd, so wherever it sits the unit is refused before parsing."""
+    assert old in GOOD, "the fixture must contain what the case replaces"
+    refusals = _refusals(GOOD.replace(old, new, 1))
+    assert refusals == [f"{UNIT}: {character} is not allowed in a unit file"]
+
+
+@pytest.mark.parametrize(
+    "character",
+    [
+        "\ufeff",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\u2060",
+        "\u00ad",
+        *map(chr, range(0x202A, 0x202F)),
+        *map(chr, range(0x2066, 0x206A)),
+    ],
+    ids=lambda character: f"U+{ord(character):04X}",
+)
+def test_every_format_character_is_refused(character: str) -> None:
+    """Fix round 4, finding 1: the whole Unicode category Cf is refused, not a list of the ones
+    known to be abused — the byte order mark, the zero-width characters, the soft hyphen, the
+    bidirectional overrides and isolates are only the ones named by the ruling."""
+    text = GOOD.replace("Description=ReD", f"Description=ReD{character}", 1)
+    assert _refusals(text) == [
+        f"{UNIT}: format character U+{ord(character):04X} is not allowed in a unit file"
+    ]
+
+
+def test_a_printable_non_ascii_letter_is_still_accepted() -> None:
+    """Fix round 4: the rule targets invisible characters, not UTF-8 — an accented letter in a
+    value no rule examines leaves the unit accepted."""
+    text = GOOD.replace(
+        "Description=ReD Monitoring Agent", "Description=Agent ReD, réseau privé", 1
+    )
+    assert _refusals(text) == []
