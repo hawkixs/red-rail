@@ -26,11 +26,19 @@ class Container:
 
 
 @dataclass(frozen=True, slots=True)
+class Unit:
+    name: str
+    active_state: str
+    sub_state: str
+
+
+@dataclass(frozen=True, slots=True)
 class AgentView:
     agent: str
     status: str
     last_seen: datetime | None
     containers: tuple[Container, ...]
+    units: tuple[Unit, ...] = ()  # systemd units, for a target that runs no container
 
 
 def _instant(value: Any) -> datetime | None:
@@ -75,16 +83,31 @@ def read_agent(
         for row in (rows or [])
         if isinstance(row, dict)
     )
+    unit_rows = data.get("systemd")
+    units = tuple(
+        Unit(
+            name=str(row.get("name", "")),
+            active_state=str(row.get("active_state", "")),
+            sub_state=str(row.get("sub_state", "")),
+        )
+        for row in (unit_rows if isinstance(unit_rows, list) else [])
+        if isinstance(row, dict)
+    )
     return AgentView(
         agent=agent,
         status=str(data.get("status", "")),
         last_seen=_instant(data.get("last_seen")),
         containers=containers,
+        units=units,
     )
 
 
 def stack_containers(view: AgentView, stack: str) -> list[Container]:
     return [c for c in view.containers if c.stack == stack]
+
+
+def find_unit(view: AgentView, name: str) -> Unit | None:
+    return next((unit for unit in view.units if unit.name == name), None)
 
 
 def image_digest(reference: str) -> str | None:
