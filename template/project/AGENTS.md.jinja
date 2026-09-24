@@ -1,0 +1,73 @@
+# {{ project }} — guidance for Codex and OpenCode
+
+Read `CLAUDE.md` first: it holds this project's identity, stack, commands and layout, and
+this file does not duplicate them. Then read the ReD root `AGENTS.md`, in the directory that
+`CLAUDE.md` names as "Parent project". This file carries what a harness other than Claude
+Code needs and cannot reach from here, and points at the rest.
+
+## What this project is
+
+{{ description }}
+
+Stack: `{{ stack }}`. The tier, the ledger and the deploy target are read from `rail.yaml`,
+never from this file: they move, and nothing re-renders this file when they do.
+
+## Method on this harness
+
+The operator picks the method (`spec`, `graph` or `direct`) once per session, at the first
+non-trivial code task. On this harness the `graph` method is **unavailable**: the choice
+narrows to `spec` or `direct`, and you say so rather than silently falling back. Whatever the
+method, when `rail.yaml` is present its gates apply on top, and the independent verdict is the
+verdict. A pre-review never satisfies the review gate.
+
+## The invariants you must not break
+
+Each row names the `rail.yaml` value it applies to: read the value there.
+
+| Invariant | Why |
+|---|---|
+| **Always: `rail check` is the verdict** | `make ci` is exactly what CI runs, and a red gate is a policy failure, not a nuisance. |
+| **Always: the only bypass is a `gates:` override in `rail.yaml`, with its reason** | There is no `# rail: ignore`: `rail check` and `rail audit` report every override, nothing is hidden. |
+| **With `ledger: file`: never edit a receipt by hand** | `docs/receipts/` is append-only and digest-checked, and the rail fails closed on a tampered receipt. |
+| **With `ledger: brain`: evidence is attested to brain, and the mirrors are written by the rail** | `integrated` and `fulfilled` are read from the ticket named in `rail.yaml`, never attested from here. |
+| **At `tier: prod`: a release is an image pinned by digest, and deployment goes through `rail deploy` only** | Never by hand on the target: the rail locks it, verifies `/version` against the release and records the evidence. |
+| **At `prod` with `deploy.target: vps-traefik`: nothing is published** | The Traefik route is the only way in. |
+| **At `prod` with any other target: a compose file publishes on the target's bind address only, never on every interface** | Docker bypasses the firewall, so a port published on every interface is open to every network the machine sees; `rail deploy` refuses a compose file that would. |
+| project-specific: fill in | |
+
+## Gates
+
+```bash
+make ci        # exactly what CI runs
+rail check     # the rail's gates against this repository: the exit code is the verdict
+```
+
+{# stack-chain: gates -#}
+{% if stack == 'python' -%}
+This stack's own commands: `uv run pytest -q`, `uv run ruff check src/ tests/`,
+`uv run ruff format --check src/ tests/`.
+{%- elif stack == 'go' -%}
+This stack's own commands: `go test -race -count=1 ./...`, `go vet ./...`,
+`go tool staticcheck ./...`, `go tool govulncheck ./...`; on a host with no Go installed,
+`make GO=<wrapper> ci` runs them all through the wrapper.
+{%- elif stack == 'docs' -%}
+A documentation project has no stack command of its own: `make ci` runs the rail's gates.
+{%- endif %}
+{#- /stack-chain #}
+
+## Brain MCP
+
+Project key `{{ brain_key }}` (group `red`). Start material work with
+`brain_session_start("{{ brain_key }}", client_key="<harness>-{{ brain_key }}-<YYYY-MM-DD>")`,
+where `<harness>` is codex or opencode here (claude-code under Claude Code). Reuse the key for
+every retry of that session, and give a parallel session its own suffix.
+
+Persist knowledge with the specific tool, never `brain_learn` by default: `brain_log_decision`
+for a choice, `brain_save_snippet` for a reusable pattern, `brain_create_runbook` for a
+procedure, `brain_propose_adr` for durable architecture, `brain_learn` only as a last resort.
+
+## Subagents
+
+Every subagent prompt names its perimeter: a concrete path or glob, an explicit budget, or an
+explicit output contract. Name the files you already know instead of asking an agent to find
+them. The rest of the dispatch rule is in the root `CLAUDE.md`, § Subagents.

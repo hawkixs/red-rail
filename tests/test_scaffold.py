@@ -1,10 +1,12 @@
 """A fresh scaffold passes its own `rail check` at `bootstrap`; `rail upgrade` follows the tags."""
 
 import json
+import re
 import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from click.testing import CliRunner
@@ -12,11 +14,14 @@ from click.testing import CliRunner
 from rail import gitrepo
 from rail.brain.client import BrainClient
 from rail.cli import main
+from rail.commands.new import BRAIN_KEY
+from rail.gates.hygiene import DOMAIN_PLACEHOLDER, ROSTER_HEADER, roster_row, table_cells
 from rail.ledger import RECEIPTS_DIR, RecordKind
 from rail.ledger.file import FileLedger
-from rail.model import LedgerBackend, Stack, Tier
+from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.remotes import RemoteError
 from rail.scaffold import ANSWERS_FILE, NewProject, ScaffoldError, new_project, render, upgrade
+from tests.addresses import _foreign
 from tests.fake_brain import FakeBrain
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -366,6 +371,74 @@ def test_cli_new_and_upgrade(template_dir: Path, tmp_path: Path) -> None:
     assert out.exit_code == 1 and "_commit" in out.output
 
 
+def test_cli_new_prints_a_roster_row_shaped_like_the_header(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """The row fits the root's four-column table: slug first, the domain left to the operator,
+    the brain key last. The output says what fails until the row is in (decision 5)."""
+    out = CliRunner().invoke(
+        main,
+        [
+            "new",
+            "red-probe",
+            "--description",
+            "A disposable HTTP probe.",
+            "--brain-key",
+            "red_probe",
+            "--dest",
+            str(tmp_path / "red-probe"),
+            "--template",
+            str(template_dir),
+            "--rail-ref",
+            FIXTURE_PIN,
+            "--no-remotes",
+        ],
+    )
+    assert out.exit_code == 0, out.output
+    row = next(line for line in out.output.splitlines() if line.startswith("| red-probe |"))
+    cells = table_cells(row)
+    assert cells is not None and len(cells) == len(ROSTER_HEADER)
+    assert cells[:2] == ("red-probe", DOMAIN_PLACEHOLDER)
+    assert cells[-1] == "`red_probe`"
+    assert "`rail check` fails hygiene.roster_entry" in out.output
+
+
+def test_a_pipe_in_the_description_keeps_the_row_as_wide_as_the_header() -> None:
+    """Review focus 3: a `|` in the description is escaped, so the pasted row does not
+    shift the root's columns, and the gate reads it back as one cell."""
+    cells = table_cells(roster_row("red-probe", "reads a | b", "red-probe"))
+    assert cells is not None and len(cells) == len(ROSTER_HEADER)
+    assert cells[2] == "reads a \\| b"
+
+
+@pytest.mark.parametrize("key", ["Red-Probe", "red.probe"], ids=["uppercase", "dotted"])
+def test_new_refuses_a_brain_key_outside_the_pattern(
+    template_dir: Path, tmp_path: Path, key: str
+) -> None:
+    """The key is rendered into `brain_session_start("<key>", …)` and checked by one regex
+    (decision 8): the CLI callback and the copier validator refuse the same keys, and use
+    the same pattern."""
+    out = CliRunner().invoke(
+        main,
+        [
+            "new",
+            "red-probe",
+            "--description",
+            "x.",
+            "--brain-key",
+            key,
+            "--no-remotes",
+            "--dest",
+            str(tmp_path / "cli"),
+        ],
+    )
+    assert out.exit_code == 2 and "[a-z0-9][a-z0-9_-]*" in out.output
+    assert not (tmp_path / "cli").exists()
+    with pytest.raises(ScaffoldError, match="brain_key"):
+        render(_project(template_dir, tmp_path / "copier", brain_key=key))
+    assert BRAIN_KEY.pattern in (ROOT / "copier.yml").read_text()
+
+
 def test_render_wraps_copier_failures(template_dir: Path, tmp_path: Path) -> None:
     """Review finding: a copier failure (bad ref, clone error) is a ScaffoldError, never a
     traceback."""
@@ -607,10 +680,18 @@ def test_every_deploy_target_the_cli_offers_is_a_copier_choice() -> None:
     or the command fails inside copier after the operator has already answered."""
     import yaml
 
-    from rail.model import DeployTarget
-
     questions = yaml.safe_load((ROOT / "copier.yml").read_text())
     assert set(questions["deploy_target"]["choices"]) == {t.value for t in DeployTarget}
+
+
+def test_every_stack_the_cli_offers_is_a_copier_choice() -> None:
+    """`rail new --stack` offers every `Stack`, and copier must accept exactly those: today a
+    drift fails only when `rail new --stack X` runs, inside copier. Spec B adds `rust` to both
+    or this fails (spec 2026-09-24-template-alignment, decision 12)."""
+    import yaml
+
+    questions = yaml.safe_load((ROOT / "copier.yml").read_text())
+    assert set(questions["stack"]["choices"]) == {s.value for s in Stack}
 
 
 def test_the_healthcheck_default_follows_the_target_in_the_template_itself() -> None:
@@ -661,6 +742,26 @@ def test_render_without_a_pin_still_calls_main(template_dir: Path, tmp_path: Pat
     dest = render(_project(template_dir, tmp_path / "red-beta", slug="red-beta"))
     workflow = (dest / ".github" / "workflows" / "continuous-integration.yml").read_text()
     assert "rail-ci.yml@main" in workflow
+
+
+@pytest.mark.parametrize(
+    "ref",
+    ["0123456789abcdef0123456789abcdef01234567", "1234567890" * 4, "main"],
+    ids=["hex-sha", "all-digit-sha", "main"],
+)
+def test_render_forwards_the_pin_to_rail_ref(template_dir: Path, tmp_path: Path, ref: str) -> None:
+    """The workflow called at `ref` must install the rail at `ref` too, or the gates float on
+    rail-ci's `main` default while the workflow reads as pinned (ticket 2a6781cb). Read as
+    GitHub reads it, parsed: an unquoted all-digit SHA would be a number, not a ref."""
+    import yaml
+
+    dest = render(_project(template_dir, tmp_path / "red-beta", slug="red-beta", rail_ref=ref))
+    workflow = yaml.safe_load(
+        (dest / ".github" / "workflows" / "continuous-integration.yml").read_text()
+    )
+    job = workflow["jobs"]["rail"]
+    assert job["uses"].endswith(f"@{ref}")
+    assert job["with"]["rail-ref"] == ref and isinstance(job["with"]["rail-ref"], str)
 
 
 def test_resolving_the_template_sha_never_falls_back_to_a_branch(tmp_path: Path) -> None:
@@ -734,3 +835,329 @@ def test_new_project_resolves_the_pin_before_rendering(template_dir: Path, tmp_p
     )
     workflow = project.dest / ".github" / "workflows" / "continuous-integration.yml"
     assert f"rail-ci.yml@{sha}" in workflow.read_text()
+
+
+# -- rendered guidance (spec 2026-09-24-template-alignment) ------------------------------
+
+PRIVATE_HEALTHCHECK = "http://192.0.2.10:9204/healthz"  # RFC 5737: typed, never assumed
+BRAIN_TICKET = "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"
+TARGET_FAMILIES = (DeployTarget.VPS_TRAEFIK.value, DeployTarget.PRIVATE_COMPOSE.value)
+
+
+class Combo(NamedTuple):
+    """One answer set of the template. Every guidance test reads the same renders."""
+
+    stack: Stack
+    tier: Tier
+    ledger: LedgerBackend
+    target: str | None = None  # prod only: one target per family, public and private
+    brain_key: str = "red-probe"
+
+    @property
+    def label(self) -> str:
+        parts = [self.stack.value, self.tier.value, self.ledger.value]
+        parts += [self.target] if self.target else []
+        parts += [self.brain_key] if self.brain_key != "red-probe" else []
+        return "-".join(parts)
+
+
+COMBOS = [
+    Combo(stack, tier, ledger, target)
+    for stack in Stack
+    for tier in Tier
+    for ledger in LedgerBackend
+    for target in (TARGET_FAMILIES if tier is Tier.PROD else (None,))
+] + [Combo(Stack.PYTHON, Tier.BOOTSTRAP, LedgerBackend.FILE, brain_key="red_probe")]
+ROOT_TITLES = (
+    "Workflows — the operator picks the method",
+    "Invariants — true whatever the method",
+)
+STACK_LINE = {
+    Stack.PYTHON: "Python 3.12+, uv, pytest, ruff.",
+    Stack.GO: "Go 1.22+, `go test`, `go vet`, `gofmt`.",
+    Stack.DOCS: "Documentation only (Markdown).",
+}
+STACK_CHAIN = re.compile(
+    r"\{#-?\s*stack-chain:\s*(?P<name>[a-z-]+)\s*-?#\}(?P<body>.*?)\{#-?\s*/stack-chain\s*-?#\}",
+    re.DOTALL,
+)
+STACK_CHAINS = {"CLAUDE.md.jinja": {"stack", "structure"}, "AGENTS.md.jinja": {"gates"}}
+_ELSE = re.compile(r"\{%-?\s*else\s*-?%\}")
+GUIDANCE = ("CLAUDE.md", "AGENTS.md")
+STACK_GATES = {
+    Stack.PYTHON: "`uv run pytest -q`",
+    Stack.GO: "`go test -race -count=1 ./...`",
+    Stack.DOCS: "no stack command of its own",
+}
+# D9's sections and D10's rows, in the order AGENTS.md must hold them
+AGENTS_ORDER = (
+    "Read `CLAUDE.md` first",
+    'names as "Parent project"',
+    "the `graph` method is **unavailable**",
+    "A pre-review never satisfies the review gate",
+    "## The invariants you must not break",
+    "**Always: `rail check` is the verdict**",
+    "**Always: the only bypass is a `gates:` override",
+    "**With `ledger: file`:",
+    "**With `ledger: brain`:",
+    "**At `tier: prod`:",
+    "**At `prod` with `deploy.target: vps-traefik`:",
+    "**At `prod` with any other target:",
+    "| project-specific: fill in |",
+    "## Gates",
+    "make ci        # exactly what CI runs",
+    "rail check     # the rail's gates",
+    "## Brain MCP",
+    "never `brain_learn` by default",
+    "## Subagents",
+    "Every subagent prompt names its perimeter",
+)
+
+
+def _in_order(text: str, needles: tuple[str, ...]) -> None:
+    position = 0
+    for needle in needles:
+        found = text.find(needle, position)
+        assert found >= 0, f"missing, or out of order: {needle!r}"
+        position = found + len(needle)
+
+
+def _render_combo(template: Path, dest: Path, combo: Combo) -> Path:
+    private = combo.target == DeployTarget.PRIVATE_COMPOSE
+    return render(
+        NewProject(
+            slug="red-probe",
+            description="A disposable HTTP probe.",
+            tier=combo.tier,
+            stack=combo.stack,
+            brain_key=combo.brain_key,
+            dest=dest,
+            template=str(template),
+            deploy_target=combo.target or DeployTarget.VPS_TRAEFIK.value,
+            healthcheck=PRIVATE_HEALTHCHECK if private else None,
+            ledger=combo.ledger,
+            ticket=BRAIN_TICKET if combo.ledger is LedgerBackend.BRAIN else None,
+        )
+    )
+
+
+@pytest.fixture(scope="module")
+def renders(tmp_path_factory: pytest.TempPathFactory) -> dict[Combo, Path]:
+    """Every combination rendered once for the module, from a copy of the working tree's
+    template (uncommitted edits included, as with `template_dir`)."""
+    base = tmp_path_factory.mktemp("renders")
+    template = base / "template-src"
+    template.mkdir()
+    shutil.copy(ROOT / "copier.yml", template / "copier.yml")
+    shutil.copytree(ROOT / "template", template / "template")
+    return {combo: _render_combo(template, base / combo.label, combo) for combo in COMBOS}
+
+
+@pytest.mark.parametrize("combo", COMBOS, ids=[c.label for c in COMBOS])
+def test_rendered_guidance_points_at_the_root(renders: dict[Combo, Path], combo: Combo) -> None:
+    """The method, the review and the invariants that hold whatever the method live once, in
+    the ReD root: `CLAUDE.md` points at their sections and copies neither (decisions 6-8).
+    `AGENTS.md` carries what Codex cannot reach from a sub-project's git root, and points at
+    the rest (decisions 9-10)."""
+    key = combo.brain_key
+    call = f'brain_session_start("{key}", client_key="<harness>-{key}-<YYYY-MM-DD>")'
+
+    claude = (renders[combo] / "CLAUDE.md").read_text()
+    for title in ROOT_TITLES:
+        assert f'§ "{title}"' in claude, title
+    assert "## Working principles" not in claude
+    assert not re.search(r"^\|\s*`(?:spec|graph|direct)`\s*\|", claude, re.MULTILINE)
+    table = "## Where things live\n\n| Question | Where to look |\n|---|---|\n"
+    assert table in claude
+    assert claude.index("## Project") < claude.index(table) < claude.index("## Language")
+    assert "| What tier, which ledger, which target? | `rail.yaml` |" in claude
+    assert f"`{call}`" in claude and claude.count("brain_session_start(") == 1
+    lesson = f'brain_learn(topic, insight, project_key="{key}")'
+    assert claude.index("## Brain MCP") < claude.index(lesson)
+    assert f"## Stack\n\n{STACK_LINE[combo.stack]}\n\n## Commands" in claude
+    assert "stack-chain" not in claude
+
+    agents = (renders[combo] / "AGENTS.md").read_text()
+    _in_order(agents, AGENTS_ORDER)
+    assert f"`{call}`" in agents and agents.count("brain_session_start(") == 1
+    assert agents.index("## Brain MCP") < agents.index(call)
+    assert STACK_GATES[combo.stack] in agents
+    assert "../../AGENTS.md" not in agents and "~/" not in agents
+    assert "stack-chain" not in agents
+    for target in DeployTarget:
+        if target is not DeployTarget.VPS_TRAEFIK:
+            assert target.value not in agents, f"AGENTS.md names the private {target.value}"
+
+
+def test_agents_md_does_not_depend_on_tier_ledger_or_target(renders: dict[Combo, Path]) -> None:
+    """Copier answers freeze at scaffold time and nothing re-answers `tier` on promotion, so
+    the invariant rows are unconditional, each prefixed by the value it applies to (decision
+    10): for one stack and one key, one `AGENTS.md`, whatever the tier, ledger and target."""
+    texts: dict[tuple[Stack, str], set[str]] = {}
+    for combo, dest in renders.items():
+        texts.setdefault((combo.stack, combo.brain_key), set()).add(
+            (dest / "AGENTS.md").read_text()
+        )
+    assert {stack for stack, _ in texts} == set(Stack)
+    varying = sorted(f"{s.value}/{key}" for (s, key), seen in texts.items() if len(seen) != 1)
+    assert not varying, f"AGENTS.md varies with tier, ledger or target for {varying}"
+
+
+def test_every_stack_chain_names_every_stack() -> None:
+    """A render cannot see a missing stack branch (§ Structure and § Gates always render
+    stack-independent lines). Each marked chain names every `Stack` member and has no
+    catch-all `else`, so spec B's `rust` is refused chain by chain until it is added
+    (decision 11). This test reads the template source on purpose."""
+    for source, expected in STACK_CHAINS.items():
+        text = (ROOT / "template" / "project" / source).read_text()
+        chains = {m["name"]: m["body"] for m in STACK_CHAIN.finditer(text)}
+        assert set(chains) == expected, f"{source}: marked chains {sorted(chains)}"
+        for name, body in chains.items():
+            missing = [s.value for s in Stack if f"stack == '{s.value}'" not in body]
+            assert not missing, f"{source}, chain {name!r}: no branch for {missing}"
+            assert not _ELSE.search(body), f"{source}, chain {name!r}: a catch-all else"
+
+
+ROUTES = frozenset({"/healthz", "/version", "/metrics"})  # the service's HTTP routes
+# Every skill or slash-command a rendered guidance file may name. Empty since decision 6: the
+# root is the pointer. Adding a name is a reviewed line (decision 14).
+CITABLE: frozenset[str] = frozenset()
+STALE = (
+    "sdd-brainstorm",
+    "writing-plans-parallel",
+    "executing-plans-parallel",
+    "/tdd-write-tests",
+    "/reflexion-reflect",
+    "/code-review-review-local-changes",
+)
+_CODE_SPAN = re.compile(r"`([^`\n]+)`")
+_SLASH_COMMAND = re.compile(r"^/[a-z][a-z0-9-]*$")
+_NAMESPACED_SKILL = re.compile(r"^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$")
+_BARE_SKILL = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)+$")
+
+
+def _cited_skills(text: str, *, own: set[str]) -> set[str]:
+    """Every whole code span shaped like a skill or a slash-command (decision 14), minus the
+    service's routes and what a render legitimately carries: its slug, its brain key and the
+    deploy targets."""
+    ignored = ROUTES | own | {target.value for target in DeployTarget}
+    return {
+        token
+        for token in _CODE_SPAN.findall(text)
+        if token not in ignored
+        and (
+            _SLASH_COMMAND.match(token)
+            or _NAMESPACED_SKILL.match(token)
+            or _BARE_SKILL.match(token)
+        )
+    }
+
+
+def test_skill_extraction_reads_whole_code_spans_only() -> None:
+    """Decision 14's extraction: anchored on whole code spans, so a git URL or a `gates:`
+    key never reads as a skill, and the routes, the slug and the targets are not citations."""
+    text = (
+        "Run `gitnexus-lfg`, then `/red-review` and `superpowers:brainstorming`. Not "
+        "`git@github.com:hawkixs/red-probe.git`, `gates: hygiene.mirror_host`, `rail check`, "
+        "`/healthz`, `red-probe`, `vps-traefik`, `rail.yaml` or `brain_learn`."
+    )
+    assert _cited_skills(text, own={"red-probe"}) == {
+        "gitnexus-lfg",
+        "/red-review",
+        "superpowers:brainstorming",
+    }
+
+
+@pytest.mark.parametrize("combo", COMBOS, ids=[c.label for c in COMBOS])
+def test_rendered_guidance_cites_only_allowed_skills(
+    renders: dict[Combo, Path], combo: Combo
+) -> None:
+    """A skill list rots, and the template's did: the root is the pointer, so a rendered
+    guidance file names no skill outside `CITABLE`, and none of the six stale names survives
+    anywhere in the tree (decision 14)."""
+    dest = renders[combo]
+    for name in GUIDANCE:
+        cited = _cited_skills((dest / name).read_text(), own={"red-probe", combo.brain_key})
+        assert cited <= CITABLE, f"{name} cites {sorted(cited - CITABLE)}"
+    for path in (p for p in dest.rglob("*") if p.is_file()):
+        text = path.read_bytes().decode("utf-8", errors="replace")
+        assert not [s for s in STALE if s in text], path.relative_to(dest)
+    if combo.stack is Stack.PYTHON and combo.tier is Tier.PROD:
+        claude = (dest / "CLAUDE.md").read_text()
+        assert all(f"`{route}`" in claude for route in ROUTES)  # the exclusion is exercised
+
+
+def test_rendered_files_carry_no_address_literal(renders: dict[Combo, Path]) -> None:
+    """The template adds no address of its own: what reaches a render is the typed
+    healthcheck (a documentation range here) and the service's loopback and wildcard, under
+    the repository's one policy (decision 15)."""
+    offenders = []
+    for combo, dest in renders.items():
+        for path in sorted(p for p in dest.rglob("*") if p.is_file()):
+            if _foreign(path.read_bytes().decode("utf-8", errors="replace")):
+                offenders.append(f"{combo.label}/{path.relative_to(dest)}")
+    assert not offenders, "address literals in rendered files: " + ", ".join(offenders)
+    private = [d for c, d in renders.items() if c.target == DeployTarget.PRIVATE_COMPOSE]
+    assert private and all("192.0.2.10" in (d / "rail.yaml").read_text() for d in private)
+
+
+# -- red-rail's own guidance follows its template (spec 2026-09-24-template-alignment, D8/D13) --
+
+_KEY_CLASS = BRAIN_KEY.pattern.removeprefix("^").removesuffix("$")  # the validator's own class
+SESSION_START = re.compile(
+    rf'brain_session_start\("(?P<k>{_KEY_CLASS})", client_key="<harness>-(?P=k)-<YYYY-MM-DD>"\)'
+)
+
+
+def _unkeyed_session_starts(text: str) -> list[str]:
+    """Each `brain_session_start(` that does not open decision 8's call, as its line."""
+    return [
+        text[match.start() :].split("\n", 1)[0]
+        for match in re.finditer(r"brain_session_start\(", text)
+        if not SESSION_START.match(text, match.start())
+    ]
+
+
+def test_the_session_start_check_refuses_a_bare_or_mismatched_call() -> None:
+    assert _unkeyed_session_starts('brain_session_start("red-rail")')
+    assert _unkeyed_session_starts(
+        'brain_session_start("red-rail", client_key="<harness>-red-alpha-<YYYY-MM-DD>")'
+    )
+    assert not _unkeyed_session_starts(
+        'brain_session_start("auto_discord", client_key="<harness>-auto_discord-<YYYY-MM-DD>")'
+    )
+
+
+@pytest.mark.parametrize(
+    "combo", [*COMBOS, None], ids=[*(c.label for c in COMBOS), "red-rail-itself"]
+)
+def test_every_brain_session_start_carries_a_client_key(
+    renders: dict[Combo, Path], combo: Combo | None
+) -> None:
+    """One `client_key` form everywhere (decision 8), on every render and on red-rail's own
+    two files, checked with the same class the key validator accepts."""
+    tree = ROOT if combo is None else renders[combo]
+    for name in GUIDANCE:
+        text = (tree / name).read_text()
+        assert "brain_session_start(" in text, f"{name}: no session-start example"
+        assert not _unkeyed_session_starts(text), f"{name}: {_unkeyed_session_starts(text)}"
+
+
+def test_red_rails_own_guidance_follows_its_template() -> None:
+    """red-rail dogfoods its template (decision 13): the root pointer instead of a skill
+    pipeline, the "Where things live" table, and `AGENTS.md` reaching the root through
+    "Parent project" rather than a relative path that breaks from a nested worktree."""
+    claude = (ROOT / "CLAUDE.md").read_text()
+    agents = (ROOT / "AGENTS.md").read_text()
+    for title in ROOT_TITLES:
+        assert f'§ "{title}"' in claude, title
+    table = "## Where things live\n\n| Question | Where to look |\n|---|---|\n"
+    assert table in claude
+    assert claude.index("## Project") < claude.index(table) < claude.index("## Language")
+    assert "## Working principles" not in claude
+    assert "`rail check` passes on this repository" in claude
+    assert "`pre-review.js` must pass" in claude
+    for stale in STALE:
+        assert stale not in claude and stale not in agents, stale
+    assert "../../AGENTS.md" not in agents
+    assert 'names as "Parent project"' in agents

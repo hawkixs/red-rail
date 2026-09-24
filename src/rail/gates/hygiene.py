@@ -1,8 +1,9 @@
 """Hygiene gates: the floor every tier stands on, starting with `bootstrap`.
 
 `remotes` and `roster_entry` are workstation-scoped: they read the operator's clone (the GitHub
-remote — a mirror only where the manifest declares one — and the ReD root roster two
-directories up) and are reported as skipped under `--ci`.
+remote — a mirror only where the manifest declares one — and the ReD root roster, found by
+walking up to the first `CLAUDE.md` holding its identity header) and are reported as skipped
+under `--ci`.
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -29,7 +32,14 @@ from rail.model import (
 from rail.policy import effective
 
 DOCS_DIRS = ("docs/specs", "docs/plans", "docs/adr")
-ROSTER_MARKER = "| Projet |"
+# The ReD root's identity table is recognised by its whole header: a bare `| Project |` prefix
+# also opens every "Related projects" table (spec 2026-09-24-template-alignment, decision 2).
+ROSTER_HEADER = ("Project", "Domain", "What it is", "Brain key")
+DOMAIN_PLACEHOLDER = "<domain>"  # the cell `rail new` leaves to the operator's classification
+PROJECTS_DIR = "projects"  # a ReD root keeps its sub-projects here
+_DOMAIN = ROSTER_HEADER.index("Domain")
+_SEPARATOR = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+$")
+_CELL_BOUNDARY = re.compile(r"(?<!\\)\|")
 _MAKE_TARGET = re.compile(r"^([A-Za-z0-9_./ \t-]+?)\s*:(?!=)", re.MULTILINE)  # `a b: deps` = two
 
 
@@ -49,6 +59,58 @@ def make_targets(repo: Path) -> set[str]:
 def _short(path: Path) -> str:
     """`<parent>/<name>`: enough to identify the roster, no absolute path in a receipt or audit."""
     return f"{path.parent.name}/{path.name}"
+
+
+def table_row(cells: Iterable[str]) -> str:
+    """One Markdown table line; a `|` inside a cell is escaped, so the row keeps its width."""
+    return "| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |"
+
+
+def table_cells(line: str) -> tuple[str, ...] | None:
+    """The stripped cells of a Markdown table line, or None when the line is not one. An
+    escaped `\\|` stays inside its cell."""
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return None
+    inner = stripped[1:]
+    if inner.endswith("|") and not inner.endswith("\\|"):
+        inner = inner[:-1]
+    return tuple(cell.strip() for cell in _CELL_BOUNDARY.split(inner))
+
+
+def roster_header() -> str:
+    """The roster's header line and its separator, as the ReD root writes them."""
+    return table_row(ROSTER_HEADER) + "\n|" + "---|" * len(ROSTER_HEADER)
+
+
+def roster_row(project: str, description: str, brain_key: str) -> str:
+    """The row `rail new` prints for the root: one cell per header column, in the header's
+    order, the domain left to the operator (decision 5)."""
+    cells = {
+        "Project": project,
+        "Domain": DOMAIN_PLACEHOLDER,
+        "What it is": description,
+        "Brain key": f"`{brain_key}`",
+    }
+    return table_row(cells[column] for column in ROSTER_HEADER)
+
+
+def roster_rows(text: str) -> list[tuple[str, ...]] | None:
+    """The rows of the identity table in `text`: the header, its separator, then consecutive
+    table lines. None when no header line is followed by a separator."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines[:-1]):
+        separator = _SEPARATOR.match(lines[index + 1].strip())
+        if table_cells(line) != ROSTER_HEADER or not separator:
+            continue
+        rows: list[tuple[str, ...]] = []
+        for row in lines[index + 2 :]:
+            cells = table_cells(row)
+            if cells is None:
+                break
+            rows.append(cells)
+        return rows
+    return None
 
 
 _MAKE_VALUE_FLAGS = {"-C", "-f", "-j", "-I", "-o", "-W"}
@@ -74,15 +136,59 @@ def make_target(line: str) -> str | None:
     return None
 
 
-def find_roster(repo: Path) -> Path | None:
-    """The ReD root `CLAUDE.md` (two levels up: `<root>/projects/<repo>`), if it holds
-    the roster."""
-    # normpath folds `..` lexically (`rail audit ..` hands us `<repo>/../<project>`) without
-    # resolving symlinks, so a symlinked project still points at the ReD root
-    candidate = Path(os.path.normpath(repo.absolute())).parent.parent / "CLAUDE.md"
-    if candidate.is_file() and ROSTER_MARKER in candidate.read_text():
-        return candidate
-    return None
+@dataclass(frozen=True, slots=True)
+class RosterSearch:
+    """What the walk up from a repository met (decisions 3 and 4)."""
+
+    roster: Path | None = None  # the first CLAUDE.md holding the identity header
+    rows: tuple[tuple[str, ...], ...] = ()  # the rows of its identity table
+    red_root: Path | None = None  # the ReD position: parent of the nearest `projects` ancestor
+    red_claude_md: bool = False  # a CLAUDE.md sits at the ReD position
+    unreadable: str | None = None  # why the ReD position's CLAUDE.md could not be read
+
+
+def _text(path: Path) -> str | None:
+    """`path` as UTF-8 text, or None when there is no such file. Raises OSError (a stat or a
+    read refused) or UnicodeDecodeError on a file that is there and cannot be read."""
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def find_roster(repo: Path) -> RosterSearch:
+    """Walk up from `repo` to the first `CLAUDE.md` holding the identity header.
+
+    The walk is lexical: `normpath` folds `..` (`rail audit ..` hands us `<repo>/../<x>`) and
+    no symlink is resolved. It covers `projects/x`, a worktree nested in it
+    (`projects/x/.claude/worktrees/w`, `projects/x/.worktrees/w`) and an audit from a
+    sibling, without git. Only the ReD position — the parent of the nearest `projects`
+    ancestor — may fail the gate on a read error; any other unreadable `CLAUDE.md` is passed
+    over, so an unrelated ancestor never fails a repository."""
+    start = Path(os.path.normpath(repo.absolute()))
+    red_root: Path | None = None
+    red_claude_md = False
+    below: Path | None = None  # the repository itself is not an ancestor
+    for ancestor in start.parents:
+        red_position = red_root is None and below is not None and below.name == PROJECTS_DIR
+        below = ancestor
+        if red_position:
+            red_root = ancestor
+        candidate = ancestor / "CLAUDE.md"
+        try:
+            text = _text(candidate)
+        except (OSError, UnicodeDecodeError) as exc:
+            if red_position:
+                return RosterSearch(
+                    red_root=ancestor,
+                    unreadable=f"cannot read {_short(candidate)} ({type(exc).__name__})",
+                )
+            continue
+        if red_position:
+            red_claude_md = text is not None
+        rows = roster_rows(text) if text is not None else None
+        if rows is not None:
+            return RosterSearch(roster=candidate, rows=tuple(rows), red_root=red_root)
+    return RosterSearch(red_root=red_root, red_claude_md=red_claude_md)
 
 
 def rail_config(repo: Path) -> GateResult:
@@ -189,17 +295,34 @@ def remotes(repo: Path) -> GateResult:
 
 
 def roster_entry(repo: Path) -> GateResult:
-    roster = find_roster(repo)
-    if roster is None:
-        return GateResult(
-            Stage.HYGIENE, "roster_entry", True, "no roster in scope (standalone repository)"
-        )
+    """Three outcomes (decision 4). The roster is found: the row is judged. No roster, but a
+    `CLAUDE.md` sits at the ReD position: its header drifted or it cannot be read, a FAIL.
+    Otherwise the repository is standalone, and the message says why."""
+
+    def result(passed: bool, details: str) -> GateResult:
+        return GateResult(Stage.HYGIENE, "roster_entry", passed, details)
+
+    search = find_roster(repo)
+    if search.unreadable is not None:
+        return result(False, f"{search.unreadable}: the roster cannot be checked")
+    if search.roster is None:
+        if search.red_root is None:
+            return result(True, f"standalone: no `{PROJECTS_DIR}` ancestor")
+        if not search.red_claude_md:
+            return result(True, f"standalone: no CLAUDE.md in {search.red_root.name}")
+        drifted = _short(search.red_root / "CLAUDE.md")
+        return result(False, f"roster header not found in {drifted}: the root format drifted")
     name = _project_name(repo)
-    if re.search(rf"^\|\s*{re.escape(name)}\s*\|", roster.read_text(), re.MULTILINE):
-        return GateResult(Stage.HYGIENE, "roster_entry", True, f"listed in {_short(roster)}")
-    return GateResult(
-        Stage.HYGIENE, "roster_entry", False, f"{name} has no row in {_short(roster)}"
-    )
+    where = _short(search.roster)
+    row = next((cells for cells in search.rows if cells[0] == name), None)
+    if row is None:
+        return result(False, f"{name} has no row in {where}")
+    if len(row) > _DOMAIN and row[_DOMAIN] == DOMAIN_PLACEHOLDER:
+        return result(
+            False,
+            f"{name}'s row in {where} still holds `{DOMAIN_PLACEHOLDER}`: fill in its domain",
+        )
+    return result(True, f"listed in {where}")
 
 
 def receipts(repo: Path) -> GateResult:

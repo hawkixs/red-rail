@@ -8,6 +8,7 @@ import pytest
 
 from rail.gates import Stage
 from rail.gates.hygiene import (
+    DOMAIN_PLACEHOLDER,
     GATES,
     claude_md,
     receipts,
@@ -119,8 +120,150 @@ def test_roster_entry_folds_dotdot_paths_to_the_root(tmp_path: Path) -> None:
 
 
 def test_roster_entry_is_standalone_without_a_roster(tmp_path: Path) -> None:
+    """Standalone always says why (decision 4): no ReD root above `projects/`, or no
+    `projects/` at all."""
     result = roster_entry(conforming_tree(tmp_path, "red-alpha", "bootstrap"))
-    assert result.passed and "standalone" in result.details
+    assert result.passed and result.details == f"standalone: no CLAUDE.md in {tmp_path.name}"
+    lonely = init_repo(tmp_path / "elsewhere" / "red-lonely", remotes=False)
+    result = roster_entry(lonely)
+    assert result.passed and result.details == "standalone: no `projects` ancestor"
+
+
+def _nested_worktree(repo: Path, nested: str) -> Path:
+    """A checkout nested inside the project, carrying its own manifest as a worktree does."""
+    worktree = repo / nested
+    worktree.mkdir(parents=True)
+    write_manifest(worktree, project=repo.name, tier="bootstrap")
+    return worktree
+
+
+@pytest.mark.parametrize("nested", [".claude/worktrees/w", ".worktrees/w"])
+def test_roster_entry_finds_the_root_from_a_nested_worktree(tmp_path: Path, nested: str) -> None:
+    """cdb725e4: two levels up from `projects/x/.claude/worktrees/w` is `projects/x/.claude`,
+    so every worktree run of the gate reported standalone. The walk goes up to the root."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    worktree = _nested_worktree(repo, nested)
+    write_roster(tmp_path, ["red-alpha"])
+    result = roster_entry(worktree)
+    assert result.passed and result.details == f"listed in {tmp_path.name}/CLAUDE.md"
+
+
+def test_roster_entry_walks_up_from_the_current_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`rail check` with no `--repo` hands the gate `.`: the default invocation, from a nested
+    worktree, reaches the root (review focus 1; success criterion 9 in miniature)."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    worktree = _nested_worktree(repo, ".claude/worktrees/w")
+    write_roster(tmp_path, ["red-alpha"])
+    monkeypatch.chdir(worktree)
+    result = roster_entry(Path("."))
+    assert result.passed and result.details == f"listed in {tmp_path.name}/CLAUDE.md"
+
+
+def test_roster_entry_ignores_the_related_projects_table(tmp_path: Path) -> None:
+    """A row counts only inside the identity table's block: a project named in a "Related
+    projects" table further down is not in the roster (decision 2)."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    write_roster(tmp_path, ["red-other"])
+    with (tmp_path / "CLAUDE.md").open("a") as root:
+        root.write(
+            "\n## Related projects\n\n| Project | Path | Relation |\n|---|---|---|\n"
+            "| red-alpha | `projects/red-alpha` | a sibling |\n"
+        )
+    result = roster_entry(repo)
+    assert not result.passed
+    assert result.details == f"red-alpha has no row in {tmp_path.name}/CLAUDE.md"
+
+
+def test_roster_entry_fails_when_the_root_header_drifted(tmp_path: Path) -> None:
+    """A `CLAUDE.md` above `projects/` without the identity header is a root whose format
+    moved (the French header, here): a FAIL that names it, never a silent standalone."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    (tmp_path / "CLAUDE.md").write_text(
+        "# ReD\n\n| Projet | Domaine | Statut reel | Sante | Cle brain |\n|---|---|---|---|---|\n"
+        "| red-alpha | Infra | fixture | OK | `red-alpha` |\n"
+    )
+    result = roster_entry(repo)
+    assert not result.passed
+    assert result.details == (
+        f"roster header not found in {tmp_path.name}/CLAUDE.md: the root format drifted"
+    )
+
+
+def test_roster_entry_fails_on_a_row_still_holding_the_domain_placeholder(
+    tmp_path: Path,
+) -> None:
+    """The row `rail new` prints was pasted unedited: the domain is the operator's call."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    write_roster(tmp_path, ["red-alpha"], domain=DOMAIN_PLACEHOLDER)
+    result = roster_entry(repo)
+    assert not result.passed
+    assert result.details == (
+        f"red-alpha's row in {tmp_path.name}/CLAUDE.md still holds `<domain>`: fill in its domain"
+    )
+
+
+@pytest.mark.parametrize("broken", ["undecodable", "unreadable"])
+def test_roster_entry_fails_closed_on_an_unreadable_roster(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broken: str
+) -> None:
+    """The ReD position's `CLAUDE.md` cannot be read: the roster cannot be checked, so the
+    gate fails and names the file. It never raises (decision 4)."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    root_md = tmp_path / "CLAUDE.md"
+    if broken == "undecodable":
+        root_md.write_bytes(b"# ReD\n\xff\xfe\n")
+    else:
+        write_roster(tmp_path, ["red-alpha"])
+        read_text = Path.read_text
+
+        def refuse(self: Path, *args: object, **kwargs: object) -> str:
+            if self == root_md:
+                raise PermissionError(13, "Permission denied")
+            return read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "read_text", refuse)
+    result = roster_entry(repo)
+    assert not result.passed
+    assert result.details.startswith(f"cannot read {tmp_path.name}/CLAUDE.md (")
+    assert result.details.endswith("): the roster cannot be checked")
+
+
+def test_roster_entry_skips_an_unreadable_unrelated_ancestor(tmp_path: Path) -> None:
+    """Only the ReD position may fail the gate on a read error. The sub-project's own
+    `CLAUDE.md`, met on the way up from a nested worktree, is passed over."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    worktree = _nested_worktree(repo, ".claude/worktrees/w")
+    (repo / "CLAUDE.md").write_bytes(b"\xff\xfe")
+    write_roster(tmp_path, ["red-alpha"])
+    result = roster_entry(worktree)
+    assert result.passed and result.details == f"listed in {tmp_path.name}/CLAUDE.md"
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_roster_entry_reads_a_crlf_or_compact_header(tmp_path: Path, newline: str) -> None:
+    """Review focus 2: the header is recognised by its cells, not by its spacing, and a
+    CRLF file is still read line by line."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    text = (
+        "# ReD\n\n|Project|Domain|What it is|Brain key|\n|:---|---|---|---:|\n"
+        "|red-alpha|Infra|fixture|`red-alpha`|\n"
+    )
+    (tmp_path / "CLAUDE.md").write_bytes(text.replace("\n", newline).encode())
+    result = roster_entry(repo)
+    assert result.passed and result.details == f"listed in {tmp_path.name}/CLAUDE.md"
+
+
+def test_roster_entry_takes_the_nearest_projects_ancestor(tmp_path: Path) -> None:
+    """Review focus 5: under `<x>/projects/outer/projects/red-alpha`, the ReD position is
+    `outer`, the parent of the nearest `projects`, and the standalone message names it."""
+    outer = tmp_path / "projects" / "outer"
+    repo = conforming_tree(outer, "red-alpha", "bootstrap")
+    result = roster_entry(repo)
+    assert result.passed and result.details == "standalone: no CLAUDE.md in outer"
+    write_roster(outer, ["red-alpha"])
+    assert roster_entry(repo).details == "listed in outer/CLAUDE.md"
 
 
 def test_receipts_pass_when_absent_or_well_formed(tmp_path: Path) -> None:

@@ -16,9 +16,13 @@ concurrency:
 jobs:
   rail:
     # The reusable rail workflow: the project's `make ci`, then `rail check --ci --json`.
+    # One pin for both: the workflow is called at it and installs the rail's code at it, so
+    # the gates guarding this repository move only with a commit here. Quoted: an all-digit
+    # SHA would otherwise be read as a number.
     uses: hawkixs/red-rail/.github/workflows/rail-ci.yml@{{ rail_ref }}
     with:
       stack: {{ stack }}
+      rail-ref: "{{ rail_ref }}"
     # No `secrets: inherit`: that hands over everything the repository holds, while rail-ci
     # declares one optional secret. Omitted entirely, `RAIL_READ_TOKEN` resolves to empty and
     # the workflow falls back to `github.token` — red-rail is public, so checking it out

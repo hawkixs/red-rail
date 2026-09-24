@@ -1,57 +1,14 @@
 """This repository is public: no machine address may be committed to it, not in code, not
 in a test, not in a receipt. An address that is only an example comes from the documentation
-ranges (RFC 5737, RFC 3849); a real one lives in the host's private files (`sites.yaml`)."""
+ranges (RFC 5737, RFC 3849); a real one lives in the host's private files (`sites.yaml`). The
+policy itself lives in `tests/addresses.py`, shared with the scan of rendered scaffolds."""
 
-import ipaddress
-import re
 import subprocess
 from pathlib import Path
 
-from rail.contract_guard import _DOTTED
+from tests.addresses import _foreign
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# Colon-separated hex groups, at least three groups; parsing decides whether it is an address,
-# so a time of day (`12:34:56`) or a slice (`[::2]`) never counts.
-_COLONS = re.compile(r"(?<![\w:.])([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})(?![\w:.])")
-
-ALLOWED = tuple(
-    ipaddress.ip_network(net)
-    for net in (
-        "192.0.2.0/24",  # TEST-NET-1
-        "198.51.100.0/24",  # TEST-NET-2
-        "203.0.113.0/24",  # TEST-NET-3
-        "127.0.0.0/8",  # loopback
-        "0.0.0.0/32",  # the unspecified address, named in refusals
-        "2001:db8::/32",  # IPv6 documentation
-        # loopback, unspecified and the deprecated IPv4-compatible block: never a machine's
-        # address, and a slice such as `[::2]` parses into it
-        "::/96",
-        "fe80::/10",  # link-local: an interface's, never a machine's reachable address
-        # YAML 1.1 reads an all-digit IPv6 as a base-60 integer, and no documentation address
-        # is written in digits only: the one example that test needs, and nothing around it
-        "2001::1/128",
-    )
-)
-
-
-def _candidates(text: str) -> list[str]:
-    return _DOTTED.findall(text) + _COLONS.findall(text)
-
-
-def _foreign(text: str) -> list[str]:
-    """Literals that parse as an IP address and fall outside the documentation, loopback and
-    link-local ranges. The contract guard's lookarounds: `1.2.3.4.5` and versions are not
-    addresses."""
-    found = []
-    for candidate in _candidates(text):
-        try:
-            address = ipaddress.ip_address(candidate)
-        except ValueError:
-            continue
-        if not any(address.version == net.version and address in net for net in ALLOWED):
-            found.append(candidate)
-    return found
 
 
 def test_the_scan_catches_a_private_address_and_spares_the_documentation_ranges() -> None:
