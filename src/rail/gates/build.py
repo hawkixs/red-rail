@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tomllib
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
@@ -35,6 +36,23 @@ def _go_tests(repo: Path) -> list[Path]:
     return [p for p in repo.rglob("*_test.go") if "vendor" not in p.parts]
 
 
+_NOT_THE_PROJECT = {"target", ".cargo-tools"}  # built or installed crates, not the project's
+
+
+def _rust_tests(repo: Path) -> list[Path]:
+    """The targets Cargo discovers as integration tests, `tests/*.rs` and `tests/<dir>/main.rs`,
+    beside every Cargo.toml (the root package and each member). A helper module such as
+    `tests/common/mod.rs` is not a target (spec 2026-09-24-rust-stack, decision 11)."""
+    found: list[Path] = []
+    for manifest in sorted(repo.rglob("Cargo.toml")):
+        if _NOT_THE_PROJECT & set(manifest.relative_to(repo).parts):
+            continue
+        tests = manifest.parent / "tests"
+        if tests.is_dir():
+            found += sorted(tests.glob("*.rs")) + sorted(tests.glob("*/main.rs"))
+    return found
+
+
 def _ruff_configured(repo: Path) -> bool:
     pyproject = repo / "pyproject.toml"
     return (pyproject.is_file() and "[tool.ruff" in pyproject.read_text()) or any(
@@ -57,6 +75,10 @@ def _python_test_profile(repo: Path) -> GateResult:
 
 def _go_test_profile(repo: Path) -> GateResult:
     return _counted(_go_tests(repo), "*_test.go")
+
+
+def _rust_test_profile(repo: Path) -> GateResult:
+    return _counted(_rust_tests(repo), "tests/*.rs")
 
 
 def _docs_test_profile(repo: Path) -> GateResult:
@@ -84,11 +106,11 @@ def has_tests(repo: Path) -> GateResult:
     if isinstance(decl, str):
         return GateResult(Stage.BUILD, "tests", False, decl)
     if decl.stack is None:
-        python, go = len(_python_tests(repo)), len(_go_tests(repo))
+        python, go, rust = len(_python_tests(repo)), len(_go_tests(repo)), len(_rust_tests(repo))
         observed = (
-            "no test file found (tests/test_*.py, *_test.go)"
-            if not python and not go
-            else f"{python} test file(s) (tests/test_*.py), {go} (*_test.go)"
+            "no test file found (tests/test_*.py, *_test.go), none in tests/*.rs"
+            if not python and not go and not rust
+            else f"{python} test file(s) (tests/test_*.py), {go} (*_test.go), {rust} (tests/*.rs)"
         )
         return Need("stack", observed).result(Stage.BUILD, "tests")
     profile = TEST_PROFILES.get(decl.stack)
@@ -217,17 +239,102 @@ def _go_profile(repo: Path) -> GateResult:
     )
 
 
+_EXACT_CHANNEL = re.compile(r"^\d+\.\d+\.\d+$")
+# What the Makefile must run, however the toolchain is spelled (`cargo`, `$(CARGO)`): the call,
+# read from live recipe lines only, never the bare tool name.
+RUST_CALLS: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("fmt --check", re.compile(r"\bfmt\b[^\n]*\s--check\b"), "$(CARGO) fmt --all --check"),
+    (
+        "clippy -D warnings",
+        re.compile(r"\bclippy\b[^\n]*\s-D\s+warnings\b"),
+        "$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings",
+    ),
+    ("deny check", re.compile(r"\bdeny\s+check\b"), "$(CARGO) deny check"),
+    (
+        "a pinned cargo-deny install",
+        re.compile(
+            r"\binstall\s+cargo-deny\b"
+            r"(?=[^\n]*\s--locked\b)"
+            r"(?=[^\n]*\s--version\s+\d+\.\d+\.\d+\b)"
+        ),
+        "$(CARGO) install cargo-deny --locked --version X.Y.Z --root .cargo-tools",
+    ),
+)
+
+
+def _toml(path: Path) -> dict | str:
+    """The parsed file, or why it could not be read: the gate never raises."""
+    try:
+        return tomllib.loads(path.read_text())
+    except FileNotFoundError:
+        return f"{path.name} is missing"
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        return f"{path.name} does not parse: {exc}"
+
+
+def _rust_profile(repo: Path) -> GateResult:
+    """The rust profile as a pure read, on the model of `_go_profile`: rust-toolchain.toml pins
+    an exact toolchain with rustfmt and clippy, the lock and deny.toml exist, and the Makefile
+    calls fmt, clippy, cargo-deny and a pinned install of it (spec 2026-09-24-rust-stack,
+    decision 12). The gate never runs cargo; CI does."""
+
+    def fail(why: str) -> GateResult:
+        return GateResult(Stage.BUILD, "lint", False, why)
+
+    toolchain = _toml(repo / "rust-toolchain.toml")
+    if isinstance(toolchain, str):
+        return fail(toolchain)
+    pinned = toolchain.get("toolchain", {})
+    channel = str(pinned.get("channel", ""))
+    if not _EXACT_CHANNEL.match(channel):
+        return fail(
+            f"rust-toolchain.toml channel {channel!r} is not an exact version (X.Y.Z): a floating "
+            "channel changes clippy's lints under a green project"
+        )
+    missing = sorted({"rustfmt", "clippy"} - set(pinned.get("components", [])))
+    if missing:
+        return fail(f"rust-toolchain.toml components lack {', '.join(missing)}")
+    if not (repo / "Cargo.toml").is_file():
+        return fail("Cargo.toml is missing")
+    if not (repo / "Cargo.lock").is_file():
+        return fail("Cargo.lock is missing: run `make sync`, then commit it")
+    deny = _toml(repo / "deny.toml")
+    if isinstance(deny, str):
+        return fail(deny)
+    makefile = repo / "Makefile"
+    if not makefile.is_file():
+        return fail("Makefile is missing")
+    try:
+        text = makefile.read_text()
+    except (OSError, UnicodeDecodeError) as exc:
+        return fail(f"Makefile could not be read: {exc}")
+    runner = _recipe_lines(text)
+    for what, pattern, remedy in RUST_CALLS:
+        if not pattern.search(runner):
+            return fail(f"the Makefile never runs {what} (`{remedy}`)")
+    version = re.search(r"--version\s+(\d+\.\d+\.\d+)", runner)
+    return GateResult(
+        Stage.BUILD,
+        "lint",
+        True,
+        f"toolchain {channel} pinned by rust-toolchain.toml; fmt, clippy and cargo-deny "
+        f"{version.group(1) if version else '?'} called by the Makefile",
+    )
+
+
 # Every stack is routed explicitly: a stack with no entry FAILs with NO_PROFILE and is never
 # judged as another stack (spec 2026-09-24-rust-stack, decision 10).
 TEST_PROFILES: dict[Stack, Callable[[Path], GateResult]] = {
     Stack.PYTHON: _python_test_profile,
     Stack.GO: _go_test_profile,
     Stack.DOCS: _docs_test_profile,
+    Stack.RUST: _rust_test_profile,
 }
 LINT_PROFILES: dict[Stack, Callable[[Path], GateResult]] = {
     Stack.PYTHON: _python_lint,
     Stack.GO: _go_profile,
     Stack.DOCS: _docs_lint,
+    Stack.RUST: _rust_profile,
 }
 
 

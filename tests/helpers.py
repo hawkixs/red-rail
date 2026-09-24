@@ -80,6 +80,22 @@ GO_MAKEFILE = (
     "check:\n\trail check\nci: lint test vuln check\n"
 )
 
+# A rust project's task runner: the calls `build.lint` reads (spec 2026-09-24-rust-stack, D12).
+RUST_MAKEFILE = (
+    ".PHONY: sync lint test deny check ci\n"
+    "CARGO ?= cargo\n"
+    "sync:\n\t$(CARGO) fetch $(LOCKED)\n"
+    "\t$(CARGO) install cargo-deny --locked --version 0.20.2 --root .cargo-tools\n"
+    "lint:\n\t$(CARGO) fmt --all --check\n"
+    "\t$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings\n"
+    "test:\n\t$(CARGO) test --workspace --locked\n"
+    "deny:\n\t$(CARGO) deny check\n"
+    "check:\n\trail check\nci: lint test deny check\n"
+)
+RUST_TOOLCHAIN_TOML = (
+    '[toolchain]\nchannel = "1.98.1"\ncomponents = ["rustfmt", "clippy"]\nprofile = "minimal"\n'
+)
+
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
@@ -174,6 +190,16 @@ def conforming_tree(root: Path, name: str, tier: str, *, stack: str = "python") 
         )
         (repo / "main_test.go").write_text("package main\n")
         (repo / "Makefile").write_text(GO_MAKEFILE)
+    elif stack == "rust":
+        (repo / "Cargo.toml").write_text(
+            f'[package]\nname = "{name}"\nversion = "0.1.0"\nedition = "2024"\n\n[workspace]\n'
+        )
+        (repo / "Cargo.lock").write_text("version = 4\n")
+        (repo / "rust-toolchain.toml").write_text(RUST_TOOLCHAIN_TOML)
+        (repo / "deny.toml").write_text('[licenses]\nallow = ["MIT"]\n')
+        (repo / "tests").mkdir()
+        (repo / "tests" / "smoke.rs").write_text("#[test]\nfn smoke() {}\n")
+        (repo / "Makefile").write_text(RUST_MAKEFILE)
     commit_all(repo, "chore: bootstrap the fixture")
     return repo
 

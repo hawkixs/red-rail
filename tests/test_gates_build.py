@@ -10,8 +10,11 @@ import pytest
 from rail.gates import Stage
 from rail.gates import build as build_gates
 from rail.gates.build import GATES, commits, has_tests, lint, secrets
-from rail.model import Stack
-from tests.helpers import commit_all, conforming_tree, init_repo
+from rail.model import Stack, Tier
+from rail.scaffold import NewProject, render
+from tests.helpers import commit_all, conforming_tree, init_repo, write_manifest
+
+ROOT = Path(__file__).resolve().parents[1]
 
 # `tests` is a gate function, not a pytest test: its name matches pytest's default
 # `python_functions = test*` glob, so without this it gets collected and fails at
@@ -346,3 +349,151 @@ def test_a_stack_without_a_profile_fails_and_does_not_raise(
     result = gate(repo)
     assert not result.passed
     assert result.details == "stack `python` has no build profile in this rail version"
+
+
+def test_every_stack_has_a_build_profile() -> None:
+    assert set(build_gates.TEST_PROFILES) == set(Stack)
+    assert set(build_gates.LINT_PROFILES) == set(Stack)
+
+
+def _rust_repo(root: Path) -> Path:
+    """A manifest declaring rust, and nothing else: each test writes the crates it needs."""
+    repo = init_repo(root)
+    write_manifest(repo, project="red-life", tier="dev", stack="rust")
+    return repo
+
+
+def _crate(directory: Path, *tests: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "Cargo.toml").write_text('[package]\nname = "x"\n')
+    for test in tests:
+        path = directory / "tests" / test
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#[test]\nfn t() {}\n")
+
+
+def test_rust_tests_are_found_under_tests_dirs(tmp_path: Path) -> None:
+    """Cargo's integration targets: `tests/*.rs` and `tests/<dir>/main.rs` beside every
+    Cargo.toml, root package and members alike. `target/` and `.cargo-tools/` hold built or
+    installed crates, not the project's tests (Review Focus 3)."""
+    repo = _rust_repo(tmp_path / "red-life")
+    _crate(repo, "smoke.rs", "it/main.rs")
+    _crate(repo / "crates" / "engine", "rules.rs")
+    _crate(repo / "target" / "package" / "x-0.1.0", "vendored.rs")
+    _crate(repo / ".cargo-tools" / "src" / "y", "installed.rs")
+    result = has_tests(repo)
+    assert result.passed and result.details == "3 test file(s)", result.details
+
+
+def test_a_rust_helper_module_alone_is_not_a_test(tmp_path: Path) -> None:
+    repo = _rust_repo(tmp_path / "red-life")
+    _crate(repo, "common/mod.rs")
+    (repo / "src").mkdir()
+    (repo / "src" / "main.rs").write_text("#[cfg(test)]\nmod tests {}\n")
+    result = has_tests(repo)
+    assert not result.passed and result.details == "no test files (tests/*.rs)"
+
+
+def test_rust_repo_with_only_go_tests_fails(tmp_path: Path) -> None:
+    repo = _rust_repo(tmp_path / "red-life")
+    _crate(repo)
+    (repo / "main_test.go").write_text("package main\n")
+    assert not has_tests(repo).passed
+
+
+def test_undeclared_stack_reports_rust_tests(tmp_path: Path) -> None:
+    assert "no test file found (tests/test_*.py, *_test.go), none in tests/*.rs" in (
+        has_tests(tmp_path).details
+    )
+    _crate(tmp_path, "smoke.rs")
+    assert "0 test file(s) (tests/test_*.py), 0 (*_test.go), 1 (tests/*.rs)" in (
+        has_tests(tmp_path).details
+    )
+
+
+def _rendered_rust(tmp_path: Path) -> Path:
+    src = tmp_path / "template-src"
+    src.mkdir()
+    shutil.copy(ROOT / "copier.yml", src / "copier.yml")
+    shutil.copytree(ROOT / "template", src / "template")
+    dest = render(
+        NewProject(
+            slug="red-life",
+            description="A disposable rust project.",
+            tier=Tier.DEV,
+            stack=Stack.RUST,
+            brain_key="red-life",
+            dest=tmp_path / "red-life",
+            template=str(src),
+        )
+    )
+    (dest / "Cargo.lock").write_text("version = 4\n")  # what `make sync` writes
+    return dest
+
+
+def test_rust_lint_passes_on_the_rendered_tree(tmp_path: Path) -> None:
+    dest = _rendered_rust(tmp_path)
+    result = lint(dest)
+    assert result.passed, result.details
+    assert "1.98.1" in result.details and "0.20.2" in result.details
+    assert has_tests(dest).passed
+
+
+def test_a_fresh_rust_scaffold_fails_lint_until_make_sync_writes_the_lock(tmp_path: Path) -> None:
+    dest = _rendered_rust(tmp_path)
+    (dest / "Cargo.lock").unlink()
+    result = lint(dest)
+    assert not result.passed and "Cargo.lock" in result.details and "make sync" in result.details
+
+
+def _replace(path: Path, old: str, new: str) -> None:
+    text = path.read_text()
+    assert old in text, f"{old!r} not in {path.name}"
+    path.write_text(text.replace(old, new))
+
+
+@pytest.mark.parametrize(
+    ("mutate", "named"),
+    [
+        (lambda d: (d / "deny.toml").unlink(), "deny.toml"),
+        (lambda d: _replace(d / "rust-toolchain.toml", '"1.98.1"', '"stable"'), "channel"),
+        (
+            lambda d: _replace(d / "rust-toolchain.toml", '"rustfmt", "clippy"', '"rustfmt"'),
+            "clippy",
+        ),
+        (lambda d: (d / "Cargo.lock").unlink(), "Cargo.lock"),
+        (lambda d: (d / "Cargo.toml").unlink(), "Cargo.toml"),
+        (
+            lambda d: _replace(d / "Makefile", "\t$(CARGO) deny check", "\t# $(CARGO) deny check"),
+            "deny check",
+        ),
+        (lambda d: _replace(d / "Makefile", " --version 0.20.2", ""), "cargo-deny"),
+        (lambda d: _replace(d / "Makefile", " -- -D warnings", ""), "-D warnings"),
+        (lambda d: _replace(d / "Makefile", "fmt --all --check", "fmt --all"), "fmt"),
+    ],
+    ids=[
+        "no-deny-toml",
+        "floating-channel",
+        "no-clippy-component",
+        "no-lock",
+        "no-cargo-toml",
+        "deny-check-commented-out",
+        "cargo-deny-unpinned",
+        "clippy-without-deny-warnings",
+        "fmt-without-check",
+    ],
+)
+def test_rust_lint_fails_and_names_what_is_missing(tmp_path: Path, mutate, named: str) -> None:
+    dest = _rendered_rust(tmp_path)
+    mutate(dest)
+    result = lint(dest)
+    assert not result.passed and named in result.details, result.details
+
+
+@pytest.mark.parametrize("broken", ["rust-toolchain.toml", "deny.toml"])
+def test_rust_lint_fails_and_names_the_broken_file(tmp_path: Path, broken: str) -> None:
+    """A file that is not TOML is a FAIL naming it, never an exception (Review Focus 2)."""
+    dest = _rendered_rust(tmp_path)
+    (dest / broken).write_text("[toolchain\nchannel = \n")
+    result = lint(dest)
+    assert not result.passed and broken in result.details, result.details
