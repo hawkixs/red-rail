@@ -46,21 +46,26 @@ comments, test names. The conversation with the operator stays in French.
 - `src/rail/monitor.py` — reads red-monitor's `/api/latest` (image reference of a deployed
   container) for `observe.visible`. red-monitor is a site: `observe.monitor_site` (default
   `red-monitor`) is resolved through the host's `sites.yaml`, the only site `rail check` reads.
+  On `private-systemd`, `observe.visible` reads the unit's state instead of a container.
 - `src/rail/release.py` — stage 7: builds and pushes the image to GHCR by digest, tags both
   remotes, attests `released`.
-- `src/rail/deploy/` — `compose.py` (what every compose target does identically: the lock
-  on the target, the `releases/<version>` layout and `current` symlink, the compose file
-  read at the released commit, the digest-pinned pull, and the apply / verify / `/version`
-  sequence; a target supplies only the `.env` it writes and the origin it verifies
-  against), `vps_traefik.py` (Traefik's routing and the public route), `private_compose.py`
-  (a machine with no public route: verification over the address of `deploy.healthcheck`,
-  `deploy.bind_address` with no default. Behind a `deploy.site`, the address comes from
-  this host's `~/.config/red-rail/sites.yaml` (`sites.py`, a private file). The manifest
-  and every attestation carry the site's name, never the address. A refusal, before the
-  first ssh, of a released compose file that would publish outside that address,
-  `network_mode: host` included, because Docker bypasses the firewall) and `flow.py`
-  (forward / rollback / drill,
-  the target chosen from the manifest, and the attestation sequences they write — ADR-0004).
+- `src/rail/deploy/` — `remote.py` (what every target reached over ssh does identically:
+  one remote script under the target's lock, the timeout that releases it, a file read at
+  the released commit, strict UTF-8, the verification — the healthcheck, then `/version` — and, behind a
+  `deploy.site`, the address from this host's `~/.config/red-rail/sites.yaml` (`sites.py`, a
+  private file): the manifest and every attestation carry the site's name, never the
+  address), `compose.py` (what every compose target adds: the `releases/<version>` layout
+  and `current` symlink, the compose file read at the released commit, the digest-pinned
+  pull; a target supplies only the `.env` it writes), `vps_traefik.py` (Traefik's routing
+  and the public route), `private_compose.py` (a machine with no public route:
+  `deploy.bind_address` with no default, and a refusal, before the first ssh, of a released
+  compose file that would publish outside that address, `network_mode: host` included,
+  because Docker bypasses the firewall), `private_systemd.py` (a binary that systemd runs:
+  copied out of the released image by digest; the project's unit read at the released commit
+  and refused before the first ssh when it would run as root, unbounded or outside the
+  release; systemd loads it through a link to `current`; two fixed sudo commands — spec
+  2026-09-24-private-systemd-target) and `flow.py` (forward / rollback / drill, the target
+  chosen from the manifest, and the attestation sequences they write — ADR-0004).
 - `src/rail/ledger/` — the `Ledger` protocol, `FileLedger` (`docs/receipts/*.json`, append-only,
   digest + idempotency key, fails closed on a tampered receipt) and `BrainLedger`
   (`ledger/brain.py`: brain-v42 is the authority, the receipts are mirrors written BEFORE the

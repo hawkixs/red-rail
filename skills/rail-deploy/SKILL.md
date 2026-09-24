@@ -16,6 +16,13 @@ as the host (`http://${BIND_ADDRESS}:<port>/<path>`); records redact that site's
 only. The same file declares the site `red-monitor` (`observe.monitor_site`), which
 `rail check observe` needs.
 
+A `private-systemd` target (`deploy.unit`, `deploy.binary`) delivers a binary that systemd
+runs. The release is the usual image: the target copies the binary out of it by digest. The
+host needs two things, once: `/etc/systemd/system/<unit>` linked to
+`/opt/<project>/current/<unit>`, and a sudoers rule allowing exactly
+`systemctl daemon-reload` and `systemctl restart <unit>` to the deploy account (red-watcher
+installs it). `--plan` shows the restart in the ssh step.
+
 1. Preview: `rail deploy --repo <path> --plan` (the remote script and the checks, nothing runs).
 2. Deploy: `rail deploy --repo <path>` — refuses without a `released` attestation, asks for
    confirmation, verifies `/version` equals the artefact, attests `deployed`. A failed
