@@ -98,6 +98,7 @@ def code_of(exc: ToolError) -> str:
 
 def _ready(brain: FakeBrain) -> str:
     ticket = brain.add_ticket("red", "red-probe")
+    brain.register_repository("red-probe", 4242, "hawkixs/red-probe")  # brain's registry
     call(
         brain,
         "brain_delivery_contract_set",

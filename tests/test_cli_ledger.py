@@ -419,6 +419,7 @@ def test_contract_key_names_the_ticket_and_the_next_revision_in_brain_mode(tmp_p
     )
     brain = FakeBrain(agent="operator")
     brain.add_ticket("red", "red-alpha", "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f")
+    brain.register_repository("red-alpha", 4243, "hawkixs/red-alpha")
     ledger = open_ledger(repo, client=BrainClient.in_memory(brain, agent="operator"))
     first = Contract(
         objective="v1",
