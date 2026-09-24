@@ -10,6 +10,7 @@ import pytest
 from rail.gates import Stage
 from rail.gates import build as build_gates
 from rail.gates.build import GATES, commits, has_tests, lint, secrets
+from rail.model import Stack
 from tests.helpers import commit_all, conforming_tree, init_repo
 
 # `tests` is a gate function, not a pytest test: its name matches pytest's default
@@ -329,3 +330,19 @@ def test_a_leak_says_that_fixing_head_is_not_enough(
     assert "force-push" in details, "a local rewrite leaves the leak on origin/*"
     assert "rotate" in details, "a pushed secret is compromised whatever the history says"
     assert secrets(tmp_path).passed is False
+
+
+@pytest.mark.parametrize("table", ["TEST_PROFILES", "LINT_PROFILES"])
+def test_a_stack_without_a_profile_fails_and_does_not_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, table: str
+) -> None:
+    """A stack the rail does not know how to judge FAILs and says so, instead of being judged
+    as Go (spec 2026-09-24-rust-stack, decision 10)."""
+    repo = conforming_tree(tmp_path / "py", "red-alpha", "dev")
+    profiles = dict(getattr(build_gates, table))
+    del profiles[Stack.PYTHON]
+    monkeypatch.setattr(build_gates, table, profiles)
+    gate = has_tests if table == "TEST_PROFILES" else lint
+    result = gate(repo)
+    assert not result.passed
+    assert result.details == "stack `python` has no build profile in this rail version"

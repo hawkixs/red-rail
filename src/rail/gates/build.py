@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 
 from rail import gitrepo
@@ -41,6 +42,42 @@ def _ruff_configured(repo: Path) -> bool:
     )
 
 
+NO_PROFILE = "stack `{stack}` has no build profile in this rail version"
+
+
+def _counted(found: list[Path], where: str) -> GateResult:
+    if not found:
+        return GateResult(Stage.BUILD, "tests", False, f"no test files ({where})")
+    return GateResult(Stage.BUILD, "tests", True, f"{len(found)} test file(s)")
+
+
+def _python_test_profile(repo: Path) -> GateResult:
+    return _counted(_python_tests(repo), "tests/test_*.py")
+
+
+def _go_test_profile(repo: Path) -> GateResult:
+    return _counted(_go_tests(repo), "*_test.go")
+
+
+def _docs_test_profile(repo: Path) -> GateResult:
+    return GateResult(Stage.BUILD, "tests", True, "stack docs: no test suite required")
+
+
+def _python_lint(repo: Path) -> GateResult:
+    if _ruff_configured(repo):
+        return GateResult(Stage.BUILD, "lint", True, "ruff configured")
+    return GateResult(
+        Stage.BUILD,
+        "lint",
+        False,
+        "ruff is not configured ([tool.ruff] in pyproject.toml or ruff.toml)",
+    )
+
+
+def _docs_lint(repo: Path) -> GateResult:
+    return GateResult(Stage.BUILD, "lint", True, "stack docs: no linter required")
+
+
 def has_tests(repo: Path) -> GateResult:
     # named `has_tests`, not `tests`: pytest would collect a `tests` function on import
     decl = declarations(repo)
@@ -54,15 +91,10 @@ def has_tests(repo: Path) -> GateResult:
             else f"{python} test file(s) (tests/test_*.py), {go} (*_test.go)"
         )
         return Need("stack", observed).result(Stage.BUILD, "tests")
-    if decl.stack is Stack.DOCS:
-        return GateResult(Stage.BUILD, "tests", True, "stack docs: no test suite required")
-    if decl.stack is Stack.PYTHON:
-        found, where = _python_tests(repo), "tests/test_*.py"
-    else:
-        found, where = _go_tests(repo), "*_test.go"
-    if not found:
-        return GateResult(Stage.BUILD, "tests", False, f"no test files ({where})")
-    return GateResult(Stage.BUILD, "tests", True, f"{len(found)} test file(s)")
+    profile = TEST_PROFILES.get(decl.stack)
+    if profile is None:
+        return GateResult(Stage.BUILD, "tests", False, NO_PROFILE.format(stack=decl.stack.value))
+    return profile(repo)
 
 
 def lint(repo: Path) -> GateResult:
@@ -73,18 +105,10 @@ def lint(repo: Path) -> GateResult:
         ruff = "ruff configured" if _ruff_configured(repo) else "ruff not configured"
         go = "go.mod present" if (repo / "go.mod").is_file() else "no go.mod"
         return Need("stack", f"{ruff}, {go}").result(Stage.BUILD, "lint")
-    if decl.stack is Stack.DOCS:
-        return GateResult(Stage.BUILD, "lint", True, "stack docs: no linter required")
-    if decl.stack is Stack.PYTHON:
-        if _ruff_configured(repo):
-            return GateResult(Stage.BUILD, "lint", True, "ruff configured")
-        return GateResult(
-            Stage.BUILD,
-            "lint",
-            False,
-            "ruff is not configured ([tool.ruff] in pyproject.toml or ruff.toml)",
-        )
-    return _go_profile(repo)
+    profile = LINT_PROFILES.get(decl.stack)
+    if profile is None:
+        return GateResult(Stage.BUILD, "lint", False, NO_PROFILE.format(stack=decl.stack.value))
+    return profile(repo)
 
 
 # The Go analysers, pinned by `tool` directives in `go.mod` since Go 1.24 (`go get -tool`) so
@@ -191,6 +215,20 @@ def _go_profile(repo: Path) -> GateResult:
         f"{', '.join(name for name, _ in GO_TOOLS)} pinned by go.mod and called by the "
         "Makefile (gofmt and go vet ship with the toolchain and are not checked here)",
     )
+
+
+# Every stack is routed explicitly: a stack with no entry FAILs with NO_PROFILE and is never
+# judged as another stack (spec 2026-09-24-rust-stack, decision 10).
+TEST_PROFILES: dict[Stack, Callable[[Path], GateResult]] = {
+    Stack.PYTHON: _python_test_profile,
+    Stack.GO: _go_test_profile,
+    Stack.DOCS: _docs_test_profile,
+}
+LINT_PROFILES: dict[Stack, Callable[[Path], GateResult]] = {
+    Stack.PYTHON: _python_lint,
+    Stack.GO: _go_profile,
+    Stack.DOCS: _docs_lint,
+}
 
 
 # What a leak actually costs, said by the gate rather than discovered. `gitleaks git` reads
