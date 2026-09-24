@@ -67,6 +67,11 @@ _LINE_BREAK = re.compile(r"\r\n|\r|\n")
 # Command-line words as systemd splits them: runs of ASCII space and tab only.
 _WORD_BREAK = re.compile(r"[ \t]+")
 
+# Every C0 control other than tab, newline and carriage return, plus DEL and the C1 range:
+# systemd's own line reader (`read_line_full`) treats a NUL byte as an end of line, and this
+# check does not know what systemd would make of any of the others, so all are refused outright.
+_CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x9f]")
+
 
 def _logical_lines(text: str) -> Iterator[str]:
     """Lines as systemd reads them: split on a bare CR, LF or CRLF only — never the wider set
@@ -150,19 +155,46 @@ def _program(value: str) -> str:
     return words[0] if words else ""
 
 
+# Any digit run this long already exceeds `_MEMORY_MAX_BYTES` on its own (`2**62` has 19
+# digits), so it is refused before `int(...)` ever sees it — past roughly 4300 digits Python's
+# own int-string conversion limit would otherwise turn this check into an exception.
+_MEMORY_MAX_DIGITS = len(str(_MEMORY_MAX_BYTES))
+
+
 def _memory_ok(value: str) -> bool:
     """Whether `value` is a byte count systemd would accept for `MemoryMax=`: digits with an
     optional K/M/G/T suffix, no larger than `_MEMORY_MAX_BYTES` bytes."""
     match = _MEMORY.fullmatch(value)
     if match is None:
         return False
+    digits = match.group("digits")
+    if len(digits) > _MEMORY_MAX_DIGITS:
+        return False
     suffix = match.group("suffix") or ""
-    return int(match.group("digits")) * _MEMORY_MULTIPLIER[suffix] <= _MEMORY_MAX_BYTES
+    return int(digits) * _MEMORY_MULTIPLIER[suffix] <= _MEMORY_MAX_BYTES
+
+
+def _control_character_refusal(text: str, unit: str) -> str | None:
+    """The unit's raw text, before any parsing: `None` when it carries none of
+    `_CONTROL_CHARACTER`'s characters, otherwise one sentence naming the first offending code
+    point. Checked ahead of everything else so no other refusal depends on a parse this check
+    cannot trust — a NUL byte, in particular, ends a line for systemd but not for
+    `_logical_lines`, so a second assignment hidden behind one would otherwise be read as part
+    of the previous line's value instead of the separate, possibly last-and-winning line systemd
+    sees it as."""
+    match = _CONTROL_CHARACTER.search(text)
+    if match is None:
+        return None
+    return f"{unit}: control character U+{ord(match.group()):04X} is not allowed in a unit file"
 
 
 def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> list[str]:
     """Every rule of spec decision 7 the unit breaks, one sentence each, each starting with the
     unit's name; empty means accepted. `current` is `<stack_root>/<project>/current`."""
+    control_refusal = _control_character_refusal(text, unit)
+    if control_refusal is not None:
+        return [control_refusal]
+
     service = parse_unit(text).get("Service")
     if service is None:
         return [f"{unit} has no [Service] section"]

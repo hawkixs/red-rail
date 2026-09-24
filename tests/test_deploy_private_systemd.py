@@ -114,18 +114,23 @@ def test_the_parser_reads_sections_keys_and_continuations() -> None:
             "Type=simple\nExecStartPre=+/bin/sh\nExecStartPre=\xa0\n",
             "full privileges",
         ),
+        # \x0c and \x0b are control characters (fix round 3, finding 1): the blanket
+        # control-character refusal now fires before parsing ever reaches the "full privileges"
+        # rule, so these two assert the round-3 message instead.
         (
             "Type=simple\n",
             "Type=simple\nExecStartPre=+/bin/sh\nExecStartPre=\x0c\n",
-            "full privileges",
+            "control character",
         ),
         (
             "Type=simple\n",
             "Type=simple\nExecStartPre=+/bin/sh\nExecStartPre=\x0b\n",
-            "full privileges",
+            "control character",
         ),
         ("User=red-monitor\n", "User\xa0=red-monitor\n", "User="),
-        ("MemoryMax=64M\n", "MemoryMax\x0b=64M\n", "MemoryMax="),
+        # \x0b is a control character (fix round 3, finding 1): refused before parsing, not by
+        # the "MemoryMax=" unknown-key rule.
+        ("MemoryMax=64M\n", "MemoryMax\x0b=64M\n", "control character"),
         ("MemoryMax=64M\n", "MemoryMax=64M\xa0\n", "MemoryMax="),
         ("MemoryMax=64M\n", "MemoryMax=99999999999999999999\n", "MemoryMax="),
         # --- fix round 2, own finding: word-splitting also keeps every whitespace systemd keeps ---
@@ -225,3 +230,43 @@ def test_parse_unit_keeps_unicode_whitespace_in_keys_and_values() -> None:
     unit = parse_unit("[Service]\nUser\xa0=x\nExecStartPre=+/bin/sh\nExecStartPre=\xa0\n")
     assert "User" not in unit["Service"]
     assert unit["Service"]["ExecStartPre"] == ["+/bin/sh", "\xa0"]
+
+
+def test_a_nul_byte_is_refused_before_any_parsing() -> None:
+    """Fix round 3, finding 1 (task-4-fix-3.md): systemd's `read_line_full` treats a NUL byte as
+    an end of line, so `User=root` hidden behind one is systemd's own, separate, later-and-so-
+    winning line — while this check, without the fix, reads it as part of `Type=`'s value and
+    never evaluates it as a `User=` assignment at all. Refused outright, before parsing, naming
+    the code point."""
+    text = GOOD.replace("Type=simple\n", "Type=simple\x00User=root\n", 1)
+    assert _refusals(text) == [f"{UNIT}: control character U+0000 is not allowed in a unit file"]
+
+
+def test_a_del_character_is_refused() -> None:
+    """Fix round 3, finding 1: DEL (`\\x7f`) has no legitimate use in a unit file."""
+    text = GOOD.replace("Type=simple\n", "Type=simple\x7f\n", 1)
+    assert _refusals(text) == [f"{UNIT}: control character U+007F is not allowed in a unit file"]
+
+
+def test_a_c1_control_character_is_refused() -> None:
+    """Fix round 3, finding 1: the C1 range (`\\x80`-`\\x9f`) is refused just like C0."""
+    text = GOOD.replace("Type=simple\n", "Type=simple\x85\n", 1)
+    assert _refusals(text) == [f"{UNIT}: control character U+0085 is not allowed in a unit file"]
+
+
+def test_a_tab_inside_an_unchecked_value_is_still_accepted() -> None:
+    """Fix round 3, finding 1: `\\t` is ordinary systemd whitespace, kept out of
+    `_CONTROL_CHARACTER` on purpose. `Type=` is not itself examined by any rule, so a tab inside
+    its value shows the new check does not over-refuse an ordinary one."""
+    text = GOOD.replace("Type=simple\n", "Type=sim\tple\n", 1)
+    assert _refusals(text) == []
+
+
+def test_a_huge_memorymax_digit_run_is_refused_without_raising() -> None:
+    """Fix round 3, finding 2 (task-4-fix-3.md): `int(digits)` raises past Python's int-string
+    conversion limit (~4300 digits); a digit run longer than `_MEMORY_MAX_DIGITS` (19, `2**62`'s
+    own digit count) already exceeds the byte bound regardless of any suffix, so it is refused
+    before `int(...)` is ever called — no exception, just an ordinary refusal."""
+    text = GOOD.replace("MemoryMax=64M\n", f"MemoryMax={'1' * 5000}\n", 1)
+    refusals = _refusals(text)
+    assert any("MemoryMax=" in refusal for refusal in refusals), refusals
