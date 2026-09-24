@@ -613,6 +613,16 @@ def test_every_deploy_target_the_cli_offers_is_a_copier_choice() -> None:
     assert set(questions["deploy_target"]["choices"]) == {t.value for t in DeployTarget}
 
 
+def test_every_stack_the_cli_offers_is_a_copier_choice() -> None:
+    """`rail new --stack` offers every `Stack`, and copier must accept exactly those: today a
+    drift fails only when `rail new --stack X` runs, inside copier. Spec B adds `rust` to both
+    or this fails (spec 2026-09-24-template-alignment, decision 12)."""
+    import yaml
+
+    questions = yaml.safe_load((ROOT / "copier.yml").read_text())
+    assert set(questions["stack"]["choices"]) == {s.value for s in Stack}
+
+
 def test_the_healthcheck_default_follows_the_target_in_the_template_itself() -> None:
     """`rail new` always passes a healthcheck, so copier's own default is only reached by a
     human running `copier copy` directly — and nothing exercised it. Render the expression."""
