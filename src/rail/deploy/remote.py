@@ -76,6 +76,21 @@ def heredoc(name: str, text: str) -> str:
     return f"cat > {name} <<'{marker}'\n{body}{marker}"
 
 
+def lock_preamble(root: str, release: str) -> list[str]:
+    """The first lines of every remote script: strict mode, the release directory, the
+    target's lock — `LOCKED` when another deployment holds it — then into the release."""
+    return [
+        "set -euo pipefail",
+        f"root={root}",
+        f"release={release}",
+        'mkdir -p "$release"',
+        'exec 9>"$root/.deploy.lock"',
+        f'flock -n 9 || {{ echo "another deployment holds $root/.deploy.lock" >&2; '
+        f"exit {LOCKED}; }}",
+        'cd "$release"',
+    ]
+
+
 def ssh_argv(params: Parameters) -> tuple[str, ...]:
     return ("ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", params.ssh_host, "bash", "-s")
 

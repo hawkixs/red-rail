@@ -21,6 +21,7 @@ from rail.deploy.remote import (
     Runner,
     env_lines,
     heredoc,
+    lock_preamble,
     ssh_argv,
 )
 
@@ -55,17 +56,11 @@ def remote_script(
     """The whole remote phase as one bash script: lock, files, pull by digest, up with the
     container's healthcheck as the gate, `current` symlink, the stack as JSON on stdout."""
     root = f"{params.stack_root}/{project}"
+    release = f"{root}/releases/{version}"
     compose = f'docker compose --project-name {project} --project-directory "$release"'
     return "\n".join(
         [
-            "set -euo pipefail",
-            f"root={root}",
-            f"release={root}/releases/{version}",
-            'mkdir -p "$release"',
-            'exec 9>"$root/.deploy.lock"',
-            f'flock -n 9 || {{ echo "another deployment holds $root/.deploy.lock" >&2; '
-            f"exit {LOCKED}; }}",
-            'cd "$release"',
+            *lock_preamble(root, release),
             heredoc("compose.yaml", compose_text),
             heredoc(".env", env_text),
             "chmod 600 .env",
