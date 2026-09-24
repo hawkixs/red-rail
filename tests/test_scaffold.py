@@ -6,7 +6,6 @@ import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
 
 import pytest
 from click.testing import CliRunner
@@ -22,6 +21,7 @@ from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.remotes import RemoteError
 from rail.scaffold import ANSWERS_FILE, NewProject, ScaffoldError, new_project, render, upgrade
 from tests.addresses import _foreign
+from tests.combinations import COMBINATIONS, EXCLUDED, Combo
 from tests.fake_brain import FakeBrain
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -858,33 +858,6 @@ def test_a_systemd_target_is_written_by_hand_not_scaffolded(
 
 PRIVATE_HEALTHCHECK = "http://192.0.2.10:9204/healthz"  # RFC 5737: typed, never assumed
 BRAIN_TICKET = "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"
-TARGET_FAMILIES = (DeployTarget.VPS_TRAEFIK.value, DeployTarget.PRIVATE_COMPOSE.value)
-
-
-class Combo(NamedTuple):
-    """One answer set of the template. Every guidance test reads the same renders."""
-
-    stack: Stack
-    tier: Tier
-    ledger: LedgerBackend
-    target: str | None = None  # prod only: one target per family, public and private
-    brain_key: str = "red-probe"
-
-    @property
-    def label(self) -> str:
-        parts = [self.stack.value, self.tier.value, self.ledger.value]
-        parts += [self.target] if self.target else []
-        parts += [self.brain_key] if self.brain_key != "red-probe" else []
-        return "-".join(parts)
-
-
-COMBOS = [
-    Combo(stack, tier, ledger, target)
-    for stack in Stack
-    for tier in Tier
-    for ledger in LedgerBackend
-    for target in (TARGET_FAMILIES if tier is Tier.PROD else (None,))
-] + [Combo(Stack.PYTHON, Tier.BOOTSTRAP, LedgerBackend.FILE, brain_key="red_probe")]
 ROOT_TITLES = (
     "Workflows — the operator picks the method",
     "Invariants — true whatever the method",
@@ -892,18 +865,29 @@ ROOT_TITLES = (
 STACK_LINE = {
     Stack.PYTHON: "Python 3.12+, uv, pytest, ruff.",
     Stack.GO: "Go 1.22+, `go test`, `go vet`, `gofmt`.",
+    Stack.RUST: (
+        "Rust, edition 2024, toolchain pinned by `rust-toolchain.toml`: `cargo fmt`, clippy with "
+        "`-D warnings`, `cargo test --locked`, `cargo deny check`."
+    ),
     Stack.DOCS: "Documentation only (Markdown).",
 }
 STACK_CHAIN = re.compile(
     r"\{#-?\s*stack-chain:\s*(?P<name>[a-z-]+)\s*-?#\}(?P<body>.*?)\{#-?\s*/stack-chain\s*-?#\}",
     re.DOTALL,
 )
-STACK_CHAINS = {"CLAUDE.md.jinja": {"stack", "structure"}, "AGENTS.md.jinja": {"gates"}}
+STACK_CHAINS = {
+    "CLAUDE.md.jinja": {"stack", "structure"},
+    "AGENTS.md.jinja": {"gates"},
+    "Makefile.jinja": {"makefile"},
+    ".gitignore.jinja": {"gitignore"},
+    ".claude/settings.json.jinja": {"settings"},
+}
 _ELSE = re.compile(r"\{%-?\s*else\s*-?%\}")
 GUIDANCE = ("CLAUDE.md", "AGENTS.md")
 STACK_GATES = {
     Stack.PYTHON: "`uv run pytest -q`",
     Stack.GO: "`go test -race -count=1 ./...`",
+    Stack.RUST: "`cargo test --workspace --locked`",
     Stack.DOCS: "no stack command of its own",
 }
 # D9's sections and D10's rows, in the order AGENTS.md must hold them
@@ -967,10 +951,10 @@ def renders(tmp_path_factory: pytest.TempPathFactory) -> dict[Combo, Path]:
     template.mkdir()
     shutil.copy(ROOT / "copier.yml", template / "copier.yml")
     shutil.copytree(ROOT / "template", template / "template")
-    return {combo: _render_combo(template, base / combo.label, combo) for combo in COMBOS}
+    return {combo: _render_combo(template, base / combo.label, combo) for combo in COMBINATIONS}
 
 
-@pytest.mark.parametrize("combo", COMBOS, ids=[c.label for c in COMBOS])
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
 def test_rendered_guidance_points_at_the_root(renders: dict[Combo, Path], combo: Combo) -> None:
     """The method, the review and the invariants that hold whatever the method live once, in
     the ReD root: `CLAUDE.md` points at their sections and copies neither (decisions 6-8).
@@ -1004,6 +988,33 @@ def test_rendered_guidance_points_at_the_root(renders: dict[Combo, Path], combo:
     for target in DeployTarget:
         if target is not DeployTarget.VPS_TRAEFIK:
             assert target.value not in agents, f"AGENTS.md names the private {target.value}"
+
+
+GITIGNORED = {
+    Stack.PYTHON: [
+        "__pycache__/",
+        "*.py[cod]",
+        ".pytest_cache/",
+        ".ruff_cache/",
+        ".venv/",
+        "build/",
+        "dist/",
+        "*.egg-info/",
+    ],
+    Stack.GO: ["bin/"],
+    Stack.RUST: ["target/", ".cargo-tools/"],
+    Stack.DOCS: [],
+}
+
+
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
+def test_rendered_gitignore_keeps_one_entry_per_line(
+    renders: dict[Combo, Path], combo: Combo
+) -> None:
+    """The stack chain's whitespace control never glues the last stack entry to `.env`."""
+    rendered = (renders[combo] / ".gitignore").read_text()
+    assert rendered.splitlines() == [*GITIGNORED[combo.stack], ".env"]
+    assert rendered.endswith(".env\n")
 
 
 def test_agents_md_does_not_depend_on_tier_ledger_or_target(renders: dict[Combo, Path]) -> None:
@@ -1085,7 +1096,7 @@ def test_skill_extraction_reads_whole_code_spans_only() -> None:
     }
 
 
-@pytest.mark.parametrize("combo", COMBOS, ids=[c.label for c in COMBOS])
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
 def test_rendered_guidance_cites_only_allowed_skills(
     renders: dict[Combo, Path], combo: Combo
 ) -> None:
@@ -1146,7 +1157,7 @@ def test_the_session_start_check_refuses_a_bare_or_mismatched_call() -> None:
 
 
 @pytest.mark.parametrize(
-    "combo", [*COMBOS, None], ids=[*(c.label for c in COMBOS), "red-rail-itself"]
+    "combo", [*COMBINATIONS, None], ids=[*(c.label for c in COMBINATIONS), "red-rail-itself"]
 )
 def test_every_brain_session_start_carries_a_client_key(
     renders: dict[Combo, Path], combo: Combo | None
@@ -1178,3 +1189,370 @@ def test_red_rails_own_guidance_follows_its_template() -> None:
         assert stale not in claude and stale not in agents, stale
     assert "../../AGENTS.md" not in agents
     assert 'names as "Parent project"' in agents
+
+
+def test_rust_at_prod_is_the_only_excluded_combination() -> None:
+    """Every stack × tier pair is rendered by some combination, except exactly (rust, prod)."""
+    covered = {(c.stack, c.tier) for c in COMBINATIONS}
+    assert {(s, t) for s in Stack for t in Tier} - covered == {(Stack.RUST, Tier.PROD)}
+    assert EXCLUDED == {(Stack.RUST, Tier.PROD)}
+
+
+def test_rust_at_prod_is_refused(template_dir: Path, tmp_path: Path) -> None:
+    """Refused before copier by `rail new` (a bare message, not wrapped in "copier could not
+    render"), and by copier's own validator for a direct run (decision 1)."""
+    import copier
+
+    from rail.scaffold import RUST_PROD_REFUSAL
+
+    project = _project(
+        template_dir, tmp_path / "red-life", slug="red-life", stack=Stack.RUST, tier=Tier.PROD
+    )
+    with pytest.raises(ScaffoldError) as raised:
+        _ = project.answers
+    assert str(raised.value) == RUST_PROD_REFUSAL
+    with pytest.raises(Exception, match="rust at tier prod is not templated yet"):
+        copier.run_copy(
+            str(template_dir),
+            tmp_path / "direct",
+            data={
+                "project": "red-life",
+                "description": "d",
+                "brain_key": "red-life",
+                "tier": "prod",
+                "stack": "rust",
+                "deploy_target": "vps-traefik",
+                "healthcheck": "https://life.example.invalid/healthz",
+            },
+            defaults=True,
+            quiet=True,
+            unsafe=False,
+        )
+    assert not (tmp_path / "direct" / "rail.yaml").exists()
+
+
+def test_render_refuses_rust_at_prod_with_a_bare_message(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """`render()` evaluates `project.answers` for `copy(data=...)`: its own ScaffoldError (a
+    refusal that already names the problem) must reach the caller verbatim, not re-wrapped in
+    "copier could not render <template>: ..." — that wrapper is for copier's own failures."""
+    from rail.scaffold import RUST_PROD_REFUSAL
+
+    project = _project(
+        template_dir, tmp_path / "red-life", slug="red-life", stack=Stack.RUST, tier=Tier.PROD
+    )
+    with pytest.raises(ScaffoldError) as raised:
+        render(project)
+    assert str(raised.value) == RUST_PROD_REFUSAL
+
+
+def test_render_refuses_a_private_target_without_healthcheck_with_a_bare_message(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """The same `answers`-before-`copy()` refusal applies to a private target with no
+    healthcheck: `render()` must not wrap it either."""
+    project = _project(
+        template_dir,
+        tmp_path / "red-alerts",
+        slug="red-alerts",
+        tier=Tier.PROD,
+        deploy_target="private-compose",
+    )
+    with pytest.raises(ScaffoldError, match="--healthcheck") as raised:
+        render(project)
+    assert not str(raised.value).startswith("copier could not render")
+
+
+def test_the_copier_validator_says_what_rail_new_says() -> None:
+    from rail.scaffold import RUST_PROD_REFUSAL
+
+    assert RUST_PROD_REFUSAL in (ROOT / "copier.yml").read_text()
+
+
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
+def test_every_rendered_settings_file_parses_and_allows_cargo_for_rust_only(
+    renders: dict[Combo, Path], combo: Combo
+) -> None:
+    allow = json.loads((renders[combo] / ".claude" / "settings.json").read_text())
+    assert ("Bash(cargo:*)" in allow["permissions"]["allow"]) is (combo.stack is Stack.RUST)
+
+
+RUST_TOOLCHAIN = "1.98.1"  # latest stable on 2026-09-24 (spec 2026-09-24-rust-stack, decision 3)
+DENY_LICENCES = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0"}
+
+
+def _dry_run(dest: Path, *args: str) -> list[str]:
+    """`make -n`: the recipes make would run, in order, executing none of them."""
+    make = shutil.which("make")
+    assert make, "make is required: the Makefile is read by make itself"
+    done = subprocess.run([make, "-n", *args], cwd=dest, capture_output=True, text=True, check=True)
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+
+
+def _after(lines: list[str], *needles: str) -> None:
+    """Each needle appears in a later line than the previous one."""
+    position = -1
+    for needle in needles:
+        index = next((i for i, line in enumerate(lines) if i > position and needle in line), None)
+        assert index is not None, f"{needle!r} missing or out of order in {lines}"
+        position = index
+
+
+def test_render_rust_bootstrap(template_dir: Path, tmp_path: Path) -> None:
+    import tomllib
+
+    dest = render(
+        _project(template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.RUST)
+    )
+
+    cargo = tomllib.loads((dest / "Cargo.toml").read_text())
+    assert cargo["package"]["name"] == "red-throwaway"
+    assert cargo["package"]["edition"] == "2024"
+    assert cargo["package"]["publish"] is False
+    assert cargo["workspace"] == {}
+    assert "rust-version" not in cargo["package"]
+
+    toolchain = tomllib.loads((dest / "rust-toolchain.toml").read_text())["toolchain"]
+    assert toolchain["channel"] == RUST_TOOLCHAIN
+    assert re.fullmatch(r"\d+\.\d+\.\d+", toolchain["channel"])
+    assert {"rustfmt", "clippy"} <= set(toolchain["components"])
+    assert toolchain["profile"] == "minimal"
+
+    deny = tomllib.loads((dest / "deny.toml").read_text())
+    assert set(deny["licenses"]["allow"]) == DENY_LICENCES
+    assert deny["licenses"]["private"]["ignore"] is True
+    assert deny["licenses"]["unused-allowed-license"] == "allow"
+    assert deny["sources"]["unknown-registry"] == "deny"
+    assert deny["sources"]["unknown-git"] == "deny"
+    assert deny["advisories"]["yanked"] == "deny"
+    assert deny["advisories"]["unmaintained"] == "workspace"
+    assert deny["bans"]["wildcards"] == "deny"
+    assert deny["bans"]["allow-wildcard-paths"] is True
+    assert deny["bans"]["multiple-versions"] == "warn"
+
+    # Review Focus 1: Cargo keeps the hyphen in a bin target's name
+    smoke = (dest / "tests" / "smoke.rs").read_text()
+    assert 'env!("CARGO_BIN_EXE_red-throwaway")' in smoke
+    assert '"red-throwaway"' in (dest / "src" / "main.rs").read_text()
+
+    ignored = (dest / ".gitignore").read_text().splitlines()
+    assert "target/" in ignored and ".cargo-tools/" in ignored
+    assert not any("Cargo.lock" in line for line in ignored)
+
+    claude = (dest / "CLAUDE.md").read_text()
+    stack = claude.split("## Stack", 1)[1].split("## Commands", 1)[0]
+    for needle in ("edition 2024", "rust-toolchain.toml", "-D warnings"):
+        assert needle in stack, needle
+    assert "cargo test --locked" in stack and "cargo deny check" in stack
+    structure = claude.split("## Structure", 1)[1]
+    for entry in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deny.toml", "src/main.rs"):
+        assert f"── {entry}" in structure, entry
+    assert "└── tests/" in structure
+    agents = (dest / "AGENTS.md").read_text()
+    gates = agents.split("## Gates", 1)[1].split("## Brain MCP", 1)[0]
+    assert gates.index("`make sync` first") < gates.index("Then `make ci`")
+
+    assert not (dest / "pyproject.toml").exists() and not (dest / "go.mod").exists()
+    assert not (dest / "src" / "red_throwaway" / "__init__.py").exists()
+
+    _after(
+        _dry_run(dest, "ci", "RAIL_FLAGS=--ci"),
+        "fmt --all --check",
+        "clippy --workspace --all-targets --all-features -- -D warnings",
+        "test --workspace --locked",
+        "deny check",
+        "rail check --ci",
+    )
+    _after(
+        _dry_run(dest, "sync"),
+        "cargo fetch",
+        "cargo install cargo-deny --locked --version 0.20.2 --root .cargo-tools",
+    )
+    locked = _dry_run(dest, "sync", "LOCKED=--locked")
+    assert any(line.startswith("cargo fetch --locked") for line in locked)
+
+
+# 40 characters, so "red-" + this is a realistic long slug (rustfmt wraps a chain or a string
+# differently depending on width; the template must render within its width for ANY slug).
+_LONG_KEBAB = "abcde-abcde-abcde-abcde-abcde-abcde-abcd"
+
+
+@pytest.mark.parametrize("slug", ["red-x", f"red-{_LONG_KEBAB}"], ids=["short", "long"])
+def test_rust_smoke_and_main_fit_rustfmt_width_at_any_slug_length(
+    template_dir: Path, tmp_path: Path, slug: str
+) -> None:
+    """`cargo fmt --all --check` wraps a chain or a string literal differently depending on the
+    project's name length: the rendered files must stay within rustfmt's default width (100)
+    whatever the slug, with no trailing whitespace and no tab, for the check to accept them.
+    This test does not run cargo (the gate never does); the controller re-runs rustfmt on the
+    host afterwards."""
+    dest = render(_project(template_dir, tmp_path / slug, slug=slug, stack=Stack.RUST))
+    for relative in ("tests/smoke.rs", "src/main.rs"):
+        text = (dest / relative).read_text()
+        for line in text.splitlines():
+            assert len(line) <= 100, f"{relative}: line too long for rustfmt: {line!r}"
+            assert line == line.rstrip(), f"{relative}: trailing whitespace: {line!r}"
+            assert "\t" not in line, f"{relative}: tab: {line!r}"
+
+
+def _answered(repo: Path, *, stack: str, tier: str = "dev", manifest: str | None = None) -> Path:
+    """A scaffolded-looking tree: answers file and rail.yaml, no template behind it."""
+    repo.mkdir(parents=True)
+    (repo / ANSWERS_FILE).write_text(
+        "_commit: v0.5.0\n_src_path: git@github.com:hawkixs/red-rail.git\n"
+        f"stack: {stack}\ntier: {tier}\nrail_ref: {'a' * 40}\n"
+    )
+    body = (
+        manifest
+        if manifest is not None
+        else (f"rail: 1\nproject: red-life\nbrain_key: red-life\ntier: {tier}\nstack: {stack}\n")
+    )
+    (repo / "rail.yaml").write_text(body)
+    return repo
+
+
+def _never(*args: object, **kwargs: object) -> None:
+    raise AssertionError("copier update must not run")
+
+
+@pytest.mark.parametrize(
+    ("current", "target", "tier", "message"),
+    [
+        ("python", Stack.GO, "dev", "only out of docs"),
+        ("go", Stack.RUST, "dev", "only out of docs"),
+        ("rust", Stack.DOCS, "dev", "cannot switch to docs"),
+        ("docs", Stack.DOCS, "dev", "cannot switch to docs"),
+        ("docs", Stack.RUST, "prod", "rust at tier prod is not templated yet"),
+    ],
+    ids=["python-go", "go-rust", "rust-docs", "docs-docs", "docs-rust-at-prod"],
+)
+def test_upgrade_refuses_a_transition_not_from_docs(
+    tmp_path: Path, current: str, target: Stack, tier: str, message: str
+) -> None:
+    repo = _answered(tmp_path / "red-life", stack=current, tier=tier)
+    before = {p.name: p.read_text() for p in repo.iterdir()}
+    with pytest.raises(ScaffoldError, match=message):
+        upgrade(repo, stack=target, update=_never, resolve=lambda t, **k: "c" * 40)
+    assert {p.name: p.read_text() for p in repo.iterdir()} == before
+
+
+def test_upgrade_refuses_answers_holding_rust_at_prod(tmp_path: Path) -> None:
+    """Copier would drop the invalid answer and, under defaults, re-render the project as python:
+    refused with or without --stack."""
+    repo = _answered(tmp_path / "red-life", stack="rust", tier="prod")
+    with pytest.raises(ScaffoldError, match="rust at tier prod"):
+        upgrade(repo, update=_never, resolve=lambda t, **k: "c" * 40)
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ("rail: 1\nproject: red-life\nbrain_key: red-life\ntier: dev\nstack: python\n", "disagree"),
+        (None, "rail.yaml"),
+        ("rail: 1\n<<<<<<< ours\nstack: docs\n", "rail.yaml"),
+    ],
+    ids=["disagree", "missing", "unparsable"],
+)
+def test_upgrade_refuses_when_answers_and_manifest_disagree(
+    tmp_path: Path, manifest: str | None, message: str
+) -> None:
+    repo = _answered(tmp_path / "red-life", stack="docs", manifest=manifest or "")
+    if manifest is None:
+        (repo / "rail.yaml").unlink()
+    with pytest.raises(ScaffoldError, match=message):
+        upgrade(repo, stack=Stack.RUST, update=_never, resolve=lambda t, **k: "c" * 40)
+
+
+def test_upgrade_fails_when_rail_yaml_does_not_follow(tmp_path: Path) -> None:
+    repo = _answered(tmp_path / "red-life", stack="docs")
+    seen: dict[str, object] = {}
+
+    def update(dest: Path, **kwargs: object) -> None:  # copier ran, rail.yaml kept `docs`
+        seen.update(kwargs)
+
+    with pytest.raises(ScaffoldError, match="copier did not carry `stack` into rail.yaml"):
+        upgrade(repo, stack=Stack.RUST, update=update, resolve=lambda t, **k: "c" * 40)
+    assert seen["data"] == {"rail_ref": "c" * 40, "stack": "rust"}
+
+
+def _tagged_template(template_dir: Path, tag: str) -> None:
+    if not (template_dir / ".git").exists():
+        subprocess.run(["git", "init", "-q", "-b", "main", str(template_dir)], check=True)
+    subprocess.run([*GIT, "-C", str(template_dir), "add", "-A"], check=True)
+    subprocess.run(
+        [*GIT, "-C", str(template_dir), "commit", "-q", "--allow-empty", "-m", f"chore: {tag}"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(template_dir), "tag", tag], check=True)
+
+
+def test_upgrade_switches_docs_to_rust(template_dir: Path, tmp_path: Path) -> None:
+    """Real copier on a tagged throwaway template: the answer, rail.yaml and the CI call all say
+    rust afterwards, and the rust files exist. rail.yaml is written by copier's merge alone."""
+    _tagged_template(template_dir, "v0.1.0")
+    project = _project(
+        template_dir,
+        tmp_path / "red-life",
+        slug="red-life",
+        stack=Stack.DOCS,
+        tier=Tier.DEV,
+        template_ref="v0.1.0",
+    )
+    new_project(project, publish=False, clock=CLOCK, resolve=_pin)
+    _tagged_template(template_dir, "v0.2.0")
+
+    upgrade(project.dest, stack=Stack.RUST, resolve=_pin)
+
+    dest = project.dest
+    assert "stack: rust" in (dest / ANSWERS_FILE).read_text()
+    assert "stack: rust" in (dest / "rail.yaml").read_text()
+    ci = dest / ".github" / "workflows" / "continuous-integration.yml"
+    assert "stack: rust" in ci.read_text()
+    assert (dest / "Cargo.toml").is_file() and (dest / "rust-toolchain.toml").is_file()
+
+
+def test_upgrade_to_rust_refuses_a_dirty_tree(template_dir: Path, tmp_path: Path) -> None:
+    """Uncommitted changes: copier refuses, and nothing is half-written (Review Focus 4)."""
+    _tagged_template(template_dir, "v0.1.0")
+    project = _project(
+        template_dir,
+        tmp_path / "red-life",
+        slug="red-life",
+        stack=Stack.DOCS,
+        tier=Tier.DEV,
+        template_ref="v0.1.0",
+    )
+    new_project(project, publish=False, clock=CLOCK, resolve=_pin)
+    _tagged_template(template_dir, "v0.2.0")
+    (project.dest / "README.md").write_text("an uncommitted edit\n")
+
+    with pytest.raises(ScaffoldError):  # wrapped from copier's own "dirty" refusal
+        upgrade(project.dest, stack=Stack.RUST, resolve=_pin)
+    assert not (project.dest / "Cargo.toml").exists()
+    assert "stack: docs" in (project.dest / "rail.yaml").read_text()
+
+
+def test_cli_upgrade_takes_a_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "rail.commands.upgrade.upgrade", lambda repo, **kw: calls.append(kw) or "v0.6.0"
+    )
+    result = CliRunner().invoke(main, ["upgrade", "--repo", str(tmp_path), "--stack", "rust"])
+    assert result.exit_code == 0, result.output
+    assert calls == [{"stack": Stack.RUST}]
+    assert "make sync" in result.output
+
+
+def test_cli_upgrade_rejects_docs_as_a_switch_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--stack docs` is always refused by `_switchable`: offering it in the CLI's own Choice
+    only lets an operator hit a refusal copier could have avoided at the option-parsing level."""
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "rail.commands.upgrade.upgrade", lambda repo, **kw: calls.append(kw) or "v0.6.0"
+    )
+    result = CliRunner().invoke(main, ["upgrade", "--repo", str(tmp_path), "--stack", "docs"])
+    assert result.exit_code == 2, result.output
+    assert calls == []

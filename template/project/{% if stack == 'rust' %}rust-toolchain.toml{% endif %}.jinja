@@ -1,0 +1,6 @@
+# The one toolchain pin: rustup reads it on the workstation and in CI, and Cargo.toml names no
+# version. Latest stable on 2026-09-24; a bump is this line plus `rail upgrade`.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

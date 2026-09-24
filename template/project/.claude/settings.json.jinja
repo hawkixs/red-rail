@@ -3,10 +3,11 @@
     "allow": [
       "Bash(make:*)",
       "Bash(git:*)",
-      "Bash(rail:*)"{% if stack == 'python' %},
+      "Bash(rail:*)"{# stack-chain: settings #}{% if stack == 'python' %},
       "Bash(uv sync:*)",
       "Bash(uv run:*)"{% elif stack == 'go' %},
-      "Bash(go:*)"{% endif %}
+      "Bash(go:*)"{% elif stack == 'rust' %},
+      "Bash(cargo:*)"{% elif stack == 'docs' %}{% endif %}{# /stack-chain #}
     ]
   }
 }

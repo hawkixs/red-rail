@@ -62,6 +62,7 @@ class Tier(StrEnum):
 class Stack(StrEnum):
     PYTHON = "python"
     GO = "go"
+    RUST = "rust"
     DOCS = "docs"
 
 

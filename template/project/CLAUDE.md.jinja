@@ -55,6 +55,8 @@ Release and deployment go through the rail: `rail release --version X.Y.Z`, `rai
 Python 3.12+, uv, pytest, ruff.
 {%- elif stack == 'go' -%}
 Go 1.22+, `go test`, `go vet`, `gofmt`.
+{%- elif stack == 'rust' -%}
+Rust, edition 2024, toolchain pinned by `rust-toolchain.toml`: `cargo fmt`, clippy with `-D warnings`, `cargo test --locked`, `cargo deny check`.
 {%- elif stack == 'docs' -%}
 Documentation only (Markdown).
 {%- endif %}
@@ -90,6 +92,13 @@ make check     # the rail gates against this repository
 {%- elif stack == 'go' %}
 ├── go.mod
 └── *_test.go
+{%- elif stack == 'rust' %}
+├── Cargo.toml         # a package and an empty [workspace]: a member is one line away
+├── Cargo.lock         # written by `make sync`, committed
+├── rust-toolchain.toml # the one toolchain pin
+├── deny.toml          # licences, advisories, bans, sources
+├── src/main.rs
+└── tests/
 {%- elif stack == 'docs' %}
 └── README.md
 {%- endif %}

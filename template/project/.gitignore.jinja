@@ -1,3 +1,4 @@
+{# stack-chain: gitignore -#}
 {% if stack == 'python' -%}
 __pycache__/
 *.py[cod]
@@ -9,5 +10,10 @@ dist/
 *.egg-info/
 {% elif stack == 'go' -%}
 bin/
+{% elif stack == 'rust' -%}
+target/
+.cargo-tools/
+{% elif stack == 'docs' -%}
 {% endif -%}
+{#- /stack-chain -#}
 .env

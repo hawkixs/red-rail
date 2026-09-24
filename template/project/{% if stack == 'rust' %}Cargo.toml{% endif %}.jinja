@@ -1,0 +1,11 @@
+[package]
+name = "{{ project }}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A package that is also a workspace: a member is one line in `members`, and the Makefile's
+# `--workspace` already covers it. No `rust-version`: rust-toolchain.toml is the one pin.
+[workspace]
+
+[dependencies]
