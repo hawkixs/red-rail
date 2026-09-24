@@ -70,6 +70,12 @@ class NewProject:
         }
         if self.tier is Tier.PROD:
             data["deploy_target"] = self.deploy_target
+            if self.deploy_target == DeployTarget.PRIVATE_SYSTEMD:
+                raise ScaffoldError(
+                    "target private-systemd is written by hand: rail.yaml needs deploy.unit and "
+                    "deploy.binary, which only the project knows "
+                    "(spec 2026-09-24-private-systemd-target)"
+                )
             # A private target has no public route and no guessable default: the address is
             # something the operator states, never something the scaffold assumes — and no
             # machine address belongs in this repository.

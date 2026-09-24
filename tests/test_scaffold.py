@@ -734,3 +734,20 @@ def test_new_project_resolves_the_pin_before_rendering(template_dir: Path, tmp_p
     )
     workflow = project.dest / ".github" / "workflows" / "continuous-integration.yml"
     assert f"rail-ci.yml@{sha}" in workflow.read_text()
+
+
+def test_a_systemd_target_is_written_by_hand_not_scaffolded(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """The unit and the binary are the project's own facts (spec
+    2026-09-24-private-systemd-target). The scaffold has nothing to put there, so it refuses
+    rather than render a manifest that does not load."""
+    project = _project(
+        template_dir,
+        tmp_path / "red-monitor",
+        slug="red-monitor",
+        tier=Tier.PROD,
+        deploy_target="private-systemd",
+    )
+    with pytest.raises(ScaffoldError, match="deploy.unit"):
+        _ = project.answers

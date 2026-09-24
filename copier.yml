@@ -38,16 +38,20 @@ rail_ref:
 
 deploy_target:
   type: str
-  choices: [vps-traefik, private-compose, pc-server-systemd]
+  choices: [vps-traefik, private-compose, private-systemd]
   default: vps-traefik
   when: "{{ tier == 'prod' }}"
   help: Where it lands — the border VPS behind Traefik, or a machine with no public route
+  validator: >-
+    {% if deploy_target == 'private-systemd' %}
+    private-systemd is written by hand: rail.yaml needs deploy.unit and deploy.binary
+    {% endif %}
 healthcheck:
   type: str
   # A private target has no public route and no guessable default: like `deploy.bind_address`,
   # the address is something the operator states, never something the template assumes. No
   # machine address is written down here.
-  default: "{% if deploy_target == 'private-compose' %}{% else %}https://{{ project[4:] }}.hawkixs.com/healthz{% endif %}"
+  default: "{% if deploy_target in ['private-compose', 'private-systemd'] %}{% else %}https://{{ project[4:] }}.hawkixs.com/healthz{% endif %}"
   when: "{{ tier == 'prod' }}"
   validator: >-
     {% if not (healthcheck | regex_search('^https?://..*')) %}
