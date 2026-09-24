@@ -85,7 +85,7 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
     help="Review this PR even if already reviewed (needs --repository).",
 )
 def once(config_path: Path | None, only: str | None, pr: int | None) -> None:
-    """One pass over the watched repositories; exit 0."""
+    """One pass over the watched repositories; exit 0, or 2 for a repository it does not watch."""
     if pr is not None and not only:
         raise click.UsageError("--pr needs --repository")
     try:
@@ -93,6 +93,14 @@ def once(config_path: Path | None, only: str | None, pr: int | None) -> None:
     except (PrivateFileError, ValueError) as exc:
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc
+    watched = [repository.slug for repository in config.repositories]
+    if only and only not in watched:
+        from rail.reviewer.config import DEFAULT_CONFIG
+
+        raise click.UsageError(
+            f"{only} is not watched by {config_path or DEFAULT_CONFIG}; "
+            f"watched: {', '.join(watched) or 'none'}"
+        )
     reviewed = _once(config, only=only, pr=pr)
     click.echo(f"reviewed {reviewed} pull request(s)")
 
