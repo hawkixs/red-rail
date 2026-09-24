@@ -338,6 +338,16 @@ class Ledger(Protocol):
     def get(self, project: str, digest: str) -> Record | None: ...
 
 
+def bindings_of(ledger: Ledger, project: str, repository: str, number: int) -> list[Record]:
+    """The bindings `rail bind` recorded for one pull request, oldest first. Both backends
+    carry the pull request as `repository` and `number` in the binding's payload."""
+    return [
+        r
+        for r in ledger.list(project, kind=RecordKind.BINDING)
+        if r.payload.get("repository") == repository and int(r.payload.get("number") or 0) == number
+    ]
+
+
 def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
     """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a missing or bad
     manifest — this is a write path, and it stays fail-closed without one. `ledger: brain`

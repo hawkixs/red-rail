@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
+from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable, PullRequestRef
 from rail.ledger.file import FileLedger
 from rail.reviewer.github import CheckRun, PullRequest
 from rail.reviewer.judges import JudgeReply, build_prompt
@@ -152,8 +152,18 @@ def test_docs_only_reads_the_diff_headers() -> None:
     )
 
 
+def _bind(ledger: FileLedger, pr: PullRequest = PR) -> None:
+    ledger.bind(
+        "red-alpha",
+        PullRequestRef(repository=pr.repository, number=pr.number, head_sha=pr.head_sha),
+        issuer="op",
+        idempotency_key=f"bind:{pr.repository}:{pr.number}",
+    )
+
+
 def test_light_review_approves_publishes_and_attests(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
+    _bind(ledger)
     github = FakeGitHub()
     seen = []
 
@@ -644,3 +654,148 @@ def test_the_split_uses_the_budget_the_judge_will_actually_enforce(tmp_path: Pat
     assert len(seen) > 1, "the byte budget must force a split the character budget never saw"
     assert "".join(seen) == whole, "every byte of the change still reached a judge"
     assert outcome.verdict.diff_truncated is False
+
+
+# -- the contract a pull request is judged against (ticket 155d3d67) ---------------------
+
+
+def _criteria_seen(tmp_path: Path, *, bind: PullRequest | None) -> list:
+    repo, ledger = _repo(tmp_path)
+    if bind is not None:
+        _bind(ledger, bind)
+    seen: list = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        seen.append(criteria)
+        return approve(provider, tier)
+
+    review_pull(
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    return seen
+
+
+def test_an_unbound_pull_request_is_not_judged_against_the_contract(tmp_path: Path) -> None:
+    """Measured on #46 and #47: the ticket in rail.yaml was an accepted phase whose criteria
+    described other work, and both pull requests were blocked for "not meeting" them. A pull
+    request nobody bound to the contract is judged on its code."""
+    assert _criteria_seen(tmp_path, bind=None) == [None]
+
+
+def test_a_binding_of_another_pull_request_does_not_count(tmp_path: Path) -> None:
+    assert _criteria_seen(tmp_path, bind=replace(PR, number=8)) == [None]
+
+
+def test_a_bound_pull_request_is_judged_against_its_contract(tmp_path: Path) -> None:
+    assert _criteria_seen(tmp_path, bind=PR) == [["tests pass"]]
+
+
+# -- a slice judge reads one part of the change (ticket 155d3d67) ------------------------
+
+
+def _patch(name: str) -> str:
+    return f"diff --git a/{name} b/{name}\n" + "".join(f"+l{i}\n" for i in range(400))
+
+
+def _sliced_review(tmp_path: Path, run_judge):
+    repo, ledger = _repo(tmp_path)
+    whole = _patch("a.go") + _patch("b.go") + _patch("c.go")
+    policy = default_policy().model_copy(update={"max_diff_chars": len(_patch("a.go")) + 20})
+    return review_pull(
+        replace(PR, additions=1200),
+        github=FakeGitHub(diff_text=whole, messages=["chore: plain"]),
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+
+
+def _blocking_on(provider: str, tier: str, file: str) -> JudgeReply:
+    finding = Finding(
+        severity="blocking", file=file, line=None, title="check is missing", evidence="absent"
+    )
+    verdict = ReviewVerdict(
+        verdict="request_changes",
+        summary="missing",
+        findings=[finding],
+        mode=tier,
+        providers=(provider,),
+    )
+    return JudgeReply(
+        provider=provider, tier=tier, model="m", verdict=verdict, failure=None, raw=""
+    )
+
+
+def test_a_slice_judge_cannot_block_on_a_file_outside_its_slice(tmp_path: Path) -> None:
+    """Measured on #46: each judge read one of three parts and declared "missing" (blocking)
+    code that lives in another part. A judge that did not read a file cannot block on it: the
+    finding stays, as important, and a reply left with no blocking finding approves."""
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        if _patch("a.go") in diff:
+            return _blocking_on(provider, tier, "c.go")
+        return approve(provider, tier)
+
+    outcome = _sliced_review(tmp_path, run_judge)
+    assert outcome.verdict.verdict == "approve"
+    [finding] = outcome.verdict.findings
+    assert finding.file == "c.go" and finding.severity == "important"
+    assert "not in the part this judge read" in finding.evidence
+
+
+def test_a_slice_judge_still_blocks_on_a_file_it_read(tmp_path: Path) -> None:
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        if _patch("a.go") in diff:
+            return _blocking_on(provider, tier, "a.go")
+        return approve(provider, tier)
+
+    outcome = _sliced_review(tmp_path, run_judge)
+    assert outcome.verdict.verdict == "request_changes"
+    assert [f.severity for f in outcome.verdict.findings] == ["blocking"]
+
+
+def test_each_slice_judge_is_told_which_files_the_other_parts_hold(tmp_path: Path) -> None:
+    notes_of_first: list[str] = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        if _patch("a.go") in diff:
+            notes_of_first.append(notes)
+        return approve(provider, tier)
+
+    _sliced_review(tmp_path, run_judge)
+    [notes] = notes_of_first
+    assert "Part 1 of 3" in notes
+    assert "b.go" in notes and "c.go" in notes
+    assert "never conclude that something is absent" in notes
+
+
+def test_a_path_spelled_with_a_prefix_is_still_the_file_the_judge_read(tmp_path: Path) -> None:
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+        if _patch("a.go") in diff:
+            return _blocking_on(provider, tier, "./a.go")
+        return approve(provider, tier)
+
+    assert _sliced_review(tmp_path, run_judge).verdict.verdict == "request_changes"
+
+
+def test_the_list_of_other_files_is_bounded() -> None:
+    """The split budget keeps PROMPT_MARGIN free for the part marker, less the 200 bytes judge()
+    keeps when it shrinks: a hundred file names would push the judge's own part past the
+    provider's limit, so the list stops and says how many it left out."""
+    from rail.reviewer.judges import PROMPT_MARGIN
+    from rail.reviewer.service import _part_notes
+
+    many = "".join(_patch(f"pkg/module_{i:03d}.go") for i in range(100))
+    notes = _part_notes("", 1, [_patch("a.go"), many])
+    assert len(notes.encode("utf-8")) <= PROMPT_MARGIN - 200
+    assert "more" in notes and "module_000.go" in notes
