@@ -140,10 +140,10 @@ def command(
         click.echo(f"error: {exc}\nthe local tree is intact under {project.dest}", err=True)
         raise SystemExit(1) from exc
     except LedgerError as exc:
-        # brain mode records the contract after the remotes: the tree and the remotes exist
+        # the file ledger records the contract before anything is published; a brain refusal
+        # arrives as a ScaffoldError that carries the resume steps (b185c51d)
         click.echo(
-            f"error: {exc}\nthe tree under {project.dest} and its remotes are in place; record "
-            "the contract with `rail contract set` once the ledger answers",
+            f"error: {exc}\nthe tree under {project.dest} is in place and nothing is published",
             err=True,
         )
         raise SystemExit(1) from exc

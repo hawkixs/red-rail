@@ -285,9 +285,17 @@ class FakeBrain:
             stored = json.loads(json.dumps(contract))
             for deliverable in stored.get("deliverables", []):  # brain fills the numeric id
                 if deliverable.get("repository_id") is None:
-                    for (project, repository_id), slug in brain.repositories.items():
-                        if slug == deliverable.get("repository") and project == ticket.to_project:
-                            deliverable["repository_id"] = repository_id
+                    matched = [
+                        repository_id
+                        for (project, repository_id), slug in brain.repositories.items()
+                        if slug == deliverable.get("repository") and project == ticket.to_project
+                    ]
+                    if len(matched) != 1:  # delivery_service.py: the registry must know it
+                        raise refuse(
+                            "unknown_repository",
+                            "deliverable repository is not registered for the executor project",
+                        )
+                    deliverable["repository_id"] = matched[0]
             revision = {
                 **stored,
                 "ticket_id": ticket.id,

@@ -5,6 +5,7 @@ checked at its tier, then published — the 15-step kickstart runbook `a050e6ec`
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -17,7 +18,15 @@ import yaml
 
 from rail import remotes
 from rail.gates import GateResult, run_gates
-from rail.ledger import Contract, Deliverable, Record, RequiredCheck, ReviewPolicy, open_ledger
+from rail.ledger import (
+    Contract,
+    Deliverable,
+    LedgerError,
+    Record,
+    RequiredCheck,
+    ReviewPolicy,
+    open_ledger,
+)
 from rail.ledger.file import FileLedger
 from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.policy import parameter, stages_for
@@ -317,18 +326,75 @@ def new_project(
     mirror = parameter(project.dest, "hygiene.mirror_host")  # GitHub only unless declared
     if publish:
         remotes.publish(project.dest, project.slug, project.description, mirror=mirror, run=run)
-    if project.ledger is LedgerBackend.BRAIN:
-        # brain enriches the deliverable from its repository registry: the repository exists
-        # first; the mirror is a second commit so the bootstrap commit stays what was published
-        record_contract(project, clock=clock, client=client)
-        _git(project.dest, "add", "-A", "docs/receipts")
-        _git(project.dest, "commit", "-q", "-m", "chore(rail): mirror the delivery contract")
+    try:
+        if project.ledger is LedgerBackend.BRAIN:
+            # brain enriches the deliverable from its repository registry: the repository
+            # exists first; the mirror is a second commit so the bootstrap commit stays what
+            # was published
+            try:
+                record_contract(project, clock=clock, client=client)
+            except LedgerError as exc:
+                raise ScaffoldError(_interrupted_birth(project, exc, published=publish)) from exc
+            _git(project.dest, "add", "-A", "docs/receipts")
+            _git(project.dest, "commit", "-q", "-m", "chore(rail): mirror the delivery contract")
+            if publish:
+                remotes.push(project.dest, mirror=mirror, run=run)
+    finally:
         if publish:
-            remotes.push(project.dest, mirror=mirror, run=run)
-    if publish:
-        # last, once every direct push of `rail new` is done: from here main takes pull requests
-        remotes.protect_main(project.slug, protected_checks(project), run=run)
+            # last, once every direct push of `rail new` is done: from here main takes pull
+            # requests. In a `finally` (b185c51d): a published repository whose birth stopped
+            # half-way must not be left with a main open to direct pushes
+            remotes.protect_main(project.slug, protected_checks(project), run=run)
     return results
+
+
+def resume_contract_command(project: NewProject) -> str:
+    """The `rail contract set` that records exactly `bootstrap_contract(project)`, under the
+    key `rail new` uses: a resume replays the birth's contract, never an approximation."""
+    contract = bootstrap_contract(project)
+    args = ["rail", "contract", "set", "--repo", str(project.dest)]
+    args += ["--objective", contract.objective]
+    for criterion in contract.acceptance_criteria:
+        args += ["--criterion", criterion]
+    for constraint in contract.constraints:
+        args += ["--constraint", constraint]
+    for deliverable in contract.deliverables:
+        args += ["--deliverable", f"{deliverable.repository}:{deliverable.key}"]
+        for check in deliverable.required_checks:
+            args += ["--required-check", f"{check.kind}:{check.name}@{check.app_slug}"]
+        if deliverable.no_checks_reason:
+            args += ["--no-checks-reason", deliverable.no_checks_reason]
+        for reviewer in deliverable.review.allowed_reviewers:
+            args += ["--allowed-reviewer", reviewer]
+        args += ["--required-approvals", str(deliverable.review.required_approvals)]
+    args += ["--priority", str(contract.priority), "--acceptance-mode", contract.acceptance_mode]
+    args += ["--reason", "bootstrap", "--issuer", "rail new", "--key", f"contract:{project.slug}:1"]
+    return shlex.join(args)
+
+
+def _interrupted_birth(project: NewProject, exc: LedgerError, *, published: bool) -> str:
+    """What a brain-ledger birth that stopped at the contract says: where things stand and
+    the three steps that finish it. A repository `rail new` has just created is never in
+    brain's registry yet (runbook 434dc417 builds it from GitHub), hence `unknown_repository`."""
+    where = (
+        f"{remotes.CANONICAL_OWNER}/{project.slug} is published and main is protected"
+        if published
+        else f"the tree under {project.dest} is committed (nothing published)"
+    )
+    return (
+        f"the delivery contract was not recorded — {exc}\n"
+        f"{where}; the contract and its mirror receipt are missing. To finish the birth:\n"
+        "  1. on `unknown_repository`, register the repository in brain's delivery registry "
+        "(brain runbook 434dc417, an operator gesture: two restarts); otherwise wait until "
+        "brain answers\n"
+        f"  2. record the birth's contract:\n     {resume_contract_command(project)}\n"
+        + (
+            "  3. commit the mirror receipt under docs/receipts/ on a branch and merge it "
+            "through a pull request (main takes no direct push)"
+            if published
+            else "  3. commit the mirror receipt under docs/receipts/"
+        )
+    )
 
 
 def protected_checks(project: NewProject) -> list[tuple[str, str]]:

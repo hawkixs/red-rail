@@ -593,6 +593,89 @@ def test_brain_mode_records_the_contract_after_the_remotes_and_mirrors_it(
     assert calls == []  # publish=False: nothing pushed
 
 
+def _unregistered_birth(template_dir: Path, tmp_path: Path, tier: Tier = Tier.PROD):
+    """A brain-ledger birth whose repository brain's registry does not know yet — always the
+    case for a repository `rail new` has just created (runbook 434dc417 reads GitHub)."""
+    brain = FakeBrain(agent="rail new")
+    ticket = brain.add_ticket("red", "red-probe")
+    project = _project(
+        template_dir, tmp_path / "red-probe", tier=tier, ledger=LedgerBackend.BRAIN, ticket=ticket
+    )
+    return brain, ticket, project
+
+
+def test_an_unregistered_repository_still_gets_main_protected_and_the_resume_steps(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """b185c51d: brain refused the contract with `unknown_repository` after `rail new` had
+    published, and the birth stopped before `protect_main`: main was left open to direct
+    pushes, with nothing saying how to resume."""
+    brain, ticket, project = _unregistered_birth(template_dir, tmp_path)
+    calls: list[list[str]] = []
+    with pytest.raises(ScaffoldError) as refused:
+        new_project(
+            project,
+            clock=CLOCK,
+            client=BrainClient.in_memory(brain, agent="rail new"),
+            run=_github(calls, []),
+            resolve=_pin,
+        )
+    protections = [c for c in calls if any("branches/main/protection" in a for a in c)]
+    assert protections, "main is protected even though the contract was refused"
+    assert not any(c[:3] == ["git", "push", "-u"] for c in calls[calls.index(protections[0]) :])
+    assert not brain.tickets[ticket].revisions
+    assert gitrepo.recent_subjects(project.dest, 1) == [
+        "chore: bootstrap red-probe with the ReD rail"
+    ]
+    assert not list((project.dest / RECEIPTS_DIR).glob("*-contract-*.json"))
+    message = str(refused.value)
+    assert "unknown_repository" in message and "main is protected" in message
+    assert "434dc417" in message and "pull request" in message
+    assert "rail contract set" in message and "--key contract:red-probe:1" in message
+
+
+@pytest.mark.parametrize("tier", [Tier.BOOTSTRAP, Tier.PROD])
+def test_the_resume_command_records_exactly_the_birth_contract(
+    template_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tier: Tier
+) -> None:
+    """Once the repository is registered, the printed command must set the very contract
+    `rail new` would have set, under the same key — not an approximation of it."""
+    import shlex
+
+    from rail.ledger import open_ledger
+    from rail.scaffold import bootstrap_contract, resume_contract_command
+
+    brain, ticket, project = _unregistered_birth(template_dir, tmp_path, tier)
+    with pytest.raises(ScaffoldError):
+        new_project(
+            project,
+            publish=False,
+            clock=CLOCK,
+            client=BrainClient.in_memory(brain, agent="rail new"),
+            resolve=_pin,
+        )
+    brain.register_repository("red-probe", 4242, "hawkixs/red-probe")  # runbook 434dc417
+    monkeypatch.setattr(
+        "rail.commands.contract.open_ledger",
+        lambda repo: open_ledger(repo, client=BrainClient.in_memory(brain, agent="rail new")),
+    )
+
+    argv = shlex.split(resume_contract_command(project))
+    assert argv[:3] == ["rail", "contract", "set"]
+    out = CliRunner().invoke(main, [*argv[1:], "--yes"])
+    assert out.exit_code == 0, out.output
+
+    (revision,) = brain.tickets[ticket].revisions
+    expected = bootstrap_contract(project).model_dump(mode="json")
+    stored = {key: revision[key] for key in expected}
+    for deliverable in stored["deliverables"]:
+        deliverable.pop("repository_id")
+    for deliverable in expected["deliverables"]:
+        deliverable.pop("repository_id")
+    assert stored == expected
+    assert revision["idempotency_key"] == "contract:red-probe:1"
+
+
 def test_render_go_ships_a_resolvable_module_and_a_sync_that_pins_the_analysers(
     template_dir: Path, tmp_path: Path
 ) -> None:
