@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from rail import gitrepo
+from rail.gates.hygiene import ROSTER_HEADER, table_row
 from tests.helpers import commit_all, conforming_tree, init_repo, write_roster
 
 
@@ -26,7 +27,7 @@ def test_conforming_tree_has_the_structural_floor(tmp_path: Path) -> None:
 def test_write_roster_lists_projects(tmp_path: Path) -> None:
     write_roster(tmp_path, ["red-alpha", "red-beta"])
     text = (tmp_path / "CLAUDE.md").read_text()
-    assert "| Projet |" in text and "| red-beta |" in text
+    assert table_row(ROSTER_HEADER) in text and "| red-beta |" in text
 
 
 def test_commit_all_returns_the_new_head(tmp_path: Path) -> None:

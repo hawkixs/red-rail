@@ -13,6 +13,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from rail.gates.hygiene import ROSTER_HEADER, roster_header, table_row
+
 GITHUB_URL = "git@github.com:hawkixs/{name}.git"
 MIRROR_URL = "ssh://git@gitlab.hawkixs.local:2222/hawkixs_project/red/{name}.git"
 FIXED_DATE = "2026-09-15T08:00:00+00:00"
@@ -121,10 +123,20 @@ def write_manifest(
     (repo / "rail.yaml").write_text(body)
 
 
-def write_roster(root: Path, names: list[str]) -> None:
-    rows = "\n".join(f"| {n} | Infra | fixture | OK | `{n}` |" for n in names)
-    header = "| Projet | Domaine | Statut reel | Sante | Cle brain |\n|---|---|---|---|---|\n"
-    (root / "CLAUDE.md").write_text("# ReD\n\n" + header + rows + "\n")
+def write_roster(root: Path, names: list[str], *, domain: str = "Infra") -> None:
+    """The ReD root `CLAUDE.md`: its identity table, built from the gate's own constants, so
+    the fixture cannot drift from what the gate recognises (the French header it used to write
+    hid cdb725e4)."""
+    rows = []
+    for name in names:
+        cells = {
+            "Project": name,
+            "Domain": domain,
+            "What it is": "fixture",
+            "Brain key": f"`{name}`",
+        }
+        rows.append(table_row(cells[column] for column in ROSTER_HEADER))
+    (root / "CLAUDE.md").write_text("# ReD\n\n" + roster_header() + "\n" + "\n".join(rows) + "\n")
 
 
 def conforming_tree(root: Path, name: str, tier: str, *, stack: str = "python") -> Path:
