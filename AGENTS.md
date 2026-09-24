@@ -4,7 +4,7 @@ Read [CLAUDE.md](CLAUDE.md) first: it is the source of this project's architectu
 commands, layout and key technical decisions. This file does not duplicate it — it covers
 what changes when the harness is not Claude Code, and the things that can hurt.
 
-Also read the ecosystem-level [`../../AGENTS.md`](../../AGENTS.md).
+Then read the ReD root `AGENTS.md`, in the directory that `CLAUDE.md` names as "Parent project".
 
 ## This repository is public
 
@@ -82,10 +82,13 @@ from the home server only; Codex has it wired in `~/.codex/config.toml`.
 uv run rail brain ping   # is brain reachable with the private token, as this project?
 ```
 
-Start material work with `brain_session_start("red-rail")`. Persist knowledge with the
-specific tool: `brain_log_decision` for a choice, `brain_save_snippet` for a reusable
-pattern, `brain_create_runbook` for a procedure, `brain_propose_adr` for durable
-architecture, `brain_learn` only as a last resort.
+Start material work with
+`brain_session_start("red-rail", client_key="<harness>-red-rail-<YYYY-MM-DD>")`, where
+`<harness>` is codex or opencode here (claude-code under Claude Code). Reuse the key for every
+retry of that session, and give a parallel session its own suffix. Persist knowledge with the
+specific tool, never `brain_learn` by default: `brain_log_decision` for a choice,
+`brain_save_snippet` for a reusable pattern, `brain_create_runbook` for a procedure,
+`brain_propose_adr` for durable architecture, `brain_learn` only as a last resort.
 
 ## Subagents
 

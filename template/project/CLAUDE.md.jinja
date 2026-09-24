@@ -13,6 +13,20 @@
 ReD is GitHub only (decision `30acbbde`): one remote, one truth. A project that keeps a mirror
 declares its host in `rail.yaml` (`gates: hygiene.mirror_host`) and the rail requires it.
 
+## Where things live
+
+| Question | Where to look |
+|---|---|
+| What is this project, what stack, what key? | this file |
+| What tier, which ledger, which target? | `rail.yaml` |
+| What state is it in, what is the focus, what is blocked? | the session-start call in § Brain MCP |
+| What can break here, which gates? | `AGENTS.md` |
+| What was promised, what evidence exists? | `ledger: file`: `docs/receipts/`; `ledger: brain`: the ticket named in `rail.yaml` |
+| Why did we choose Y? | brain decisions, `docs/adr/` |
+| Specs and plans | `docs/specs/`, `docs/plans/` |
+| Which method, which review? | root `CLAUDE.md` § "Workflows — the operator picks the method" |
+| Machines, addresses, access | brain machine records (`brain_recall`), never this file |
+
 ## Language
 
 Everything pushed to a remote is written in **English**: commits, branches, PRs, docs, code
@@ -36,13 +50,15 @@ Release and deployment go through the rail: `rail release --version X.Y.Z`, `rai
 {% endif -%}
 ## Stack
 
+{# stack-chain: stack -#}
 {% if stack == 'python' -%}
 Python 3.12+, uv, pytest, ruff.
 {%- elif stack == 'go' -%}
 Go 1.22+, `go test`, `go vet`, `gofmt`.
-{%- else -%}
+{%- elif stack == 'docs' -%}
 Documentation only (Markdown).
 {%- endif %}
+{#- /stack-chain #}
 
 ## Commands
 
@@ -63,6 +79,7 @@ make check     # the rail gates against this repository
 ├── docs/plans/        # implementation plans (dated)
 ├── docs/adr/          # architecture decision records (numbered)
 ├── docs/receipts/     # the file ledger: append-only evidence, written by `rail attest`, never by hand
+{#- stack-chain: structure #}
 {%- if stack == 'python' %}
 {%- if tier == 'prod' %}
 ├── Dockerfile
@@ -73,51 +90,41 @@ make check     # the rail gates against this repository
 {%- elif stack == 'go' %}
 ├── go.mod
 └── *_test.go
-{%- else %}
+{%- elif stack == 'docs' %}
 └── README.md
 {%- endif %}
+{#- /stack-chain #}
 ```
 
-## Working principles
+## How we work
 
-### Workflow
-- Brainstorm → spec → plan → implement: `rail-design` and `rail-plan` skills for the rail stages,
-  `sdd-brainstorm` / `writing-plans-parallel` / `executing-plans-parallel` for the work itself.
-  Never the built-in plan mode.
-- If it derails mid-way, **stop and re-plan immediately**.
-- TDD: write the failing test first, watch it fail, implement the minimum.
+The method, the review that reads the diff before a commit, and the invariants that hold
+whatever the method live once, in the ReD root `CLAUDE.md` (the "Parent project" above):
+§ "Workflows — the operator picks the method" and § "Invariants — true whatever the method".
+They are not copied here, the review gate included.
 
-### Quality pipeline before every commit
-```
-implementation done
-  → /tdd-write-tests                    (missing tests)
-  → /reflexion-reflect                  (non-trivial change only)
-  → /code-review-review-local-changes   (multi-agent review)
-  → /git-commit                         (conventional commit, English)
-```
-Skip the review for docs-only commits.
+What the rail adds on this repository:
 
-### Verification before "done"
-- Never declare a task done without proof: run the tests, read the summary line, capture the
-  exit code. `rail check` must pass on this repository.
-
-### Self-improvement (brain MCP)
-- After any correction from the operator: `brain_learn(topic, insight, project_key="{{ brain_key }}")`.
-- Before solving a problem: `brain_search(query, project_key="{{ brain_key }}")`.
-
-### Core principles
-- **Build to last**: solid, tested, documented.
-- **No shortcuts**: no quick fixes, no unnecessary dependencies.
-- **Scalable**: think about twenty repositories even while proving one.
-- **From scratch**: prefer building the small thing over adopting the big platform.
+- `rail check` is the verdict, and `make ci` is exactly what CI runs.
+- The only bypass is a `gates:` override in `rail.yaml`, with its reason: there is no
+  `# rail: ignore`.
+- Evidence is written by the rail only. With `ledger: file` it is the receipts in
+  `docs/receipts/`; with `ledger: brain` it is the attestations against the ticket named in
+  `rail.yaml`, the receipts being their mirrors.
+- Secrets never enter the tree, an environment variable holding the value, or a command line.
 
 ## Brain MCP — proactive use
 
 Project key: `{{ brain_key }}`. Use it without being asked.
 
-- **Session start**: `brain_session_start("{{ brain_key }}")`
-- **During work**: `brain_log_decision` for choices, `brain_save_snippet` for reusable code,
-  `brain_create_runbook` for procedures, `brain_learn` only for pure insights.
+- **Session start**: `brain_session_start("{{ brain_key }}", client_key="<harness>-{{ brain_key }}-<YYYY-MM-DD>")`,
+  where `<harness>` is claude-code, codex or opencode. Reuse the key for every retry of that
+  session, and give a parallel session its own suffix.
+- **During work**: the specific tool, never `brain_learn` by default: `brain_log_decision` for
+  a choice, `brain_save_snippet` for reusable code, `brain_create_runbook` for a procedure,
+  `brain_learn` only for a pure insight.
+- **After any correction from the operator**: `brain_learn(topic, insight, project_key="{{ brain_key }}")`.
+- **Before solving a problem**: `brain_search(query, project_key="{{ brain_key }}")`.
 - **Session end**: `brain_update_project_focus("{{ brain_key }}", current_focus="summary + next steps")`
 
 ## Related projects
