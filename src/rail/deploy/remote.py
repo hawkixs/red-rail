@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
 from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step, domain_of
@@ -29,7 +29,8 @@ from rail.policy import effective, parameter
 LOCKED = 75  # the remote script's exit code when the lock is taken (EX_TEMPFAIL)
 POLL_SECONDS = 3.0
 TAIL_LIMIT = 2000
-Runner = Callable[..., "subprocess.CompletedProcess[str]"]
+# text for the ssh step (`text=True`), bytes for `file_at`: one runner serves both
+Runner = Callable[..., "subprocess.CompletedProcess[Any]"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,10 +171,11 @@ class RemoteTarget:
 
     def file_at(self, sha: str, path: str, what: str) -> str:
         """A file exactly as released: `git show <sha>:<path>`, never the working tree. Read as
-        bytes, never `text=True`: a decoding error must be this check's own refusal, not
-        Python's silent best-effort substitution of whatever the platform default happens to
-        be. Decoded strictly as UTF-8 — a file that is not valid UTF-8 is refused by name,
-        before the first ssh, rather than reaching the target mangled or truncated."""
+        bytes and decoded strictly as UTF-8, never with `text=True`, which decodes with the
+        host's locale: an invalid byte then raised a bare `UnicodeDecodeError` traceback out
+        of `rail deploy`, and the result depended on that locale. Now a file that is not
+        valid UTF-8 is a `DeployError` naming its path, before the first ssh, whatever the
+        locale. The bytes are shipped as released, line endings included."""
         done = self._run(
             ["git", "-C", str(self.repo), "show", f"{sha}:{path}"],
             capture_output=True,

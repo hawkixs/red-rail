@@ -595,6 +595,12 @@ def _systemd_deployed_tree(tmp_path: Path) -> Path:
             False,
             "unit red-agent.service on agent vps is failed/failed",
         ),
+        # active but no longer running: a check of the active state alone would pass it
+        (
+            (monitor.Unit("red-agent.service", "active", "exited"),),
+            False,
+            "unit red-agent.service on agent vps is active/exited",
+        ),
         # review focus 5: an agent that reports no systemd rows at all
         ((), False, "red-monitor lists no unit red-agent.service on agent vps"),
     ],

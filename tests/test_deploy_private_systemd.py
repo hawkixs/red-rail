@@ -79,7 +79,7 @@ def test_the_parser_reads_sections_keys_and_continuations() -> None:
         ("Type=simple\n", "Type=simple\nExecStartPost=!!/bin/true\n", "full privileges"),
         ("ExecStart=/opt", "ExecStart=+/opt", "full privileges"),
         ("Type=simple\n", "Type=simple\nPermissionsStartOnly=yes\n", "PermissionsStartOnly"),
-        # --- fix round 1: allow-lists instead of deny-lists (task-4-fix-1.md) ---
+        # --- allow-lists: a value this check cannot read with certainty is refused ---
         ("MemoryMax=64M\n", "MemoryMax=512m\n", "MemoryMax="),
         ("MemoryMax=64M\n", "MemoryMax=64MB\n", "MemoryMax="),
         ("MemoryMax=64M\n", "MemoryMax=1Gi\n", "MemoryMax="),
@@ -121,15 +121,14 @@ def test_the_parser_reads_sections_keys_and_continuations() -> None:
             "EnvironmentFile=/opt/red-monitor/current/release.env\nEnvironmentFile=\n",
             "EnvironmentFile=",
         ),
-        # --- fix round 2: keys and values keep every whitespace systemd keeps (task-4-fix-2.md) ---
+        # --- keys and values are stripped of space and tab only, as systemd strips them ---
         (
             "Type=simple\n",
             "Type=simple\nExecStartPre=+/bin/sh\nExecStartPre=\xa0\n",
             "full privileges",
         ),
-        # \x0c and \x0b are control characters (fix round 3, finding 1): the blanket
-        # control-character refusal now fires before parsing ever reaches the "full privileges"
-        # rule, so these two assert the round-3 message instead.
+        # \x0c and \x0b are control characters, refused before parsing: these two cases never
+        # reach the "full privileges" rule
         (
             "Type=simple\n",
             "Type=simple\nExecStartPre=+/bin/sh\nExecStartPre=\x0c\n",
@@ -141,12 +140,11 @@ def test_the_parser_reads_sections_keys_and_continuations() -> None:
             "control character",
         ),
         ("User=red-monitor\n", "User\xa0=red-monitor\n", "User="),
-        # \x0b is a control character (fix round 3, finding 1): refused before parsing, not by
-        # the "MemoryMax=" unknown-key rule.
+        # \x0b is a control character: refused before parsing, not by the "MemoryMax=" rule
         ("MemoryMax=64M\n", "MemoryMax\x0b=64M\n", "control character"),
         ("MemoryMax=64M\n", "MemoryMax=64M\xa0\n", "MemoryMax="),
         ("MemoryMax=64M\n", "MemoryMax=99999999999999999999\n", "MemoryMax="),
-        # --- fix round 2, own finding: word-splitting also keeps every whitespace systemd keeps ---
+        # --- command words are split on space and tab only, as systemd splits them ---
         ("current/red agent", "current/red\xa0agent", "ExecStart="),
     ],
 )
@@ -175,8 +173,8 @@ def test_a_privilege_prefix_behind_a_continuation_and_a_comment_is_seen() -> Non
 
 
 def test_a_semicolon_comment_behind_a_continuation_is_also_seen() -> None:
-    """Fix round 1, test gap: a `;` comment is dropped inside a continuation exactly like `#`,
-    then the hidden `+…` still runs with full privileges."""
+    """A `;` comment is dropped inside a continuation exactly like `#`, then the hidden
+    `+…` still runs with full privileges."""
     hidden = "Type=simple\nExecStartPre=\\\n; looks harmless\n  +/bin/sh -c id\n"
     refusals = _refusals(GOOD.replace("Type=simple\n", hidden, 1))
     assert any("full privileges" in refusal for refusal in refusals), refusals
@@ -194,92 +192,91 @@ def test_a_semicolon_comment_behind_a_continuation_is_also_seen() -> None:
     ],
 )
 def test_a_reset_list_or_a_non_command_key_is_still_accepted(old: str, new: str) -> None:
-    """Fix round 1: `ExecStart=` resets like any list (only what follows the last empty
-    assignment counts), and `ExecPaths=` is not a command key, so a `+` prefix there is inert."""
+    """`ExecStart=` resets like any list (only what follows the last empty assignment counts),
+    and `ExecPaths=` is not a command key, so a `+` prefix there is inert."""
     assert old in GOOD, "the fixture must contain what the case replaces"
     assert _refusals(GOOD.replace(old, new, 1)) == []
 
 
 def test_a_backslash_before_trailing_whitespace_does_not_continue_the_line() -> None:
-    """Fix round 1, finding 6: systemd continues a line only behind a backslash that is its
-    very last character — trailing whitespace after it ends the line for systemd, so the next
-    line is read as its own directive, not swallowed into the first."""
+    """systemd continues a line only behind a backslash that is its very last character:
+    trailing whitespace after it ends the line for systemd, so the next line is read as its own
+    directive, not swallowed into the first."""
     unit = parse_unit("[Service]\nExecStartPre=/bin/a \\ \nExecStartPost=/bin/b\n")
     assert unit["Service"]["ExecStartPost"] == ["/bin/b"]
 
 
 def test_a_double_backslash_does_not_continue_the_line() -> None:
-    """Fix round 1, finding 6: an EVEN number of trailing backslashes is not a continuation for
-    systemd — only an odd count is — so `\\\\` ends the line like any other."""
+    """An EVEN number of trailing backslashes is not a continuation for systemd, only an odd
+    count is, so `\\\\` ends the line like any other."""
     unit = parse_unit("[Service]\nExecStartPre=/bin/a \\\\\nExecStartPost=/bin/b\n")
     assert unit["Service"]["ExecStartPost"] == ["/bin/b"]
 
 
 def test_a_padded_section_header_is_not_merged_with_the_real_one() -> None:
-    """Fix round 1, finding 6: a section name is read verbatim — `[ Service ]` is a different,
-    unknown section for systemd, not `[Service]` with cosmetic padding."""
+    """A section name is read verbatim: `[ Service ]` is a different, unknown section for
+    systemd, not `[Service]` with cosmetic padding."""
     unit = parse_unit("[Service]\nUser=red-monitor\n[ Service ]\nUser=intruder\n")
     assert unit["Service"]["User"] == ["red-monitor"]
     assert unit[" Service "]["User"] == ["intruder"]
 
 
 def test_a_vertical_tab_is_not_a_systemd_line_break() -> None:
-    """Fix round 1, finding 6: systemd splits a unit only on CR, LF or CRLF; `str.splitlines()`
-    also breaks on `\\v`, which would wrongly cut a value in the middle."""
+    """systemd splits a unit only on CR, LF or CRLF; `str.splitlines()` also breaks on `\\v`,
+    which would wrongly cut a value in the middle."""
     unit = parse_unit("[Service]\nExecStart=/bin/a\x0b/bin/b\n")
     assert unit["Service"]["ExecStart"] == ["/bin/a\x0b/bin/b"]
 
 
 def test_good_with_crlf_line_ends_is_still_accepted() -> None:
-    """Fix round 2: CRLF line endings are ordinary for systemd, not a way past the parser."""
+    """CRLF line endings are ordinary for systemd, not a way past the parser."""
     assert _refusals(GOOD.replace("\n", "\r\n")) == []
 
 
 def test_parse_unit_keeps_unicode_whitespace_in_keys_and_values() -> None:
-    """Fix round 2 (task-4-fix-2.md): `parse_unit` strips a key or a value with `" \\t"` only,
-    the same set `_logical_lines` uses, never `str.strip()` with no argument. `User\\xa0` is then
-    an unknown key, not `User` with cosmetic padding, and a lone `\\xa0` value is non-empty, not
-    the empty value that resets a list."""
+    """`parse_unit` strips a key or a value with `" \\t"` only, the same set `_logical_lines`
+    uses, never `str.strip()` with no argument. `User\\xa0` is then an unknown key, not `User`
+    with cosmetic padding, and a lone `\\xa0` value is non-empty, not the empty value that
+    resets a list."""
     unit = parse_unit("[Service]\nUser\xa0=x\nExecStartPre=+/bin/sh\nExecStartPre=\xa0\n")
     assert "User" not in unit["Service"]
     assert unit["Service"]["ExecStartPre"] == ["+/bin/sh", "\xa0"]
 
 
 def test_a_nul_byte_is_refused_before_any_parsing() -> None:
-    """Fix round 3, finding 1 (task-4-fix-3.md): systemd's `read_line_full` treats a NUL byte as
-    an end of line, so `User=root` hidden behind one is systemd's own, separate, later-and-so-
-    winning line — while this check, without the fix, reads it as part of `Type=`'s value and
-    never evaluates it as a `User=` assignment at all. Refused outright, before parsing, naming
-    the code point."""
+    """systemd's `read_line_full` treats a NUL byte as an end of line, so `User=root` hidden
+    behind one is systemd's own, separate, later-and-so-winning line, while a reader that breaks
+    lines on CR and LF only takes it as part of `Type=`'s value and never sees a `User=`
+    assignment at all. Refused outright, before parsing, naming the code point."""
     text = GOOD.replace("Type=simple\n", "Type=simple\x00User=root\n", 1)
     assert _refusals(text) == [f"{UNIT}: control character U+0000 is not allowed in a unit file"]
 
 
 def test_a_del_character_is_refused() -> None:
-    """Fix round 3, finding 1: DEL (`\\x7f`) has no legitimate use in a unit file."""
+    """DEL (`\\x7f`) has no legitimate use in a unit file."""
     text = GOOD.replace("Type=simple\n", "Type=simple\x7f\n", 1)
     assert _refusals(text) == [f"{UNIT}: control character U+007F is not allowed in a unit file"]
 
 
 def test_a_c1_control_character_is_refused() -> None:
-    """Fix round 3, finding 1: the C1 range (`\\x80`-`\\x9f`) is refused just like C0."""
+    """The C1 range (`\\x80`-`\\x9f`) is refused just like C0."""
     text = GOOD.replace("Type=simple\n", "Type=simple\x85\n", 1)
     assert _refusals(text) == [f"{UNIT}: control character U+0085 is not allowed in a unit file"]
 
 
 def test_a_tab_inside_an_unchecked_value_is_still_accepted() -> None:
-    """Fix round 3, finding 1: `\\t` is ordinary systemd whitespace, kept in `_ORDINARY_CONTROLS`
-    on purpose (round 4). `Type=` is not itself examined by any rule, so a tab inside its value
-    shows the new check does not over-refuse an ordinary one."""
+    """`\\t` is ordinary systemd whitespace, kept in `_ORDINARY_CONTROLS` on purpose. `Type=`
+    is not itself examined by any rule, so a tab inside its value shows that the refusal of
+    control characters does not over-refuse an ordinary one."""
     text = GOOD.replace("Type=simple\n", "Type=sim\tple\n", 1)
     assert _refusals(text) == []
 
 
 def test_a_huge_memorymax_digit_run_is_refused_without_raising() -> None:
-    """Fix round 3, finding 2 (task-4-fix-3.md): `int(digits)` raises past Python's int-string
-    conversion limit (~4300 digits); a digit run longer than `_MEMORY_MAX_DIGITS` (19, `2**62`'s
-    own digit count) already exceeds the byte bound regardless of any suffix, so it is refused
-    before `int(...)` is ever called — no exception, just an ordinary refusal."""
+    """`int(digits)` raises past Python's int-string conversion limit (~4300 digits). A digit
+    run longer than `_MEMORY_MAX_DIGITS` (19, `2**62`'s own digit count) already exceeds the
+    byte bound whatever the suffix, so it is refused before `int(...)` is ever called: no
+    exception, just an ordinary refusal."""
     text = GOOD.replace("MemoryMax=64M\n", f"MemoryMax={'1' * 5000}\n", 1)
     refusals = _refusals(text)
     assert any("MemoryMax=" in refusal for refusal in refusals), refusals
@@ -295,10 +292,10 @@ def test_a_huge_memorymax_digit_run_is_refused_without_raising() -> None:
     ids=["a-last-user-root", "a-privileged-command", "a-service-section-ahead-of-good"],
 )
 def test_a_byte_order_mark_cannot_hide_an_assignment(text: str) -> None:
-    """Fix round 4, finding 1: systemd strips a U+FEFF at the start of the file and the first one
-    at the start of any line, then reads the rest as an ordinary line. This check read
-    `\\ufeffUser` as an unknown key, so a last-and-winning `User=root`, a `+` command or a whole
-    `[Service]` section went unseen. Refused before parsing, naming the code point."""
+    """systemd strips a U+FEFF at the start of the file and the first one at the start of any
+    line, then reads the rest as an ordinary line. A reader that did not would take
+    `\\ufeffUser` for an unknown key and miss a last-and-winning `User=root`, a `+` command or
+    a whole `[Service]` section. Refused before parsing, naming the code point."""
     assert _refusals(text) == [f"{UNIT}: format character U+FEFF is not allowed in a unit file"]
 
 
@@ -316,7 +313,7 @@ def test_a_byte_order_mark_cannot_hide_an_assignment(text: str) -> None:
             "/etc/red-monitor/\u202elmay.tnega",
             "format character U+202E",
         ),
-        # fix round 4, finding 3: a C0 control between `\x0e` and `\x1f`, here an ANSI escape
+        # a C0 control between `\x0e` and `\x1f`, here an ANSI escape
         ("Type=simple\n", "Type=simple\x1b[8m\n", "control character U+001B"),
     ],
     ids=["zero-width-space", "right-to-left-override", "escape"],
@@ -324,8 +321,8 @@ def test_a_byte_order_mark_cannot_hide_an_assignment(text: str) -> None:
 def test_an_invisible_character_inside_a_value_is_refused(
     old: str, new: str, character: str
 ) -> None:
-    """Fix round 4: an invisible character reads differently for a person, a terminal, this check
-    and systemd, so wherever it sits the unit is refused before parsing."""
+    """An invisible character reads differently for a person, a terminal, this check and
+    systemd, so wherever it sits the unit is refused before parsing."""
     assert old in GOOD, "the fixture must contain what the case replaces"
     refusals = _refusals(GOOD.replace(old, new, 1))
     assert refusals == [f"{UNIT}: {character} is not allowed in a unit file"]
@@ -346,9 +343,9 @@ def test_an_invisible_character_inside_a_value_is_refused(
     ids=lambda character: f"U+{ord(character):04X}",
 )
 def test_every_format_character_is_refused(character: str) -> None:
-    """Fix round 4, finding 1: the whole Unicode category Cf is refused, not a list of the ones
-    known to be abused — the byte order mark, the zero-width characters, the soft hyphen, the
-    bidirectional overrides and isolates are only the ones named by the ruling."""
+    """The format characters known to be abused: the byte order mark, the zero-width
+    characters, the soft hyphen, the bidirectional overrides and isolates. The rule reads the
+    Unicode category (Cf), so it refuses the whole category, not only this list."""
     text = GOOD.replace("Description=ReD", f"Description=ReD{character}", 1)
     assert _refusals(text) == [
         f"{UNIT}: format character U+{ord(character):04X} is not allowed in a unit file"
@@ -356,8 +353,8 @@ def test_every_format_character_is_refused(character: str) -> None:
 
 
 def test_a_printable_non_ascii_letter_is_still_accepted() -> None:
-    """Fix round 4: the rule targets invisible characters, not UTF-8 — an accented letter in a
-    value no rule examines leaves the unit accepted."""
+    """The rule targets invisible characters, not UTF-8: an accented letter in a value no rule
+    examines leaves the unit accepted."""
     text = GOOD.replace(
         "Description=ReD Monitoring Agent", "Description=Agent ReD, réseau privé", 1
     )
@@ -518,14 +515,14 @@ def test_a_refused_unit_never_reaches_the_machine(tmp_path: Path) -> None:
 
 
 def test_a_unit_that_is_not_utf8_is_refused_before_the_first_ssh(tmp_path: Path) -> None:
-    """Amendment (c): `RemoteTarget.file_at` decodes the released file strictly as UTF-8. A unit
-    committed with an invalid byte must be refused by name before the first ssh, never decoded
-    best-effort and shipped mangled to the machine."""
+    """`RemoteTarget.file_at` decodes the released file strictly as UTF-8. A unit committed with
+    an invalid byte is refused by name before the first ssh, never decoded best-effort and
+    shipped mangled to the machine."""
     repo = _systemd_repo(tmp_path / "repo")
     (repo / "deploy" / "red-agent.service").write_bytes(GOOD.encode("utf-8") + b"\xff")
     commit_all(repo, "fix: corrupt the unit with an invalid UTF-8 byte")
     host = RecordingHost()
-    with pytest.raises(DeployError, match=r"deploy/red-agent\.service"):
+    with pytest.raises(DeployError, match=r"deploy/red-agent\.service at \w+ is not UTF-8"):
         _target(repo, tmp_path, run=host).apply(_artefact(repo))
     assert [argv for argv in host.argv if argv[0] == "ssh"] == []
 

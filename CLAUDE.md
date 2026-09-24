@@ -54,7 +54,9 @@ comments, test names. The conversation with the operator stays in French.
   the released commit, strict UTF-8, the verification — the healthcheck, then `/version` — and, behind a
   `deploy.site`, the address from this host's `~/.config/red-rail/sites.yaml` (`sites.py`, a
   private file): the manifest and every attestation carry the site's name, never the
-  address), `compose.py` (what every compose target adds: the `releases/<version>` layout
+  address; a private shape refuses the policy's `deploy.ssh_host`, the border VPS, and needs
+  its own declared in `rail.yaml`), `compose.py` (what every compose target adds: the
+  `releases/<version>` layout
   and `current` symlink, the compose file read at the released commit, the digest-pinned
   pull; a target supplies only the `.env` it writes), `vps_traefik.py` (Traefik's routing
   and the public route), `private_compose.py` (a machine with no public route:
@@ -63,9 +65,11 @@ comments, test names. The conversation with the operator stays in French.
   because Docker bypasses the firewall), `private_systemd.py` (a binary that systemd runs:
   copied out of the released image by digest; the project's unit read at the released commit
   and refused before the first ssh when it would run as root, unbounded or outside the
-  release; systemd loads it through a link to `current`; two fixed sudo commands — spec
+  release; systemd loads it through a link to `current`, and the script checks, before the
+  restart, that it loaded that unit with no drop-in; two fixed sudo commands — spec
   2026-09-24-private-systemd-target) and `flow.py` (forward / rollback / drill, the target
-  chosen from the manifest, and the attestation sequences they write — ADR-0004).
+  chosen from the manifest, and the attestation sequences they write — ADR-0004; each flow
+  builds its remote scripts before its first side effect, so a refusal records nothing).
 - `src/rail/ledger/` — the `Ledger` protocol, `FileLedger` (`docs/receipts/*.json`, append-only,
   digest + idempotency key, fails closed on a tampered receipt) and `BrainLedger`
   (`ledger/brain.py`: brain-v42 is the authority, the receipts are mirrors written BEFORE the
