@@ -1187,6 +1187,39 @@ def test_rust_at_prod_is_refused(template_dir: Path, tmp_path: Path) -> None:
     assert not (tmp_path / "direct" / "rail.yaml").exists()
 
 
+def test_render_refuses_rust_at_prod_with_a_bare_message(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """`render()` evaluates `project.answers` for `copy(data=...)`: its own ScaffoldError (a
+    refusal that already names the problem) must reach the caller verbatim, not re-wrapped in
+    "copier could not render <template>: ..." — that wrapper is for copier's own failures."""
+    from rail.scaffold import RUST_PROD_REFUSAL
+
+    project = _project(
+        template_dir, tmp_path / "red-life", slug="red-life", stack=Stack.RUST, tier=Tier.PROD
+    )
+    with pytest.raises(ScaffoldError) as raised:
+        render(project)
+    assert str(raised.value) == RUST_PROD_REFUSAL
+
+
+def test_render_refuses_a_private_target_without_healthcheck_with_a_bare_message(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """The same `answers`-before-`copy()` refusal applies to a private target with no
+    healthcheck: `render()` must not wrap it either."""
+    project = _project(
+        template_dir,
+        tmp_path / "red-alerts",
+        slug="red-alerts",
+        tier=Tier.PROD,
+        deploy_target="private-compose",
+    )
+    with pytest.raises(ScaffoldError, match="--healthcheck") as raised:
+        render(project)
+    assert not str(raised.value).startswith("copier could not render")
+
+
 def test_the_copier_validator_says_what_rail_new_says() -> None:
     from rail.scaffold import RUST_PROD_REFUSAL
 

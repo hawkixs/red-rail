@@ -155,11 +155,15 @@ def resolve_rail_ref(
 def render(project: NewProject, *, copy: Callable[..., Any] = copier.run_copy) -> Path:
     if project.dest.exists():
         raise ScaffoldError(f"{project.dest} already exists")
+    # evaluated outside the try: `answers` raises its own bare ScaffoldError (rust at prod, a
+    # private target with no healthcheck), and that refusal must reach the caller verbatim,
+    # never re-wrapped in "copier could not render" — that wrapper is for copier's own failures
+    answers = project.answers
     try:
         copy(
             project.template,
             project.dest,
-            data=project.answers,
+            data=answers,
             defaults=True,
             quiet=True,
             unsafe=False,
