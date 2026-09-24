@@ -1296,6 +1296,29 @@ def test_render_rust_bootstrap(template_dir: Path, tmp_path: Path) -> None:
     assert any(line.startswith("cargo fetch --locked") for line in locked)
 
 
+# 40 characters, so "red-" + this is a realistic long slug (rustfmt wraps a chain or a string
+# differently depending on width; the template must render within its width for ANY slug).
+_LONG_KEBAB = "abcde-abcde-abcde-abcde-abcde-abcde-abcd"
+
+
+@pytest.mark.parametrize("slug", ["red-x", f"red-{_LONG_KEBAB}"], ids=["short", "long"])
+def test_rust_smoke_and_main_fit_rustfmt_width_at_any_slug_length(
+    template_dir: Path, tmp_path: Path, slug: str
+) -> None:
+    """`cargo fmt --all --check` wraps a chain or a string literal differently depending on the
+    project's name length: the rendered files must stay within rustfmt's default width (100)
+    whatever the slug, with no trailing whitespace and no tab, for the check to accept them.
+    This test does not run cargo (the gate never does); the controller re-runs rustfmt on the
+    host afterwards."""
+    dest = render(_project(template_dir, tmp_path / slug, slug=slug, stack=Stack.RUST))
+    for relative in ("tests/smoke.rs", "src/main.rs"):
+        text = (dest / relative).read_text()
+        for line in text.splitlines():
+            assert len(line) <= 100, f"{relative}: line too long for rustfmt: {line!r}"
+            assert line == line.rstrip(), f"{relative}: trailing whitespace: {line!r}"
+            assert "\t" not in line, f"{relative}: tab: {line!r}"
+
+
 def _answered(repo: Path, *, stack: str, tier: str = "dev", manifest: str | None = None) -> Path:
     """A scaffolded-looking tree: answers file and rail.yaml, no template behind it."""
     repo.mkdir(parents=True)
