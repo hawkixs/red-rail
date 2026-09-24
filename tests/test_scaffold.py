@@ -21,6 +21,7 @@ from rail.ledger.file import FileLedger
 from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 from rail.remotes import RemoteError
 from rail.scaffold import ANSWERS_FILE, NewProject, ScaffoldError, new_project, render, upgrade
+from tests.addresses import _foreign
 from tests.fake_brain import FakeBrain
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1015,3 +1016,86 @@ def test_every_stack_chain_names_every_stack() -> None:
             missing = [s.value for s in Stack if f"stack == '{s.value}'" not in body]
             assert not missing, f"{source}, chain {name!r}: no branch for {missing}"
             assert not _ELSE.search(body), f"{source}, chain {name!r}: a catch-all else"
+
+
+ROUTES = frozenset({"/healthz", "/version", "/metrics"})  # the service's HTTP routes
+# Every skill or slash-command a rendered guidance file may name. Empty since decision 6: the
+# root is the pointer. Adding a name is a reviewed line (decision 14).
+CITABLE: frozenset[str] = frozenset()
+STALE = (
+    "sdd-brainstorm",
+    "writing-plans-parallel",
+    "executing-plans-parallel",
+    "/tdd-write-tests",
+    "/reflexion-reflect",
+    "/code-review-review-local-changes",
+)
+_CODE_SPAN = re.compile(r"`([^`\n]+)`")
+_SLASH_COMMAND = re.compile(r"^/[a-z][a-z0-9-]*$")
+_NAMESPACED_SKILL = re.compile(r"^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$")
+_BARE_SKILL = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)+$")
+
+
+def _cited_skills(text: str, *, own: set[str]) -> set[str]:
+    """Every whole code span shaped like a skill or a slash-command (decision 14), minus the
+    service's routes and what a render legitimately carries: its slug, its brain key and the
+    deploy targets."""
+    ignored = ROUTES | own | {target.value for target in DeployTarget}
+    return {
+        token
+        for token in _CODE_SPAN.findall(text)
+        if token not in ignored
+        and (
+            _SLASH_COMMAND.match(token)
+            or _NAMESPACED_SKILL.match(token)
+            or _BARE_SKILL.match(token)
+        )
+    }
+
+
+def test_skill_extraction_reads_whole_code_spans_only() -> None:
+    """Decision 14's extraction: anchored on whole code spans, so a git URL or a `gates:`
+    key never reads as a skill, and the routes, the slug and the targets are not citations."""
+    text = (
+        "Run `gitnexus-lfg`, then `/red-review` and `superpowers:brainstorming`. Not "
+        "`git@github.com:hawkixs/red-probe.git`, `gates: hygiene.mirror_host`, `rail check`, "
+        "`/healthz`, `red-probe`, `vps-traefik`, `rail.yaml` or `brain_learn`."
+    )
+    assert _cited_skills(text, own={"red-probe"}) == {
+        "gitnexus-lfg",
+        "/red-review",
+        "superpowers:brainstorming",
+    }
+
+
+@pytest.mark.parametrize("combo", COMBOS, ids=[c.label for c in COMBOS])
+def test_rendered_guidance_cites_only_allowed_skills(
+    renders: dict[Combo, Path], combo: Combo
+) -> None:
+    """A skill list rots, and the template's did: the root is the pointer, so a rendered
+    guidance file names no skill outside `CITABLE`, and none of the six stale names survives
+    anywhere in the tree (decision 14)."""
+    dest = renders[combo]
+    for name in GUIDANCE:
+        cited = _cited_skills((dest / name).read_text(), own={"red-probe", combo.brain_key})
+        assert cited <= CITABLE, f"{name} cites {sorted(cited - CITABLE)}"
+    for path in (p for p in dest.rglob("*") if p.is_file()):
+        text = path.read_bytes().decode("utf-8", errors="replace")
+        assert not [s for s in STALE if s in text], path.relative_to(dest)
+    if combo.stack is Stack.PYTHON and combo.tier is Tier.PROD:
+        claude = (dest / "CLAUDE.md").read_text()
+        assert all(f"`{route}`" in claude for route in ROUTES)  # the exclusion is exercised
+
+
+def test_rendered_files_carry_no_address_literal(renders: dict[Combo, Path]) -> None:
+    """The template adds no address of its own: what reaches a render is the typed
+    healthcheck (a documentation range here) and the service's loopback and wildcard, under
+    the repository's one policy (decision 15)."""
+    offenders = []
+    for combo, dest in renders.items():
+        for path in sorted(p for p in dest.rglob("*") if p.is_file()):
+            if _foreign(path.read_bytes().decode("utf-8", errors="replace")):
+                offenders.append(f"{combo.label}/{path.relative_to(dest)}")
+    assert not offenders, "address literals in rendered files: " + ", ".join(offenders)
+    private = [d for c, d in renders.items() if c.target == DeployTarget.PRIVATE_COMPOSE]
+    assert private and all("192.0.2.10" in (d / "rail.yaml").read_text() for d in private)
