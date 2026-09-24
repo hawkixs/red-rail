@@ -1294,3 +1294,151 @@ def test_render_rust_bootstrap(template_dir: Path, tmp_path: Path) -> None:
     )
     locked = _dry_run(dest, "sync", "LOCKED=--locked")
     assert any(line.startswith("cargo fetch --locked") for line in locked)
+
+
+def _answered(repo: Path, *, stack: str, tier: str = "dev", manifest: str | None = None) -> Path:
+    """A scaffolded-looking tree: answers file and rail.yaml, no template behind it."""
+    repo.mkdir(parents=True)
+    (repo / ANSWERS_FILE).write_text(
+        "_commit: v0.5.0\n_src_path: git@github.com:hawkixs/red-rail.git\n"
+        f"stack: {stack}\ntier: {tier}\nrail_ref: {'a' * 40}\n"
+    )
+    body = (
+        manifest
+        if manifest is not None
+        else (f"rail: 1\nproject: red-life\nbrain_key: red-life\ntier: {tier}\nstack: {stack}\n")
+    )
+    (repo / "rail.yaml").write_text(body)
+    return repo
+
+
+def _never(*args: object, **kwargs: object) -> None:
+    raise AssertionError("copier update must not run")
+
+
+@pytest.mark.parametrize(
+    ("current", "target", "tier", "message"),
+    [
+        ("python", Stack.GO, "dev", "only out of docs"),
+        ("go", Stack.RUST, "dev", "only out of docs"),
+        ("rust", Stack.DOCS, "dev", "cannot switch to docs"),
+        ("docs", Stack.DOCS, "dev", "cannot switch to docs"),
+        ("docs", Stack.RUST, "prod", "rust at tier prod is not templated yet"),
+    ],
+    ids=["python-go", "go-rust", "rust-docs", "docs-docs", "docs-rust-at-prod"],
+)
+def test_upgrade_refuses_a_transition_not_from_docs(
+    tmp_path: Path, current: str, target: Stack, tier: str, message: str
+) -> None:
+    repo = _answered(tmp_path / "red-life", stack=current, tier=tier)
+    before = {p.name: p.read_text() for p in repo.iterdir()}
+    with pytest.raises(ScaffoldError, match=message):
+        upgrade(repo, stack=target, update=_never, resolve=lambda t, **k: "c" * 40)
+    assert {p.name: p.read_text() for p in repo.iterdir()} == before
+
+
+def test_upgrade_refuses_answers_holding_rust_at_prod(tmp_path: Path) -> None:
+    """Copier would drop the invalid answer and, under defaults, re-render the project as python:
+    refused with or without --stack."""
+    repo = _answered(tmp_path / "red-life", stack="rust", tier="prod")
+    with pytest.raises(ScaffoldError, match="rust at tier prod"):
+        upgrade(repo, update=_never, resolve=lambda t, **k: "c" * 40)
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ("rail: 1\nproject: red-life\nbrain_key: red-life\ntier: dev\nstack: python\n", "disagree"),
+        (None, "rail.yaml"),
+        ("rail: 1\n<<<<<<< ours\nstack: docs\n", "rail.yaml"),
+    ],
+    ids=["disagree", "missing", "unparsable"],
+)
+def test_upgrade_refuses_when_answers_and_manifest_disagree(
+    tmp_path: Path, manifest: str | None, message: str
+) -> None:
+    repo = _answered(tmp_path / "red-life", stack="docs", manifest=manifest or "")
+    if manifest is None:
+        (repo / "rail.yaml").unlink()
+    with pytest.raises(ScaffoldError, match=message):
+        upgrade(repo, stack=Stack.RUST, update=_never, resolve=lambda t, **k: "c" * 40)
+
+
+def test_upgrade_fails_when_rail_yaml_does_not_follow(tmp_path: Path) -> None:
+    repo = _answered(tmp_path / "red-life", stack="docs")
+    seen: dict[str, object] = {}
+
+    def update(dest: Path, **kwargs: object) -> None:  # copier ran, rail.yaml kept `docs`
+        seen.update(kwargs)
+
+    with pytest.raises(ScaffoldError, match="copier did not carry `stack` into rail.yaml"):
+        upgrade(repo, stack=Stack.RUST, update=update, resolve=lambda t, **k: "c" * 40)
+    assert seen["data"] == {"rail_ref": "c" * 40, "stack": "rust"}
+
+
+def _tagged_template(template_dir: Path, tag: str) -> None:
+    if not (template_dir / ".git").exists():
+        subprocess.run(["git", "init", "-q", "-b", "main", str(template_dir)], check=True)
+    subprocess.run([*GIT, "-C", str(template_dir), "add", "-A"], check=True)
+    subprocess.run(
+        [*GIT, "-C", str(template_dir), "commit", "-q", "--allow-empty", "-m", f"chore: {tag}"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(template_dir), "tag", tag], check=True)
+
+
+def test_upgrade_switches_docs_to_rust(template_dir: Path, tmp_path: Path) -> None:
+    """Real copier on a tagged throwaway template: the answer, rail.yaml and the CI call all say
+    rust afterwards, and the rust files exist. rail.yaml is written by copier's merge alone."""
+    _tagged_template(template_dir, "v0.1.0")
+    project = _project(
+        template_dir,
+        tmp_path / "red-life",
+        slug="red-life",
+        stack=Stack.DOCS,
+        tier=Tier.DEV,
+        template_ref="v0.1.0",
+    )
+    new_project(project, publish=False, clock=CLOCK, resolve=_pin)
+    _tagged_template(template_dir, "v0.2.0")
+
+    upgrade(project.dest, stack=Stack.RUST, resolve=_pin)
+
+    dest = project.dest
+    assert "stack: rust" in (dest / ANSWERS_FILE).read_text()
+    assert "stack: rust" in (dest / "rail.yaml").read_text()
+    ci = dest / ".github" / "workflows" / "continuous-integration.yml"
+    assert "stack: rust" in ci.read_text()
+    assert (dest / "Cargo.toml").is_file() and (dest / "rust-toolchain.toml").is_file()
+
+
+def test_upgrade_to_rust_refuses_a_dirty_tree(template_dir: Path, tmp_path: Path) -> None:
+    """Uncommitted changes: copier refuses, and nothing is half-written (Review Focus 4)."""
+    _tagged_template(template_dir, "v0.1.0")
+    project = _project(
+        template_dir,
+        tmp_path / "red-life",
+        slug="red-life",
+        stack=Stack.DOCS,
+        tier=Tier.DEV,
+        template_ref="v0.1.0",
+    )
+    new_project(project, publish=False, clock=CLOCK, resolve=_pin)
+    _tagged_template(template_dir, "v0.2.0")
+    (project.dest / "README.md").write_text("an uncommitted edit\n")
+
+    with pytest.raises(ScaffoldError):  # wrapped from copier's own "dirty" refusal
+        upgrade(project.dest, stack=Stack.RUST, resolve=_pin)
+    assert not (project.dest / "Cargo.toml").exists()
+    assert "stack: docs" in (project.dest / "rail.yaml").read_text()
+
+
+def test_cli_upgrade_takes_a_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "rail.commands.upgrade.upgrade", lambda repo, **kw: calls.append(kw) or "v0.6.0"
+    )
+    result = CliRunner().invoke(main, ["upgrade", "--repo", str(tmp_path), "--stack", "rust"])
+    assert result.exit_code == 0, result.output
+    assert calls == [{"stack": Stack.RUST}]
+    assert "make sync" in result.output

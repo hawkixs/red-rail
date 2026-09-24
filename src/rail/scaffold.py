@@ -329,9 +329,45 @@ def protected_checks(project: NewProject) -> list[tuple[str, str]]:
     return [(check.name, check.app_slug or "") for check in checks]
 
 
+def _manifest(repo: Path) -> dict[str, Any] | str:
+    """rail.yaml as a mapping, or why it cannot be read: the switch never guesses a stack."""
+    path = repo / "rail.yaml"
+    try:
+        data = yaml.safe_load(path.read_text())
+    except FileNotFoundError:
+        return "rail.yaml is missing"
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        return f"rail.yaml does not parse: {exc}"
+    return data if isinstance(data, dict) else "rail.yaml is not a mapping"
+
+
+def _switchable(answers: dict[str, Any], repo: Path, stack: Stack) -> None:
+    """Refuse, before copier, any switch but one out of docs (spec 2026-09-24-rust-stack,
+    decision 13): python→go or go→rust leaves build files only a diff review would catch."""
+    manifest = _manifest(repo)
+    if isinstance(manifest, str):
+        raise ScaffoldError(f"{manifest}: the stack switch reads it before copier runs")
+    current, declared = answers.get("stack"), manifest.get("stack")
+    if current != declared:
+        raise ScaffoldError(
+            f"{ANSWERS_FILE} says stack {current} but rail.yaml says {declared}: the two "
+            "disagree, reconcile them before switching"
+        )
+    if stack is Stack.DOCS:
+        raise ScaffoldError("a project cannot switch to docs: that transition is not templated")
+    if current != Stack.DOCS.value:
+        raise ScaffoldError(
+            f"--stack switches only out of docs (this project is {current}): python↔go and "
+            "go→rust leave build files only a diff review would catch"
+        )
+    if stack is Stack.RUST and manifest.get("tier") == Tier.PROD.value:
+        raise ScaffoldError(RUST_PROD_REFUSAL)
+
+
 def upgrade(
     repo: Path,
     *,
+    stack: Stack | None = None,
     update: Callable[..., Any] = copier.run_update,
     resolve: Callable[..., str] = resolve_rail_ref,
 ) -> str:
@@ -339,7 +375,8 @@ def upgrade(
 
     Re-resolves the CI workflow pin at the same time, so a gate change reaches a repository
     as a reviewable line in this command's diff rather than as an effect of `@main` moving
-    under it."""
+    under it. With `stack`, the project leaves `docs` for that stack: copier takes the new
+    answer, and its three-way merge is the only writer of rail.yaml."""
     answers = repo / ANSWERS_FILE
     if not answers.is_file():
         raise ScaffoldError(f"{ANSWERS_FILE} missing: not scaffolded by copier")
@@ -349,13 +386,30 @@ def upgrade(
             f"{ANSWERS_FILE} has no _src_path/_commit: the template was not versioned; "
             "re-scaffold from a tagged red-rail before upgrading"
         )
-    update(
-        repo,
-        data={"rail_ref": resolve(str(data["_src_path"]))},
-        defaults=True,
-        overwrite=True,
-        skip_answered=True,
-        quiet=True,
-        unsafe=False,
-    )
+    if data.get("stack") == Stack.RUST.value and data.get("tier") == Tier.PROD.value:
+        # copier would drop this answer as invalid and, under defaults, re-render as python
+        raise ScaffoldError(f"{ANSWERS_FILE} holds stack rust at tier prod: {RUST_PROD_REFUSAL}")
+    if stack is not None:
+        _switchable(data, repo, stack)
+    answers_to_give: dict[str, Any] = {"rail_ref": resolve(str(data["_src_path"]))}
+    if stack is not None:
+        answers_to_give["stack"] = stack.value
+    try:
+        update(
+            repo,
+            data=answers_to_give,
+            defaults=True,
+            overwrite=True,
+            skip_answered=True,
+            quiet=True,
+            unsafe=False,
+        )
+    except Exception as exc:  # copier raises its own hierarchy; the CLI needs one error type
+        raise ScaffoldError(f"copier could not update {repo}: {exc}") from exc
+    if stack is not None:
+        manifest = _manifest(repo)
+        if isinstance(manifest, str) or manifest.get("stack") != stack.value:
+            raise ScaffoldError(
+                f"copier did not carry `stack` into rail.yaml: resolve it to `stack: {stack.value}`"
+            )
     return str((yaml.safe_load(answers.read_text()) or {}).get("_commit", ""))
