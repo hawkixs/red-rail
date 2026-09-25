@@ -171,6 +171,10 @@ class FileLedger:
                 text = path.read_text()
             except FileNotFoundError:
                 continue
+            except (OSError, ValueError) as exc:
+                # UnicodeDecodeError is a ValueError; any other read failure (permission, a
+                # directory named `*.json`) stays fail-closed, unlike a vanished file
+                raise LedgerError(f"unreadable receipt {path.name}: {exc}") from exc
             record = load_receipt(path, text=text)
             if not record.verify():
                 raise LedgerError(

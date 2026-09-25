@@ -148,6 +148,15 @@ def test_a_receipt_removed_mid_listing_is_skipped(
     assert [r.digest for r in records] == [kept.digest]
 
 
+def test_a_receipt_that_cannot_be_read_is_still_a_ledgererror(tmp_path: Path) -> None:
+    """Only a vanished receipt (`FileNotFoundError`) is a routine race. Any other read
+    failure — a directory named `*.json` (`IsADirectoryError`), a permission error, a bad
+    encoding (`UnicodeDecodeError`, a `ValueError`) — must stay fail-closed."""
+    (tmp_path / "bad.json").mkdir()
+    with pytest.raises(LedgerError, match="bad.json"):
+        FileLedger(tmp_path).list(None)
+
+
 def test_open_ledger_reads_the_manifest(tmp_path: Path) -> None:
     (tmp_path / "rail.yaml").write_text(MANIFEST)
     ledger = open_ledger(tmp_path)
