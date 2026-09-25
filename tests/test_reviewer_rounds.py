@@ -436,6 +436,14 @@ def test_a_mechanical_finding_never_opens_a_carry_forward_of_its_own() -> None: 
     assert rounds.open_carry_forwards(verdicts, rulings, repository=REPO) == ["CF-5-1"]
 
 
+def test_confirmed_addressed_remembers_an_earlier_confirmation() -> None:  # I1
+    confirmed = verdict(1, 1, [], carry={"addressed": ["CF-5-1"], "deferred": []})
+    state = rounds.loop_state([confirmed], [])
+    claimed = ["CF-5-1", "CF-5-2", "CF-5-3"]
+    assert rounds.confirmed_addressed(state, claimed, {"CF-5-2": "fixed"}) == ["CF-5-1", "CF-5-2"]
+    assert rounds.confirmed_addressed(state, claimed, {"CF-5-1": "still_open"}) == []
+
+
 def test_open_carry_forwards_across_pull_requests() -> None:
     spec_pr = verdict(
         1,

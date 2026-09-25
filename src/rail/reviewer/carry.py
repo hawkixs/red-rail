@@ -20,6 +20,8 @@ _LINE = re.compile(
 )
 _FENCE = re.compile(r"^(```|~~~)")
 WHERE = "(pull request description)"
+# where a JUDGE's finding on the description is filed: never mistaken for a mechanical one
+JUDGE_WHERE = "(pull request description — judge)"
 _NOT_ADDRESSED = " not addressed"
 
 

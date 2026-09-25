@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -41,6 +41,8 @@ class LoopState:
     rulings: dict[str, Ruling]
     awaiting: bool
     has_findings_list: bool
+    # every carry-forward an earlier judged verdict of this pull request recorded as addressed
+    confirmed: frozenset[str] = frozenset()
 
 
 def cf_id(finding_id: str) -> str:
@@ -102,7 +104,21 @@ def loop_state(verdicts: Sequence[Record], rulings: Sequence[Record]) -> LoopSta
         rulings=ruled,
         awaiting=awaiting,
         has_findings_list=has_list,
+        confirmed=frozenset(i for v in judging for i in carry_forwards_of(v).addressed),
     )
+
+
+def confirmed_addressed(
+    state: LoopState, claimed: Sequence[str], answers: Mapping[str, str]
+) -> list[str]:
+    """The claimed carry-forwards a judge confirmed (Ruling 30): this judge answered "fixed",
+    or an earlier judged verdict of this pull request recorded it as addressed and no judge now
+    answers "still_open". A confirmation is not lost because a later judge was silent on it."""
+    return [
+        i
+        for i in claimed
+        if answers.get(i) == "fixed" or (i in state.confirmed and answers.get(i) != "still_open")
+    ]
 
 
 def open_blockers(state: LoopState) -> list[Finding]:

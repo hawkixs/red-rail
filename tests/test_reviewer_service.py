@@ -1994,3 +1994,39 @@ def test_an_outage_does_not_burn_a_round(tmp_path) -> None:  # I3
         down = _pass(ledger, head, _dead)
         assert (down.verdict.round, down.verdict.verdict) == ("no_verdict", "request_changes")
     assert _pass(ledger, "e", _judge_saying(decision="approve")).verdict.round == 2
+
+
+# --- final review: carry-forward confirmation, judge-minted findings (I1, I2) -------------
+
+
+def test_a_confirmed_carry_forward_stays_confirmed_while_no_judge_reopens_it(tmp_path) -> None:
+    # I1 (Ruling 30)
+    repo, ledger = _repo(tmp_path)
+    _spec_carry_forward(ledger)
+    bug = Finding(severity="blocking", file="src/x.py", line=1, title="bug", evidence="e")
+    first = _pass(
+        ledger,
+        "b",
+        _judge_saying(reply_findings=[bug], previous=[PreviousAnswer(id="CF-5-1", status="fixed")]),
+        body=CF_ADDRESSED,
+    )
+    assert first.verdict.carry_forwards.addressed == ("CF-5-1",)
+    fixed = PreviousAnswer(id="F-7-1", status="fixed")
+    second = _pass(
+        ledger, "c", _judge_saying(decision="approve", previous=[fixed]), body=CF_ADDRESSED
+    )
+    assert second.verdict.verdict == "approve"
+    assert second.verdict.carry_forwards.addressed == ("CF-5-1",)
+    assert not [f for f in second.verdict.findings if f.title.endswith("not addressed")]
+
+
+def test_a_judge_finding_on_the_description_is_judged_not_mechanical(tmp_path) -> None:  # I2
+    repo, ledger = _repo(tmp_path)
+    claim = Finding(
+        severity="blocking", file="(pull request description)", title="untrue", evidence="e"
+    )
+    first = _pass(ledger, "b", _judge_saying(reply_findings=[claim]))
+    assert first.verdict.findings[0].file == "(pull request description — judge)"
+    second = _pass(ledger, "c", _judge_saying(decision="approve"))
+    assert second.verdict.verdict == "request_changes"
+    assert [(f.title, f.status) for f in second.verdict.findings] == [("untrue", "still_open")]

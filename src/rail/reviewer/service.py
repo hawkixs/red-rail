@@ -536,7 +536,15 @@ def _finish(
         state, findings=tuple(f for f in state.findings if not carry.is_mechanical(f))
     )
     known = {f.id for f in judged_state.findings if f.id}
-    new = [rounds.enforce_class(f, artifact) for f in merged.findings]
+    # I2 (Ruling 31): a judge's finding on the description is judged like any other, so it
+    # must not carry the mechanical location, or `reconcile` would close it the next round
+    new = [
+        rounds.enforce_class(
+            f.model_copy(update={"file": carry.JUDGE_WHERE}) if carry.is_mechanical(f) else f,
+            artifact,
+        )
+        for f in merged.findings
+    ]
     # C2 (Ruling 12): a new id is numbered above the highest id ANY finding of this pull
     # request holds, mechanical carry-forward blockers included, not only `judged_state`'s —
     # otherwise a fresh judged finding can collide with a mechanical one from an earlier round.
@@ -568,7 +576,7 @@ def _finish(
     if artifact == "code":
         answers = {a.id: a.status for a in merged.previous}
         claimed = carry.addressed(cf_open, section)
-        confirmed = [i for i in claimed if answers.get(i) == "fixed"]
+        confirmed = rounds.confirmed_addressed(state, claimed, answers)
         current = carry.mechanical_blockers(cf_open, section) + [
             carry.not_addressed(i) for i in claimed if i not in confirmed
         ]
@@ -627,16 +635,14 @@ def _mechanical_recomputed(
     (Ruling 14, Ruling 16).
 
     A body claim of "addressed" is not enough on its own (Ruling 18): with no judge running
-    here, the only confirmation on record is `last_judged`'s own `carry_forwards.addressed` —
-    an id the body claims but that record never confirmed keeps its "not addressed" blocker
-    open, the same shape `_finish` builds when a judge is the one checking."""
+    here, the only confirmation on record is an earlier judged verdict's
+    `carry_forwards.addressed` (Ruling 30) — an id the body claims but no such record confirmed
+    keeps its "not addressed" blocker open, the same shape `_finish` builds when a judge is the
+    one checking."""
     if artifact != "code":
         return list(findings)
-    last_judged = state.last_judged
     claimed = carry.addressed(cf_open, section)
-    confirmed = set(
-        rounds.carry_forwards_of(last_judged).addressed if last_judged is not None else ()
-    )
+    confirmed = rounds.confirmed_addressed(state, claimed, {})
     current = carry.mechanical_blockers(cf_open, section) + [
         carry.not_addressed(i) for i in claimed if i not in confirmed
     ]
