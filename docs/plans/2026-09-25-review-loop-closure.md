@@ -1,5 +1,21 @@
 # Review Loops That Close — Implementation Plan
 
+> **Superseded where it differs.** This plan was written before the spec's
+> `## Amendments (2026-09-25)` and the rulings made during execution. Where the two disagree, the
+> spec's amendments and those rulings are authoritative, and the code implements them. The tasks
+> below are kept as written, as the record of the plan that was executed:
+>
+> 1. The moved-head closure is judged on the delta, and a new blocker inside it blocks (Q82,
+>    amends D9/D10).
+> 2. No delta means the whole pull request diff counts as the delta (Q84, amends D5/D10) — this
+>    replaces Review Focus 2 and `demote_outside` below wherever they assume otherwise.
+> 3. A pass where every judge failed is recorded as round `no_verdict`, which moves neither the
+>    round counter nor the rulings' cutoff (amends D5).
+> 4. Body-derived carry-forward blockers ("not accounted for", "deferred without a reason") never
+>    need a ruling; the author clears them by editing the pull request body (resolves D9/D11).
+> 5. A `carry_forward` ruling on a "CF-x not addressed" blocker defers CF-x; a `carry_forward`
+>    ruling opens a carry-forward only once its pull request is approved (amends D11).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
