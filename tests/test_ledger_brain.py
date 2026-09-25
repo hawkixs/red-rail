@@ -265,6 +265,48 @@ def test_a_key_brain_holds_with_another_payload_is_a_conflict_that_leaves_the_sp
     assert ledger.pending() == []
 
 
+def test_row_by_key_filters_by_issuer_project_too(tmp_path: Path) -> None:
+    """The contract accepts `issuer_project` as a filter next to `ticket_id` (M1): pass it so
+    brain narrows its own scan, instead of relying only on the local check once the page comes
+    back."""
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    seen: list[dict] = []
+    original = ledger.client.call
+
+    def spy(name, arguments, *, agent=None):
+        if name == "brain_delivery_attestation_list":
+            seen.append(dict(arguments))
+        return original(name, arguments, agent=agent)
+
+    ledger.client.call = spy
+    ledger._row_by_key(AttestationKind.RELEASED, "r1")
+    assert seen and seen[0]["issuer_project"] == "red-probe"
+
+
+def test_settle_leaves_the_receipt_when_the_row_cannot_be_rebuilt(tmp_path: Path) -> None:
+    """A row brain returns that `record_from_row` cannot rebuild (an unknown kind) must never
+    cost the receipt (M2): the unlink happens only after the row is confirmed rebuildable."""
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    brain.enabled = False
+    with pytest.raises(Unattested) as exc:
+        ledger.attest(
+            "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+        )
+    brain.enabled = True
+    receipt = exc.value.receipt
+    record = load_receipt(receipt)
+    bad_row = {"kind": "not_a_real_kind", "digest": brain_digest(RELEASE), "id": "x"}
+    with pytest.raises(LedgerError, match="unknown kind"):
+        ledger._settle(record, receipt, bad_row)
+    assert receipt.is_file()
+
+
 def test_pending_is_oldest_first_and_replay_says_what_happened(tmp_path: Path) -> None:
     ledger, brain, _ = _ledger(tmp_path)
     ledger.contract_set(

@@ -118,6 +118,36 @@ def test_a_malformed_receipt_is_a_broken_ledger(tmp_path: Path) -> None:
         FileLedger(tmp_path).list("red-probe")
 
 
+def test_a_receipt_removed_mid_listing_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The spool drains on every successful attest, replay and `--from`: a receipt can vanish
+    between `glob` and the read. That is a routine race, not corruption — `list()` skips the
+    vanished receipt and still returns the others (I1)."""
+    ledger = FileLedger(tmp_path, clock=_clock())
+    gone = ledger.attest(
+        "red-probe", AttestationKind.DEPLOYED, {"sha": "b" * 40}, issuer="op", idempotency_key="d1"
+    )
+    kept = ledger.attest(
+        "red-probe",
+        AttestationKind.RELEASED,
+        {"version": "1.0.0"},
+        issuer="op",
+        idempotency_key="r1",
+    )
+    gone_path = tmp_path / receipt_filename(gone)
+    original_read_text = Path.read_text
+
+    def flaky_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self == gone_path:
+            gone_path.unlink()
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read_text)
+    records = ledger.list("red-probe")
+    assert [r.digest for r in records] == [kept.digest]
+
+
 def test_open_ledger_reads_the_manifest(tmp_path: Path) -> None:
     (tmp_path / "rail.yaml").write_text(MANIFEST)
     ledger = open_ledger(tmp_path)

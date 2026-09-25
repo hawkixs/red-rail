@@ -501,3 +501,22 @@ def test_mirrors_fails_closed_on_a_tampered_spool_receipt(
     path.write_text(path.read_text().replace("a" * 40, "b" * 40))
     result = hygiene.mirrors(repo)
     assert not result.passed and path.name in result.details
+
+
+def test_mirrors_fails_closed_when_the_spool_path_cannot_be_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`spool_directory` calls `Path.expanduser()`, which raises `RuntimeError` when no home
+    directory can be found (M4): the gate reports it, it never raises."""
+    from rail.gates import hygiene
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    _brain_manifest(repo)
+    monkeypatch.setattr(hygiene, "open_ledger", lambda repo: _EmptyShared())
+
+    def boom(project: str) -> Path:
+        raise RuntimeError("could not determine home directory")
+
+    monkeypatch.setattr(hygiene, "spool_directory", boom)
+    result = hygiene.mirrors(repo)
+    assert not result.passed and "spool:" in result.details

@@ -12,7 +12,7 @@ from rail.commands import attest as attest_command
 from rail.commands import ledger as ledger_command
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable, RecordKind, Unattested
 from rail.ledger.brain import BrainLedger
-from rail.ledger.file import FileLedger, load_receipt
+from rail.ledger.file import FileLedger, load_receipt, receipt_filename
 from rail.ledger.spool import spool_directory
 from tests.fake_brain import FakeBrain
 from tests.helpers import conforming_tree, git
@@ -727,3 +727,25 @@ def test_attest_from_a_spooled_receipt_records_it_and_drains_it(
     )
     assert out.exit_code == 0 and "recorded in brain" in out.output
     assert not receipt.exists() and not list((repo / RECEIPTS_DIR).glob("*-deployed-*.json"))
+
+
+def test_attest_from_a_receipt_outside_the_spool_records_it_and_leaves_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec decision 3, second sentence: a `FILE` outside the spool, such as a committed
+    receipt, is replayed and left where it is — only the matching spool file (there is none
+    here) would be removed."""
+    repo, ledger, brain = _brain_repo(tmp_path)
+    monkeypatch.setattr(attest_command, "open_ledger", lambda repo: ledger)
+    elsewhere = tmp_path / "elsewhere"
+    source = FileLedger(elsewhere).attest(
+        "red-probe", AttestationKind.DEPLOYED, {"sha": "c" * 40}, issuer="op", idempotency_key="d2"
+    )
+    receipt = elsewhere / receipt_filename(source)
+    out = CliRunner().invoke(
+        main, ["attest", "deployed", "--repo", str(repo), "--from", str(receipt)]
+    )
+    assert out.exit_code == 0 and "recorded in brain" in out.output
+    assert receipt.is_file()
+    assert ledger.pending() == []
+    assert source.digest in receipt.read_text()

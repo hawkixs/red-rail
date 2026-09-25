@@ -353,12 +353,14 @@ class BrainLedger:
             arguments: dict[str, Any] = {
                 "actor_project": self.project,
                 "ticket_id": str(self.ticket),
+                "issuer_project": self.project,
                 "kind": kind.value,
                 "limit": PAGE,
                 "cursor": cursor,
             }
             page = self._call("brain_delivery_attestation_list", arguments)
             for row in page.get("items", []):
+                # the contract already filters by issuer_project; the local check is a defence
                 if row.get("idempotency_key") == key and row.get("issuer_project") == self.project:
                     return row
             cursor = page.get("next_cursor")
@@ -366,10 +368,15 @@ class BrainLedger:
                 return None
 
     def _settle(self, record: Record, receipt: Path, row: dict[str, Any]) -> Record:
-        """Brain holds this key already (spec decision 2, step 5). Its replay equality also
+        """Brain holds this key already (spec decision 2, step 5). `record_from_row` is built
+        first: a row that cannot be rebuilt (an unknown kind) raises before the receipt is
+        touched, so it never costs the receipt. Once the row rebuilds, its replay equality also
         compares the instant, the issuer label and the contract revision, so only the payload
         digest decides: the same payload is recorded; another can never be. Either way the
-        receipt leaves the spool, so it never holds `hygiene.mirrors` red forever."""
+        receipt then leaves the spool, so it never holds `hygiene.mirrors` red forever."""
+        settled = record_from_row(self.project, row)
+        if settled is None:
+            raise LedgerError(f"brain row {row.get('id')}: unknown kind {row.get('kind')!r}")
         receipt.unlink(missing_ok=True)
         ours = brain_digest(record.data)
         if str(row["digest"]) != ours:
@@ -377,9 +384,6 @@ class BrainLedger:
                 f"brain holds {record.idempotency_key!r} with payload digest {row['digest']}; "
                 f"this attestation's is {ours}: it cannot be recorded and left the spool"
             )
-        settled = record_from_row(self.project, row)
-        if settled is None:
-            raise LedgerError(f"brain row {row.get('id')}: unknown kind {row.get('kind')!r}")
         return settled
 
     def _view(self, *, required: bool) -> dict[str, Any] | None:

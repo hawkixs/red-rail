@@ -377,7 +377,7 @@ def mirrors(repo: Path) -> GateResult:
         waiting = FileLedger(spool_directory(cfg.project)).list(
             cfg.project, kind=RecordKind.ATTESTATION
         )
-    except LedgerError as exc:
+    except (LedgerError, RuntimeError) as exc:
         return GateResult(Stage.HYGIENE, "mirrors", False, f"spool: {exc}")
     if waiting:
         since = waiting[0].recorded_at.strftime("%Y-%m-%dT%H:%M:%SZ")
