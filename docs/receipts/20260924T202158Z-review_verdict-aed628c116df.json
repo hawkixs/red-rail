@@ -1,0 +1,27 @@
+{
+  "digest": "sha256:aed628c116df0d77591ae449da5f62e917d47fdbf414a35f1bd41c2d9c2dcdd0",
+  "idempotency_key": "review_verdict:3598051a06efc3c2996f5aa623a9b68eb33e9e3b:107817272752",
+  "issuer": "red-rail-reviewer",
+  "kind": "attestation",
+  "payload": {
+    "data": {
+      "blocking": false,
+      "check_run_id": 107817272752,
+      "diff_truncated": false,
+      "findings": 0,
+      "independent": true,
+      "mode": "light",
+      "pr": 52,
+      "providers": [
+        "agy"
+      ],
+      "repository": "hawkixs/red-rail",
+      "sha": "3598051a06efc3c2996f5aa623a9b68eb33e9e3b",
+      "verdict": "approve"
+    },
+    "kind": "review_verdict"
+  },
+  "project": "red-rail",
+  "recorded_at": "2026-09-24T20:21:58.123985Z",
+  "schema_version": 1
+}
