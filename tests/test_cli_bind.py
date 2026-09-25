@@ -88,7 +88,7 @@ def test_bind_on_the_brain_ledger_reads_the_view_first(
         BrainClient.in_memory(brain, agent="operator"),
         ticket=ticket,
         project="red-probe",
-        receipts_dir=repo / RECEIPTS_DIR,
+        spool_dir=repo / RECEIPTS_DIR,
         clock=_clock(),
         repository_id=lambda slug: 4242,
     )

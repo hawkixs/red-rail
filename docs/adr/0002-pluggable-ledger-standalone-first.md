@@ -87,3 +87,25 @@ both sides. red-rail is never hosted inside brain-v42.
   `X-Brain-Tool-Profile: native`, `X-Brain-Agent`. The bearer is read from a private file
   (`RAIL_BRAIN_TOKEN_FILE`, default `~/.config/red-rail/brain-token`, 0600, one line) and from
   nowhere else — the reference client's rule.
+
+## Amendment (2026-09-25): under `ledger: brain`, the mirror is a spool of pending attestations
+
+Spec `docs/specs/2026-09-25-spool-replaces-committed-mirrors.md`, ticket `53e7a7fe`.
+
+- **Mirror first, in the spool.** `attest()` still writes the receipt before calling brain, into
+  `$RAIL_SPOOL_DIR/<project>` (default `~/.local/state/red-rail/spool`): one spool per host and
+  project, never in a repository. The receipt leaves once brain has recorded its payload; a
+  refusal leaves it there for `rail attest --from` or `rail ledger replay`. `contract_set`,
+  `bind` and `accept` write no file: their mirror was a copy made after brain's answer.
+- **The rejected alternative still stands for the file ledger.** "A file ledger outside the
+  repository" was rejected as not shared, lost with the machine and invisible in review. The
+  spool is not a ledger: it holds only what brain has not recorded yet and empties itself.
+- **What is given up.** The committed mirror was an off-host copy of every fact, visible in
+  review. Review could not judge it, and it cost a receipts pull request per milestone (23 % of
+  merged pull requests). Brain now holds the only copy of the facts recorded after the switch;
+  their protection is brain's backup. Receipts committed before stay, and `hygiene.mirrors` still
+  matches them against brain. "Same files, only the authority changes" no longer holds in brain
+  mode.
+- **The file ledger is unchanged**: receipts are committed. A pull request that only adds
+  receipts will get a mechanical verdict instead of a judge (spec decision 5, delivered by the
+  next pull request).

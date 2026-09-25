@@ -119,7 +119,8 @@ What the rail adds on this repository:
   `# rail: ignore`.
 - Evidence is written by the rail only. With `ledger: file` it is the receipts in
   `docs/receipts/`; with `ledger: brain` it is the attestations against the ticket named in
-  `rail.yaml`, the receipts being their mirrors.
+  `rail.yaml`; one brain has not recorded yet waits in the host's spool until
+  `rail ledger replay`.
 - Secrets never enter the tree, an environment variable holding the value, or a command line.
 
 ## Brain MCP — proactive use

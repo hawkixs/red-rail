@@ -6,10 +6,28 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from rail.brain.client import BrainClient
 from rail.cli import main
-from rail.ledger import RECEIPTS_DIR, AttestationKind, RecordKind
-from rail.ledger.file import FileLedger, load_receipt
+from rail.commands import attest as attest_command
+from rail.commands import ledger as ledger_command
+from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable, RecordKind, Unattested
+from rail.ledger.brain import BrainLedger
+from rail.ledger.file import FileLedger, load_receipt, receipt_filename
+from rail.ledger.spool import spool_directory
+from tests.fake_brain import FakeBrain
 from tests.helpers import conforming_tree, git
+
+PROBE = Contract(
+    objective="ship the probe",
+    deliverables=[
+        Deliverable(
+            key="probe",
+            repository="hawkixs/red-probe",
+            repository_id=4242,
+            no_checks_reason="fixture: no check declared",
+        )
+    ],
+)
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -640,3 +658,94 @@ def test_attest_refuses_a_new_review_ruling_and_names_the_command(tmp_path: Path
     )
     assert out.exit_code == 2
     assert "rail reviewer rule" in out.output
+
+
+def _brain_repo(tmp_path: Path) -> tuple[Path, BrainLedger, FakeBrain]:
+    repo = conforming_tree(tmp_path, "red-probe", "dev")
+    manifest = (repo / "rail.yaml").read_text()
+    (repo / "rail.yaml").write_text(
+        manifest.replace(
+            "ledger: file\n", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+        )
+    )
+    brain = FakeBrain(agent="operator")
+    ticket = brain.add_ticket("red", "red-probe")
+    brain.register_repository("red-probe", 4242, "hawkixs/red-probe")
+    ledger = BrainLedger(
+        BrainClient.in_memory(brain, agent="operator"),
+        ticket=ticket,
+        project="red-probe",
+        spool_dir=spool_directory("red-probe"),
+        repository_id=lambda slug: 4242,
+    )
+    ledger.contract_set("red-probe", PROBE, reason="r", issuer="red", idempotency_key="c1")
+    return repo, ledger, brain
+
+
+def _refused(ledger: BrainLedger, brain: FakeBrain) -> Path:
+    brain.enabled = False
+    with pytest.raises(Unattested) as exc:
+        ledger.attest(
+            "red-probe",
+            AttestationKind.DEPLOYED,
+            {"sha": "b" * 40},
+            issuer="op",
+            idempotency_key="d1",
+        )
+    brain.enabled = True
+    return exc.value.receipt
+
+
+def test_ledger_replay_empties_the_spool_and_says_what_happened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, ledger, brain = _brain_repo(tmp_path)
+    monkeypatch.setattr(ledger_command, "open_ledger", lambda repo: ledger)
+    _refused(ledger, brain)
+    brain.enabled = False
+    out = CliRunner().invoke(main, ["ledger", "replay", "--repo", str(repo)])
+    assert out.exit_code == 2 and "unattested: delivery_disabled" in out.output
+    brain.enabled = True
+    out = CliRunner().invoke(main, ["ledger", "replay", "--repo", str(repo)])
+    assert out.exit_code == 0 and "recorded" in out.output and ledger.pending() == []
+
+
+def test_ledger_replay_on_the_file_ledger_has_no_spool(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    out = CliRunner().invoke(main, ["ledger", "replay", "--repo", str(repo)])
+    assert out.exit_code == 0 and "no spool" in out.output
+
+
+def test_attest_from_a_spooled_receipt_records_it_and_drains_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, ledger, brain = _brain_repo(tmp_path)
+    monkeypatch.setattr(attest_command, "open_ledger", lambda repo: ledger)
+    receipt = _refused(ledger, brain)
+    out = CliRunner().invoke(
+        main, ["attest", "deployed", "--repo", str(repo), "--from", str(receipt)]
+    )
+    assert out.exit_code == 0 and "recorded in brain" in out.output
+    assert not receipt.exists() and not list((repo / RECEIPTS_DIR).glob("*-deployed-*.json"))
+
+
+def test_attest_from_a_receipt_outside_the_spool_records_it_and_leaves_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec decision 3, second sentence: a `FILE` outside the spool, such as a committed
+    receipt, is replayed and left where it is — only the matching spool file (there is none
+    here) would be removed."""
+    repo, ledger, brain = _brain_repo(tmp_path)
+    monkeypatch.setattr(attest_command, "open_ledger", lambda repo: ledger)
+    elsewhere = tmp_path / "elsewhere"
+    source = FileLedger(elsewhere).attest(
+        "red-probe", AttestationKind.DEPLOYED, {"sha": "c" * 40}, issuer="op", idempotency_key="d2"
+    )
+    receipt = elsewhere / receipt_filename(source)
+    out = CliRunner().invoke(
+        main, ["attest", "deployed", "--repo", str(repo), "--from", str(receipt)]
+    )
+    assert out.exit_code == 0 and "recorded in brain" in out.output
+    assert receipt.is_file()
+    assert ledger.pending() == []
+    assert source.digest in receipt.read_text()

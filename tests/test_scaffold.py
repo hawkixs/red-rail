@@ -247,8 +247,9 @@ def test_new_project_protects_main_with_the_checks_of_its_tier(
 def test_new_project_protects_main_only_after_its_last_direct_push(
     template_dir: Path, tmp_path: Path
 ) -> None:
-    """On the brain ledger `rail new` pushes to main twice — the bootstrap, then the mirror of
-    the contract. The protection comes after both: from then on main takes pull requests."""
+    """On the brain ledger `rail new` pushes to main once, the bootstrap commit: the contract is
+    set in brain, never committed. The protection comes after that push: from then on main
+    takes pull requests."""
     brain = FakeBrain(agent="rail new")
     ticket = brain.add_ticket("red", "red-probe")
     brain.register_repository("red-probe", 4242, "hawkixs/red-probe")
@@ -272,7 +273,7 @@ def test_new_project_protects_main_only_after_its_last_direct_push(
 
     pushes = [i for i, c in enumerate(calls) if c[:2] == ["git", "push"]]
     protection = next(i for i, c in enumerate(calls) if c[:4] == ["gh", "api", "-X", "PUT"])
-    assert len(pushes) == 2 and protection > max(pushes)
+    assert len(pushes) == 1 and protection > max(pushes)
 
 
 @pytest.mark.parametrize("refuse", ["app", "protection"])
@@ -553,7 +554,7 @@ def test_a_bootstrap_contract_needs_no_check_and_no_approval(
     assert deliverable["review"]["required_approvals"] == 0
 
 
-def test_brain_mode_records_the_contract_after_the_remotes_and_mirrors_it(
+def test_brain_mode_records_the_contract_after_the_remotes_and_commits_nothing_more(
     template_dir: Path, tmp_path: Path
 ) -> None:
     brain = FakeBrain(agent="rail new")
@@ -584,12 +585,10 @@ def test_brain_mode_records_the_contract_after_the_remotes_and_mirrors_it(
     assert brain.tickets[ticket].revisions, "the contract is set in brain"
     revision = brain.tickets[ticket].revisions[-1]
     assert revision["deliverables"][0]["review"]["required_approvals"] == 1
-    subjects = gitrepo.recent_subjects(project.dest, 2)
-    assert subjects == [
-        "chore(rail): mirror the delivery contract",
-        "chore: bootstrap red-probe with the ReD rail",
+    assert gitrepo.recent_subjects(project.dest, 2) == [
+        "chore: bootstrap red-probe with the ReD rail"
     ]
-    assert (project.dest / RECEIPTS_DIR).glob("*-contract-*.json")
+    assert not list((project.dest / RECEIPTS_DIR).glob("*-contract-*.json"))
     assert calls == []  # publish=False: nothing pushed
 
 
@@ -630,8 +629,9 @@ def test_an_unregistered_repository_still_gets_main_protected_and_the_resume_ste
     assert not list((project.dest / RECEIPTS_DIR).glob("*-contract-*.json"))
     message = str(refused.value)
     assert "unknown_repository" in message and "main is protected" in message
-    assert "434dc417" in message and "pull request" in message
+    assert "434dc417" in message and "the contract is missing" in message
     assert "rail contract set" in message and "--key contract:red-probe:1" in message
+    assert "mirror receipt" not in message, "no file promise remains once nothing is written"
 
 
 @pytest.mark.parametrize("tier", [Tier.BOOTSTRAP, Tier.PROD])

@@ -1,6 +1,6 @@
 """`BrainLedger`: the same contract as the file ledger, on brain-v42 (fake, in memory), plus
-what only the shared ledger has — mirrors written first, replay after a refusal, milestones
-read from the ticket, digests cross-checked, one subject per ticket."""
+what only the shared ledger has — a pending attestation spooled first, replay after a refusal,
+milestones read from the ticket, digests cross-checked, one subject per ticket."""
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,19 +10,21 @@ import pytest
 from rail.brain.client import BrainClient
 from rail.contracts import ATTESTATION_CONTRACT, TOOL_ERROR_CODES
 from rail.ledger import (
-    RECEIPTS_DIR,
     AttestationKind,
     Contract,
     Deliverable,
+    IdempotencyConflict,
     Ledger,
     LedgerError,
+    Record,
     RecordKind,
     Unattested,
     brain_digest,
     open_ledger,
 )
 from rail.ledger.brain import KNOWN_REFUSALS, BrainLedger, record_from_row
-from rail.ledger.file import load_receipt, receipt_filename
+from rail.ledger.file import load_receipt
+from rail.ledger.spool import spool_directory
 from tests.fake_brain import FakeBrain
 from tests.helpers import conforming_tree, write_manifest
 from tests.ledger_contract import LedgerContract
@@ -40,6 +42,7 @@ CONTRACT = Contract(
         )
     ],
 )
+RELEASE = {"version": "1.0.0", "digest": "sha256:" + "a" * 64}
 
 
 def _clock(start: datetime = T0):
@@ -56,7 +59,7 @@ def _ledger(tmp_path: Path, *, agent: str = "op") -> tuple[BrainLedger, FakeBrai
         client,
         ticket=ticket,
         project="red-probe",
-        receipts_dir=tmp_path / RECEIPTS_DIR,
+        spool_dir=tmp_path / "spool" / "red-probe",
         clock=_clock(),
         repository_id=lambda slug: 4242,  # never `gh` in a test
     )
@@ -173,26 +176,34 @@ class _OtherProjectsAreEmpty:
         return self._ledger.list(project, **kwargs) if project == self._ledger.project else []
 
 
-def test_attest_writes_the_mirror_first_and_sends_the_same_instant(tmp_path: Path) -> None:
-    ledger, brain, ticket = _ledger(tmp_path)
+def test_attest_spools_first_then_drains_once_brain_recorded(tmp_path: Path) -> None:
+    ledger, brain, _ = _ledger(tmp_path)
     ledger.contract_set(
         "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
     )
+    # loaded inside the spy, at call time: the drain (after a successful call) removes the
+    # file before this function returns, so the receipt must be read while it still exists.
+    seen: list[list[Record]] = []
+    real = ledger.client.call
+
+    def spy(name, arguments, *, agent=None):
+        if name == "brain_delivery_attest":
+            seen.append([load_receipt(p) for p in sorted(ledger.spool.root.glob("*.json"))])
+        return real(name, arguments, agent=agent)
+
+    ledger.client.call = spy
     record = ledger.attest(
         "red-probe", AttestationKind.DEPLOYED, {"sha": "b" * 40}, issuer="op", idempotency_key="d1"
     )
-    receipts = list((tmp_path / RECEIPTS_DIR).glob("*-deployed-*.json"))
-    assert len(receipts) == 1 and load_receipt(receipts[0]) == record
-    row = brain.attestations[-1]
-    assert datetime.fromisoformat(row["emitted_at"]) == record.recorded_at
-    assert row["issuer_identity"] == "op" and row["issuer_project"] == "red-probe"
-    assert row["digest"] == brain_digest({"sha": "b" * 40})
-    listed = ledger.list("red-probe", attestation=AttestationKind.DEPLOYED)
-    assert listed == [record], "the row read back from brain rebuilds the same record, same digest"
+    assert seen[0] == [record], "written before the call"
+    assert not list(ledger.spool.root.glob("*.json")), "gone once brain recorded it"
+    assert ledger.spool.root.stat().st_mode & 0o777 == 0o700, "the project's spool is private"
+    assert datetime.fromisoformat(brain.attestations[-1]["emitted_at"]) == record.recorded_at
+    assert ledger.list("red-probe", attestation=AttestationKind.DEPLOYED) == [record]
 
 
-def test_a_refusal_after_the_mirror_is_unattested_and_the_replay_lands(tmp_path: Path) -> None:
-    ledger, brain, ticket = _ledger(tmp_path)
+def test_a_refusal_leaves_the_receipt_in_the_spool_and_a_replay_drains_it(tmp_path: Path) -> None:
+    ledger, brain, _ = _ledger(tmp_path)
     ledger.contract_set(
         "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
     )
@@ -205,23 +216,146 @@ def test_a_refusal_after_the_mirror_is_unattested_and_the_replay_lands(tmp_path:
             issuer="op",
             idempotency_key="d1",
         )
-    assert exc.value.cause == "delivery_disabled" and exc.value.receipt.is_file()
-    assert (
-        brain.attestations == []
-        and ledger.list("red-probe", attestation=AttestationKind.DEPLOYED) == []
-    )
+    assert exc.value.cause == "delivery_disabled"
+    assert exc.value.receipt.parent == ledger.spool.root and exc.value.receipt.is_file()
+    assert "rail ledger replay" in str(exc.value)
     brain.enabled = True
-    mirror = load_receipt(exc.value.receipt)
-    replayed = ledger.attest(
+    waiting = load_receipt(exc.value.receipt)
+    again = ledger.attest(
         "red-probe",
         AttestationKind.DEPLOYED,
-        mirror.data,
-        issuer=mirror.issuer,
-        idempotency_key=mirror.idempotency_key,
-        emitted_at=mirror.recorded_at,
+        waiting.data,
+        issuer=waiting.issuer,
+        idempotency_key=waiting.idempotency_key,
+        emitted_at=waiting.recorded_at,
     )
-    assert replayed == mirror and len(brain.attestations) == 1
-    assert len(list((tmp_path / RECEIPTS_DIR).glob("*-deployed-*.json"))) == 1
+    assert again == waiting and len(brain.attestations) == 1
+    assert not exc.value.receipt.exists()
+
+
+def test_a_key_brain_holds_with_the_same_payload_is_already_recorded(tmp_path: Path) -> None:
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    first = ledger.attest(
+        "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+    )
+    later = ledger.attest(
+        "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+    )
+    assert later == first, "brain's row, although the clock gave the retry a new instant"
+    assert len(brain.attestations) == 1 and ledger.pending() == []
+
+
+def test_a_key_brain_holds_with_another_payload_is_a_conflict_that_leaves_the_spool(
+    tmp_path: Path,
+) -> None:
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    ledger.attest("red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1")
+    other = {**RELEASE, "digest": "sha256:" + "b" * 64}
+    with pytest.raises(IdempotencyConflict) as exc:
+        ledger.attest(
+            "red-probe", AttestationKind.RELEASED, other, issuer="op", idempotency_key="r1"
+        )
+    assert brain_digest(RELEASE) in str(exc.value) and brain_digest(other) in str(exc.value)
+    assert ledger.pending() == []
+
+
+def test_row_by_key_filters_by_issuer_project_too(tmp_path: Path) -> None:
+    """The contract accepts `issuer_project` as a filter next to `ticket_id` (M1): pass it so
+    brain narrows its own scan, instead of relying only on the local check once the page comes
+    back."""
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    seen: list[dict] = []
+    original = ledger.client.call
+
+    def spy(name, arguments, *, agent=None):
+        if name == "brain_delivery_attestation_list":
+            seen.append(dict(arguments))
+        return original(name, arguments, agent=agent)
+
+    ledger.client.call = spy
+    ledger._row_by_key(AttestationKind.RELEASED, "r1")
+    assert seen and seen[0]["issuer_project"] == "red-probe"
+
+
+def test_settle_leaves_the_receipt_when_the_row_cannot_be_rebuilt(tmp_path: Path) -> None:
+    """A row brain returns that `record_from_row` cannot rebuild (an unknown kind) must never
+    cost the receipt (M2): the unlink happens only after the row is confirmed rebuildable."""
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    brain.enabled = False
+    with pytest.raises(Unattested) as exc:
+        ledger.attest(
+            "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+        )
+    brain.enabled = True
+    receipt = exc.value.receipt
+    record = load_receipt(receipt)
+    bad_row = {"kind": "not_a_real_kind", "digest": brain_digest(RELEASE), "id": "x"}
+    with pytest.raises(LedgerError, match="unknown kind"):
+        ledger._settle(record, receipt, bad_row)
+    assert receipt.is_file()
+
+
+def test_pending_is_oldest_first_and_replay_says_what_happened(tmp_path: Path) -> None:
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    done = ledger.attest(
+        "red-probe", AttestationKind.DEPLOYED, {"sha": "a" * 40}, issuer="op", idempotency_key="d0"
+    )
+    brain.enabled = False
+    for key, sha in (("d1", "b"), ("d2", "c")):
+        with pytest.raises(Unattested):
+            ledger.attest(
+                "red-probe",
+                AttestationKind.DEPLOYED,
+                {"sha": sha * 40},
+                issuer="op",
+                idempotency_key=key,
+            )
+    brain.enabled = True
+    ledger.spool.mirror(done)  # the crash window: recorded by brain, not yet removed
+    waiting = ledger.pending()
+    assert [r.idempotency_key for r in waiting] == ["d0", "d1", "d2"]
+    assert [ledger.replay(r) for r in waiting] == ["already recorded", "recorded", "recorded"]
+    assert ledger.pending() == [] and len(brain.attestations) == 3
+
+
+def test_an_unanswerable_reuse_leaves_the_receipt_waiting(tmp_path: Path) -> None:
+    """`_row_by_key` returning nothing on a reused key is not proof brain never recorded it —
+    only that the lookup could not confirm it. `Unattested` keeps the receipt, never a
+    conflict, so nothing is discarded on a guess."""
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    ledger.attest("red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1")
+    ledger._row_by_key = lambda kind, key: None  # type: ignore[method-assign]
+    with pytest.raises(Unattested) as exc:
+        ledger.attest(
+            "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+        )
+    assert exc.value.cause == "idempotency_key_reused"
+    assert exc.value.receipt.is_file()
+
+
+def test_the_spool_belongs_to_the_project_not_to_a_checkout() -> None:
+    assert spool_directory("red-probe", {"RAIL_SPOOL_DIR": "/s"}) == Path("/s/red-probe")
+    assert spool_directory("red-probe", {}) == (
+        Path("~/.local/state/red-rail/spool").expanduser() / "red-probe"
+    )
 
 
 def test_an_unreachable_brain_is_unattested_too(tmp_path: Path) -> None:
@@ -272,7 +406,7 @@ def test_milestones_are_read_from_the_ticket_never_attested(tmp_path: Path) -> N
     assert ledger.get("red-probe", integrated[0].digest) == integrated[0]
 
 
-def test_contract_set_uses_cas_and_mirrors_the_revision(tmp_path: Path) -> None:
+def test_contract_set_uses_cas_and_returns_the_revision(tmp_path: Path) -> None:
     ledger, brain, ticket = _ledger(tmp_path)
     first = ledger.contract_set(
         "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
@@ -284,8 +418,7 @@ def test_contract_set_uses_cas_and_mirrors_the_revision(tmp_path: Path) -> None:
     assert [r["contract_revision"] for r in brain.tickets[ticket].revisions] == [1, 2]
     assert first.payload["contract"]["objective"] == "ship the probe"
     assert second.payload["contract"]["objective"] == "ship the probe with metrics"
-    mirrors = list((tmp_path / RECEIPTS_DIR).glob("*-contract-*.json"))
-    assert len(mirrors) == 2
+    assert not list(tmp_path.rglob("*.json")), "contract_set writes no file of its own"
     contracts = ledger.list("red-probe", kind=RecordKind.CONTRACT)
     assert contracts[-1].payload["contract"]["objective"] == "ship the probe with metrics"
     assert contracts[-1].data["contract"]["priority"] == 0
@@ -409,7 +542,7 @@ def test_the_contract_is_set_by_the_requester_never_by_the_executor(tmp_path: Pa
         ledger.client,
         ticket=ticket,
         project="red-probe",
-        receipts_dir=tmp_path / "other" / RECEIPTS_DIR,
+        spool_dir=tmp_path / "other" / "spool" / "red-probe",
         requester="red-probe",
     )
     amended = CONTRACT.model_copy(update={"objective": "an amendment the executor may not set"})
@@ -417,11 +550,11 @@ def test_the_contract_is_set_by_the_requester_never_by_the_executor(tmp_path: Pa
         executor.contract_set("red-probe", amended, reason="x", issuer="op", idempotency_key="c9")
 
 
-def test_contract_set_is_idempotent_on_content_and_mirrors_by_ticket_and_revision(
+def test_contract_set_is_idempotent_on_content_and_keyed_by_ticket_and_revision(
     tmp_path: Path,
 ) -> None:
     """Measured on the live brain (2026-09-19): revision 1 landed, then the mirror collided with
-    the phase-1 file-ledger key `contract:<project>:1`. The mirror is keyed by ticket and
+    the phase-1 file-ledger key `contract:<project>:1`. The record is keyed by ticket and
     revision, carries the requester as issuer (what brain records), and a re-run with the same
     content creates no new revision."""
     ledger, brain, ticket = _ledger(tmp_path)
@@ -434,9 +567,9 @@ def test_contract_set_is_idempotent_on_content_and_mirrors_by_ticket_and_revisio
     assert again == first
     assert first.idempotency_key == f"contract:{ticket}:1" and first.issuer == "red"
     assert len(brain.tickets[ticket].revisions) == 1
-    assert len(list((tmp_path / RECEIPTS_DIR).glob("*-contract-*.json"))) == 1
+    assert not list(tmp_path.rglob("*.json")), "contract_set writes no file of its own"
     listed = ledger.list("red-probe", kind=RecordKind.CONTRACT)
-    assert listed == [first], "the row read back from brain rebuilds the mirror, same digest"
+    assert listed == [first], "the row read back from brain rebuilds the same record, same digest"
     amended = CONTRACT.model_copy(update={"objective": "ship the probe with metrics"})
     second = ledger.contract_set(
         "red-probe", amended, reason="metrics", issuer="op", idempotency_key="c2"
@@ -485,7 +618,7 @@ def test_attestations_are_listed_in_the_issuer_scope(tmp_path: Path) -> None:
     assert listing and listing[0][1].get("ticket_id") is None
 
 
-def test_accept_calls_brain_as_the_requester_and_mirrors_the_receipt(tmp_path: Path) -> None:
+def test_accept_calls_brain_as_the_requester_and_returns_the_receipt(tmp_path: Path) -> None:
     ledger, brain, ticket = _ledger(tmp_path)
     ledger.contract_set("red-probe", CONTRACT, reason="r", issuer="red", idempotency_key="c1")
     with pytest.raises(LedgerError, match="not integrated"):
@@ -501,9 +634,8 @@ def test_accept_calls_brain_as_the_requester_and_mirrors_the_receipt(tmp_path: P
     }
     assert record.attestation is AttestationKind.FULFILLED and record.issuer == "brain-v42"
     assert record.data["sha"] == "b" * 40 and record.data["rationale"] == "the probe answers"
-    mirror = load_receipt(tmp_path / RECEIPTS_DIR / receipt_filename(record))
-    assert mirror.digest == record.digest
-    # idempotent: a second acceptance returns the same receipt, no second mirror
+    assert not list(tmp_path.rglob("*.json")), "accept writes no file of its own"
+    # idempotent: a second acceptance returns the same receipt, no second call
     again = ledger.accept("red-probe", rationale="the probe answers", issuer="red-root")
     assert again.digest == record.digest
 
@@ -525,7 +657,7 @@ def test_the_ledger_of_a_project_spans_its_tickets(tmp_path: Path) -> None:
         ledger.client,
         ticket=later,
         project="red-probe",
-        receipts_dir=tmp_path / RECEIPTS_DIR,
+        spool_dir=tmp_path / "spool" / "red-probe",
         clock=_clock(T0 + timedelta(days=1)),
         repository_id=lambda slug: 4242,
     )
@@ -567,7 +699,7 @@ def test_intent_refuses_a_contract_whose_ticket_is_closed(tmp_path: Path) -> Non
         client,
         ticket=ticket,
         project="red-probe",
-        receipts_dir=repo / RECEIPTS_DIR,
+        spool_dir=repo / "spool" / "red-probe",
         clock=_clock(),
         repository_id=lambda slug: 4242,
     ).contract_set("red-probe", CONTRACT, reason="r", issuer="op", idempotency_key="c1")
@@ -581,7 +713,7 @@ def test_intent_refuses_a_contract_whose_ticket_is_closed(tmp_path: Path) -> Non
             client,
             ticket=ticket,
             project="red-probe",
-            receipts_dir=repo_path / RECEIPTS_DIR,
+            spool_dir=repo_path / "spool" / "red-probe",
             clock=_clock(),
             repository_id=lambda slug: 4242,
         )
@@ -609,3 +741,59 @@ def test_intent_refuses_a_contract_whose_ticket_is_closed(tmp_path: Path) -> Non
             assert intent_contract(repo).passed, live
     finally:
         intent_module.open_ledger = original  # type: ignore[assignment]
+
+
+def test_a_whole_delivery_in_brain_mode_leaves_no_file_anywhere(tmp_path: Path) -> None:
+    from rail.deploy.flow import Attester
+    from rail.ledger import PullRequestRef
+
+    ledger, brain, ticket = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="red", idempotency_key="c0"
+    )
+    sha, digest = "c" * 40, "sha256:" + "d" * 64
+    ledger.bind(
+        "red-probe",
+        PullRequestRef(repository="hawkixs/red-probe", number=3, head_sha=sha),
+        issuer="op",
+        idempotency_key="bind:hawkixs/red-probe:3",
+    )
+    ledger.attest(
+        "red-probe",
+        AttestationKind.REVIEW_VERDICT,
+        {
+            "sha": sha,
+            "independent": True,
+            "verdict": "approve",
+            "check_run_id": 99,
+            "repository": "hawkixs/red-probe",
+            "pr": 3,
+        },
+        issuer="red-rail-reviewer",
+        idempotency_key=f"review_verdict:{sha}:99",
+    )
+    brain.integrate(ticket, sha, issued_at=T0 + timedelta(minutes=5))
+    ledger.attest(
+        "red-probe",
+        AttestationKind.RELEASED,
+        {"version": "1.0.0", "sha": sha, "digest": digest},
+        issuer="op",
+        idempotency_key="released:1.0.0",
+    )
+    flow = Attester(
+        ledger=ledger,
+        project="red-probe",
+        target="private-compose",
+        issuer="op",
+        redact=lambda text: text,
+    )
+    flow.attest(AttestationKind.DEPLOYED, {"digest": digest, "version": "1.0.0"})
+    flow.attest(
+        AttestationKind.ROLLED_BACK, {"from_digest": digest, "to_digest": digest, "drill": True}
+    )
+    flow.attest(AttestationKind.RESTORED, {"recovery_seconds": 8, "drill": True})
+    flow.attest(AttestationKind.DEPLOYED, {"digest": digest, "version": "1.0.0", "mode": "drill"})
+    ledger.accept("red-probe", rationale="every criterion holds", issuer="red")
+    assert flow.unattested == [] and flow.failures == []
+    assert ledger.pending() == [] and not list(tmp_path.rglob("*.json"))
+    assert len(brain.attestations) == 6

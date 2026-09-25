@@ -1,7 +1,8 @@
 """The flows on top of a target — forward, rollback, drill — and their attestations. Every
 state change of the target is followed by its record, in the order of the vocabulary in
-`rail.ledger`; the newest `deployed` always names the live digest. A brain refusal after a
-mirror never stops a flow: the replay commands are reported together at the end."""
+`rail.ledger`; the newest `deployed` always names the live digest. A brain refusal never
+stops a flow: the waiting receipts and their replay commands are reported together at the
+end."""
 
 from __future__ import annotations
 

@@ -445,3 +445,78 @@ def test_mirrors_ignores_milestone_receipts_kept_from_the_file_ledger(
     monkeypatch.setattr(hygiene, "open_ledger", lambda repo: EmptySharedLedger())
     result = hygiene.mirrors(repo)
     assert result.passed and "2 milestone receipt(s)" in result.details
+
+
+def _brain_manifest(repo: Path) -> None:
+    text = (repo / "rail.yaml").read_text()
+    (repo / "rail.yaml").write_text(
+        text.replace(
+            "ledger: file\n", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n"
+        )
+    )
+
+
+class _EmptyShared:
+    def list(self, project, *, kind=None, attestation=None):
+        return []
+
+
+def test_mirrors_fails_while_an_attestation_waits_in_the_spool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rail.gates import hygiene
+    from rail.ledger import AttestationKind
+    from rail.ledger.file import FileLedger
+    from rail.ledger.spool import spool_directory
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    _brain_manifest(repo)
+    monkeypatch.setattr(hygiene, "open_ledger", lambda repo: _EmptyShared())
+    assert hygiene.mirrors(repo).passed
+    FileLedger(spool_directory("red-alpha")).attest(
+        "red-alpha", AttestationKind.DEPLOYED, {"sha": "a" * 40}, issuer="op", idempotency_key="d1"
+    )
+    result = hygiene.mirrors(repo)
+    assert not result.passed
+    assert "1 attestation(s) waiting in the spool" in result.details
+    assert "rail ledger replay" in result.details
+
+
+def test_mirrors_fails_closed_on_a_tampered_spool_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rail.gates import hygiene
+    from rail.ledger import AttestationKind
+    from rail.ledger.file import FileLedger
+    from rail.ledger.spool import spool_directory
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    _brain_manifest(repo)
+    monkeypatch.setattr(hygiene, "open_ledger", lambda repo: _EmptyShared())
+    spool = FileLedger(spool_directory("red-alpha"))
+    record = spool.attest(
+        "red-alpha", AttestationKind.DEPLOYED, {"sha": "a" * 40}, issuer="op", idempotency_key="d1"
+    )
+    path = spool.path_of(record)
+    path.write_text(path.read_text().replace("a" * 40, "b" * 40))
+    result = hygiene.mirrors(repo)
+    assert not result.passed and path.name in result.details
+
+
+def test_mirrors_fails_closed_when_the_spool_path_cannot_be_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`spool_directory` calls `Path.expanduser()`, which raises `RuntimeError` when no home
+    directory can be found (M4): the gate reports it, it never raises."""
+    from rail.gates import hygiene
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    _brain_manifest(repo)
+    monkeypatch.setattr(hygiene, "open_ledger", lambda repo: _EmptyShared())
+
+    def boom(project: str) -> Path:
+        raise RuntimeError("could not determine home directory")
+
+    monkeypatch.setattr(hygiene, "spool_directory", boom)
+    result = hygiene.mirrors(repo)
+    assert not result.passed and "spool:" in result.details

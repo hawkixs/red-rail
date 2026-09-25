@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,9 +34,13 @@ def receipt_filename(record: Record) -> str:
     return f"{stamp}-{label}-{record.digest[7:19]}.json"
 
 
-def load_receipt(path: Path) -> Record:
+def load_receipt(path: Path, *, text: str | None = None) -> Record:
+    """A receipt's `Record`. `text`, when given, is content already read by the caller (so a
+    vanished file is a `FileNotFoundError` the caller sees before this wraps anything); the
+    default reads `path` itself. Any other read or parse failure is a `LedgerError`."""
     try:
-        return Record.model_validate(json.loads(path.read_text()))
+        content = path.read_text() if text is None else text
+        return Record.model_validate(json.loads(content))
     except (OSError, ValueError, ValidationError) as exc:
         raise LedgerError(f"unreadable receipt {path.name}: {exc}") from exc
 
@@ -143,7 +148,7 @@ class FileLedger:
                 )
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.path_of(record)
-        tmp = path.with_name(path.name + ".tmp")
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         tmp.write_text(
             json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -155,12 +160,22 @@ class FileLedger:
 
     def _records(self) -> list[Record]:
         """Every receipt, verified: a digest that no longer matches its content is a tampered
-        ledger and stops the read — the gates never build evidence on it (fail closed)."""
+        ledger and stops the read — the gates never build evidence on it (fail closed). A
+        receipt removed after the listing (the spool drains on every successful attest, replay
+        and `--from`) is a routine race, not corruption: it is skipped, not raised."""
         if not self.root.is_dir():
             return []
         records = []
         for path in sorted(self.root.glob("*.json")):
-            record = load_receipt(path)
+            try:
+                text = path.read_text()
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError) as exc:
+                # UnicodeDecodeError is a ValueError; any other read failure (permission, a
+                # directory named `*.json`) stays fail-closed, unlike a vanished file
+                raise LedgerError(f"unreadable receipt {path.name}: {exc}") from exc
+            record = load_receipt(path, text=text)
             if not record.verify():
                 raise LedgerError(
                     f"tampered receipt {path.name}: digest does not match its content"
@@ -194,7 +209,7 @@ class FileLedger:
         )
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / receipt_filename(record)
-        tmp = path.with_name(path.name + ".tmp")
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         tmp.write_text(
             json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",

@@ -446,12 +446,15 @@ def _publish(
             idempotency_key=key,
         )
     except Unattested as exc:
-        replay = f"rail attest review_verdict --from {exc.receipt}"
+        replay = (
+            f"`rail attest review_verdict --from {exc.receipt}`, "
+            "or every waiting one with `rail ledger replay`"
+        )
         failures.append(f"unattested ({exc.cause}): replay with {replay}")
         outcome.receipt = exc.receipt
         note = (
             f"The judges said {verdict.verdict}, but the verdict could not be attested in the "
-            f"ledger ({exc.cause}). Replay it with `{replay}`, then re-run the review "
+            f"ledger ({exc.cause}). Replay it with {replay}, then re-run the review "
             f"(label {policy.rerun_label})."
         )
         github.complete_check(
@@ -472,7 +475,8 @@ def _publish(
         return outcome
     outcome.attested = True
     if repo_path is not None:
-        outcome.receipt = repo_path / RECEIPTS_DIR / receipt_filename(record)
+        kept = repo_path / RECEIPTS_DIR / receipt_filename(record)
+        outcome.receipt = kept if kept.is_file() else None
     conclusion = "success" if verdict.verdict == "approve" else "failure"
     github.complete_check(
         pr.repository,

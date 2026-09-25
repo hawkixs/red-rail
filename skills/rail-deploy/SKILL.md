@@ -37,8 +37,8 @@ or restore the link, then deploy again.
    unit or compose file the target will not ship, a missing parameter) exits 1 before the
    first ssh and records nothing. A failed deployment puts the previous artefact back by
    itself when one exists (else the incident stays open) and exits 1. Exit 2 = live but
-   unattested: run every `rail attest … --from` line printed. Exit 3 = another deployment
-   holds the lock.
+   unattested: run every `rail attest … --from` line printed, or `rail ledger replay`. Exit 3 =
+   another deployment holds the lock.
 3. Observe: `rail check observe --repo <path>` — on a compose target, red-monitor sees the
    container with the deployed digest; on `private-systemd`, it reads the unit's state, which
    must be `active/running`, and compares no digest: `/version` proved it at deployment. The
