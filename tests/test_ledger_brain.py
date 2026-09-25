@@ -699,3 +699,59 @@ def test_intent_refuses_a_contract_whose_ticket_is_closed(tmp_path: Path) -> Non
             assert intent_contract(repo).passed, live
     finally:
         intent_module.open_ledger = original  # type: ignore[assignment]
+
+
+def test_a_whole_delivery_in_brain_mode_leaves_no_file_anywhere(tmp_path: Path) -> None:
+    from rail.deploy.flow import Attester
+    from rail.ledger import PullRequestRef
+
+    ledger, brain, ticket = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="red", idempotency_key="c0"
+    )
+    sha, digest = "c" * 40, "sha256:" + "d" * 64
+    ledger.bind(
+        "red-probe",
+        PullRequestRef(repository="hawkixs/red-probe", number=3, head_sha=sha),
+        issuer="op",
+        idempotency_key="bind:hawkixs/red-probe:3",
+    )
+    ledger.attest(
+        "red-probe",
+        AttestationKind.REVIEW_VERDICT,
+        {
+            "sha": sha,
+            "independent": True,
+            "verdict": "approve",
+            "check_run_id": 99,
+            "repository": "hawkixs/red-probe",
+            "pr": 3,
+        },
+        issuer="red-rail-reviewer",
+        idempotency_key=f"review_verdict:{sha}:99",
+    )
+    brain.integrate(ticket, sha, issued_at=T0 + timedelta(minutes=5))
+    ledger.attest(
+        "red-probe",
+        AttestationKind.RELEASED,
+        {"version": "1.0.0", "sha": sha, "digest": digest},
+        issuer="op",
+        idempotency_key="released:1.0.0",
+    )
+    flow = Attester(
+        ledger=ledger,
+        project="red-probe",
+        target="private-compose",
+        issuer="op",
+        redact=lambda text: text,
+    )
+    flow.attest(AttestationKind.DEPLOYED, {"digest": digest, "version": "1.0.0"})
+    flow.attest(
+        AttestationKind.ROLLED_BACK, {"from_digest": digest, "to_digest": digest, "drill": True}
+    )
+    flow.attest(AttestationKind.RESTORED, {"recovery_seconds": 8, "drill": True})
+    flow.attest(AttestationKind.DEPLOYED, {"digest": digest, "version": "1.0.0", "mode": "drill"})
+    ledger.accept("red-probe", rationale="every criterion holds", issuer="red")
+    assert flow.unattested == [] and flow.failures == []
+    assert ledger.pending() == [] and not list(tmp_path.rglob("*.json"))
+    assert len(brain.attestations) == 6
