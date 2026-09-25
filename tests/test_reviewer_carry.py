@@ -62,3 +62,61 @@ def test_mechanical_blockers_are_recomputed_each_round() -> None:
     assert [(f.id, f.status) for f in kept] == [("F-8-1", "fixed"), ("F-8-2", "still_open")]
     assert [f.title for f in fresh] == ["CF-5-3 not accounted for"]
     assert all(carry.is_mechanical(f) for f in kept + fresh)
+
+
+def test_reconcile_reopens_a_fixed_mechanical_blocker() -> None:  # Review Focus 1
+    round1 = [
+        b.model_copy(update={"id": "F-9-1"})
+        for b in carry.mechanical_blockers(["CF-5-1"], {})
+    ]
+    fixed, fresh_after_fix = carry.reconcile(round1, carry.mechanical_blockers([], {}))
+    assert [(f.id, f.status) for f in fixed] == [("F-9-1", "fixed")]
+    assert fresh_after_fix == []
+
+    kept, fresh_after_regression = carry.reconcile(fixed, carry.mechanical_blockers(["CF-5-1"], {}))
+    assert [(f.id, f.status) for f in kept] == [("F-9-1", "still_open")]
+    assert fresh_after_regression == []
+
+
+def test_reconcile_never_touches_a_ruled_finding() -> None:  # Review Focus 1
+    ruled = carry.mechanical_blockers(["CF-5-1"], {})[0].model_copy(
+        update={"id": "F-9-2", "status": "ruled"}
+    )
+    kept, fresh = carry.reconcile([ruled], carry.mechanical_blockers(["CF-5-1"], {}))
+    assert kept == [ruled]
+    assert fresh == []
+
+
+def test_parse_section_ignores_a_heading_inside_a_fence() -> None:  # Review Focus 2
+    fenced_only = """```
+## Carry-forwards
+
+- CF-1-1: addressed
+```
+"""
+    assert carry.parse_section(fenced_only) == {}
+
+
+def test_parse_section_still_reads_a_real_section_after_a_fence() -> None:  # Review Focus 2
+    body = """~~~
+## Carry-forwards
+
+- CF-1-1: addressed
+~~~
+
+## Carry-forwards
+
+- CF-2-2: addressed
+"""
+    assert carry.parse_section(body) == {"CF-2-2": carry.Accounting("addressed", "")}
+
+
+def test_addressed_line_does_not_accept_a_trailing_reason() -> None:  # Review Focus 3
+    body = """## Carry-forwards
+
+- CF-50-2: addressed: stray
+- CF-50-3: deferred: still fine
+"""
+    section = carry.parse_section(body)
+    assert "CF-50-2" not in section
+    assert section["CF-50-3"] == carry.Accounting("deferred", "still fine")

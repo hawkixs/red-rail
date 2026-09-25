@@ -14,10 +14,11 @@ LINE_FORMAT = "CF-<pr>-<n>: addressed | CF-<pr>-<n>: deferred: <reason>"
 _HEADING = re.compile(r"^##\s+Carry-forwards\s*$", re.IGNORECASE | re.MULTILINE)
 _NEXT = re.compile(r"^##\s", re.MULTILINE)
 _LINE = re.compile(
-    r"^\s*(?:[-*]\s+)?(?P<id>CF-\d+-\d+)\s*:\s*(?P<status>addressed|deferred)\s*"
-    r"(?::\s*(?P<reason>.*?))?\s*$",
+    r"^\s*(?:[-*]\s+)?(?P<id>CF-\d+-\d+)\s*:\s*"
+    r"(?:(?P<addressed>addressed)|(?P<deferred>deferred)(?:\s*:\s*(?P<reason>.*?))?)\s*$",
     re.IGNORECASE,
 )
+_FENCE = re.compile(r"^(```|~~~)")
 WHERE = "(pull request description)"
 
 
@@ -27,8 +28,23 @@ class Accounting:
     reason: str
 
 
+def _strip_fences(body: str) -> str:
+    """Drop every line between a pair of ``` or ~~~ fences: a heading or a carry-forward line
+    inside a fenced code block is not part of the pull request's accounting."""
+    out: list[str] = []
+    fenced = False
+    for line in body.splitlines():
+        if _FENCE.match(line.strip()):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out.append(line)
+    return "\n".join(out)
+
+
 def parse_section(body: str) -> dict[str, Accounting]:
-    heading = _HEADING.search(body or "")
+    body = _strip_fences(body or "")
+    heading = _HEADING.search(body)
     if heading is None:
         return {}
     rest = body[heading.end() :]
@@ -38,7 +54,7 @@ def parse_section(body: str) -> dict[str, Accounting]:
     for line in section.splitlines():
         match = _LINE.match(line)
         if match:
-            status = match["status"].lower()
+            status = "addressed" if match["addressed"] else "deferred"
             found[match["id"].upper()] = Accounting(status, (match["reason"] or "").strip())
     return found
 
@@ -79,12 +95,14 @@ def is_mechanical(f: Finding) -> bool:
 def reconcile(
     old: Sequence[Finding], current: Sequence[Finding]
 ) -> tuple[list[Finding], list[Finding]]:
-    """Mechanical blockers are not judged: they are recomputed from the body every round."""
+    """Mechanical blockers are not judged: they are recomputed from the body every round. A
+    ruled finding is never touched; any other old finding is re-derived solely from whether its
+    title still appears in `current` — a fixed one can reopen as `still_open`."""
     titles = {f.title for f in current}
     kept = [
-        f.model_copy(update={"status": "still_open" if f.title in titles else "fixed"})
-        if f.status in ("new", "still_open")
-        else f
+        f
+        if f.status == "ruled"
+        else f.model_copy(update={"status": "still_open" if f.title in titles else "fixed"})
         for f in old
     ]
     seen = {f.title for f in old}
