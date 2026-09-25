@@ -329,16 +329,11 @@ def new_project(
     try:
         if project.ledger is LedgerBackend.BRAIN:
             # brain enriches the deliverable from its repository registry: the repository
-            # exists first; the mirror is a second commit so the bootstrap commit stays what
-            # was published
+            # exists first, so the contract is set only once it is published
             try:
                 record_contract(project, clock=clock, client=client)
             except LedgerError as exc:
                 raise ScaffoldError(_interrupted_birth(project, exc, published=publish)) from exc
-            _git(project.dest, "add", "-A", "docs/receipts")
-            _git(project.dest, "commit", "-q", "-m", "chore(rail): mirror the delivery contract")
-            if publish:
-                remotes.push(project.dest, mirror=mirror, run=run)
     finally:
         if publish:
             # last, once every direct push of `rail new` is done: from here main takes pull
@@ -383,17 +378,11 @@ def _interrupted_birth(project: NewProject, exc: LedgerError, *, published: bool
     )
     return (
         f"the delivery contract was not recorded — {exc}\n"
-        f"{where}; the contract and its mirror receipt are missing. To finish the birth:\n"
+        f"{where}; the contract is missing. To finish the birth:\n"
         "  1. on `unknown_repository`, register the repository in brain's delivery registry "
         "(brain runbook 434dc417, an operator gesture: two restarts); otherwise wait until "
         "brain answers\n"
-        f"  2. record the birth's contract:\n     {resume_contract_command(project)}\n"
-        + (
-            "  3. commit the mirror receipt under docs/receipts/ on a branch and merge it "
-            "through a pull request (main takes no direct push)"
-            if published
-            else "  3. commit the mirror receipt under docs/receipts/"
-        )
+        f"  2. record the birth's contract:\n     {resume_contract_command(project)}"
     )
 
 

@@ -1,5 +1,5 @@
-"""`BrainLedger`: brain-v42 is the shared, observed authority (ADR-0002); the repository's
-receipts are mirrors linked by digest.
+"""`BrainLedger`: brain-v42 is the shared, observed authority (ADR-0002); an attestation waits
+in the host's spool (`ledger/spool.py`) until brain has recorded it.
 
 Mapping (decided with brain-v42 on 2026-09-18, decision 4e7c2545): one subject per
 ticket — `project` is the ticket's `to_project` and the `actor_project` of every call;
@@ -23,6 +23,7 @@ from rail.ledger import (
     BRAIN_MILESTONES,
     AttestationKind,
     Contract,
+    IdempotencyConflict,
     LedgerError,
     PullRequestRef,
     Record,
@@ -100,7 +101,7 @@ class BrainLedger:
         *,
         ticket: UUID | str,
         project: str,
-        receipts_dir: Path,
+        spool_dir: Path,
         clock: Callable[[], datetime] | None = None,
         repository_id: Callable[[str], int] | None = None,
         requester: str = REQUESTER,
@@ -109,7 +110,7 @@ class BrainLedger:
         self.ticket = UUID(str(ticket))
         self.project = project
         self.requester = requester
-        self.mirrors = FileLedger(receipts_dir, clock=clock)
+        self.spool = FileLedger(spool_dir, clock=clock)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._repository_id = repository_id or _gh_repository_id
 
@@ -130,7 +131,7 @@ class BrainLedger:
     ) -> Record:
         """Set as the requester (brain: "only the requester may set a delivery contract").
         Idempotent on content: the same contract as the current revision creates no revision.
-        The mirror is keyed `contract:<ticket>:<revision>` and carries what brain records — the
+        The record is keyed `contract:<ticket>:<revision>` and carries what brain records — the
         requester as issuer, the revision's `created_at` — so the row read back rebuilds it."""
         self._same(project)
         view = self._view(required=False)
@@ -152,7 +153,7 @@ class BrainLedger:
                 },
                 agent=issuer,
             )
-        return self.mirrors.mirror(self._contract_record(row))
+        return self._contract_record(row)
 
     def bind(
         self, project: str, pr: PullRequestRef, *, issuer: str, idempotency_key: str
@@ -187,7 +188,7 @@ class BrainLedger:
             payload={**pr.model_dump(mode="json"), "binding_id": str(row["id"])},
             recorded_at=self._clock(),
         )
-        return self.mirrors.mirror(record)
+        return record
 
     def attest(
         self,
@@ -205,7 +206,8 @@ class BrainLedger:
                 f"{kind.value} is a brain milestone in ledger: brain — it is read from the "
                 "ticket, never attested"
             )
-        record = self.mirrors.attest(
+        self.spool.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        record = self.spool.attest(
             project,
             kind,
             data,
@@ -213,7 +215,7 @@ class BrainLedger:
             idempotency_key=idempotency_key,
             emitted_at=emitted_at,
         )
-        receipt = self.mirrors.path_of(record)
+        receipt = self.spool.path_of(record)
         try:
             row = self._call(
                 "brain_delivery_attest",
@@ -228,11 +230,31 @@ class BrainLedger:
                 agent=issuer,
             )
         except BrainToolError as exc:
+            if exc.code == "idempotency_key_reused":
+                # The spool drains on success (decision 1): a retry after the receipt is
+                # already gone gets a fresh `emitted_at`, which brain's own replay equality
+                # (contract `delivery-attestations-v1.0`) never matches. Brain itself is then
+                # the only place left holding the original event, so it settles the replay.
+                receipt.unlink(missing_ok=True)
+                existing = next(
+                    (
+                        r
+                        for r in self._attestation_records(None)
+                        if r.idempotency_key == idempotency_key
+                    ),
+                    None,
+                )
+                if existing is not None and existing.attestation is kind and existing.data == data:
+                    return existing
+                raise IdempotencyConflict(
+                    f"idempotency key {idempotency_key!r} already used"
+                ) from exc
             raise Unattested(receipt, exc.code) from exc
         except BrainUnreachable as exc:
             raise Unattested(receipt, "unreachable") from exc
         if str(row.get("digest")) != brain_digest(data):
-            raise LedgerError("brain stored a different payload digest than the mirror's")
+            raise LedgerError("brain stored a different payload digest than the spooled receipt's")
+        receipt.unlink(missing_ok=True)
         return record
 
     def accept(
@@ -240,7 +262,7 @@ class BrainLedger:
     ) -> Record:
         """`brain_delivery_accept` as the requester, against the exact integration evidence
         the view shows (revision, attempt, delivery digest); the fulfilment receipt brain
-        returns is mirrored like the other milestone. `sha` is brain's, never the caller's."""
+        returns is rebuilt like the other milestone. `sha` is brain's, never the caller's."""
         self._same(project)
         view = self._view(required=True)
         receipt = view.get("integration_receipt")
@@ -258,7 +280,7 @@ class BrainLedger:
             },
             agent=issuer,
         )
-        return self.mirrors.mirror(self._milestone_record(row, AttestationKind.FULFILLED))
+        return self._milestone_record(row, AttestationKind.FULFILLED)
 
     def list(
         self,

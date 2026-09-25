@@ -212,7 +212,7 @@ def test_an_unattested_step_exits_2_with_every_replay_command(
     monkeypatch.setattr("rail.commands.deploy.open_ledger", lambda repo: ledger)
     out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), "--yes"])
     assert out.exit_code == 2, out.output
-    assert "replay with: rail attest deployed --from" in out.output
+    assert "replay it with: rail attest deployed --from" in out.output
     assert target.applied == [D1]  # the service is live; only the ledger is behind
 
 

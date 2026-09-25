@@ -2,7 +2,7 @@
 
 Two backends implement the same protocol. `FileLedger` (default): the repository's
 `docs/receipts/*.json` are the ledger — append-only, committed, no network. `BrainLedger`
-(phase 2): brain-v42 is the shared authority and the receipts become mirrors.
+(phase 2): brain-v42 is the shared authority; a pending attestation waits in the host's spool.
 
 Every record carries a digest (sha256 over its canonical JSON) and an idempotency key:
 replaying a write with the same key and the same content returns the existing record; the
@@ -79,7 +79,7 @@ BRAIN_MILESTONES = frozenset({"integrated", "fulfilled"})
 
 
 class Unattested(LedgerError):
-    """The mirror is written, the shared ledger refused or was unreachable. Replay it."""
+    """The receipt is spooled, the shared ledger refused or was unreachable. Replay it."""
 
     def __init__(self, receipt: Path, cause: str) -> None:
         self.receipt = receipt
@@ -87,8 +87,9 @@ class Unattested(LedgerError):
         parts = receipt.stem.split("-")
         label = parts[1] if len(parts) > 1 else parts[0]
         super().__init__(
-            f"attestation not recorded ({cause}); the receipt {receipt.name} is written — "
-            f"replay with: rail attest {label} --from {receipt}"
+            f"attestation not recorded ({cause}); the receipt {receipt.name} waits in "
+            f"{receipt.parent} — replay it with: rail attest {label} --from {receipt}, "
+            "or every waiting one with: rail ledger replay"
         )
 
 
@@ -356,6 +357,7 @@ def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
     without a manifest observe the default file ledger themselves
     (`FileLedger(repo / RECEIPTS_DIR)`), never through here."""
     from rail.ledger.file import FileLedger
+    from rail.ledger.spool import spool_directory
     from rail.model import LedgerBackend, load_rail_config
 
     cfg = load_rail_config(repo)
@@ -381,5 +383,5 @@ def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
         client = BrainClient.http(settings.url, token=settings.token, agent="red-rail")
     assert cfg.ticket is not None  # guaranteed by the manifest validator
     return BrainLedger(
-        client, ticket=cfg.ticket, project=cfg.project, receipts_dir=repo / RECEIPTS_DIR
+        client, ticket=cfg.ticket, project=cfg.project, spool_dir=spool_directory(cfg.project)
     )
