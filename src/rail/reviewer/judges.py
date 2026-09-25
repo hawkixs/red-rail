@@ -81,17 +81,28 @@ def round_instructions(
     artifact: Literal["spec_plan", "code"],
     *,
     head_moved: bool = False,
+    delta: bool = True,
 ) -> str:
     """D8: one paragraph per round, and the class definitions per artifact. `head_moved`: a
-    closure on a head the last judged verdict did not see judges that delta too (Ruling 29)."""
+    closure on a head the last judged verdict did not see judges that delta too (Ruling 29).
+    `delta`: False when no delta exists since the last review (Q84 — a rebase, a delta reaching
+    outside the pull request, or the rerun label), so the whole pull request is judged instead;
+    the instruction must say so truthfully rather than claim a delta that was not computed."""
     parts: list[str] = []
     parts.append(_SPEC_PLAN_CLASSES if artifact == "spec_plan" else _CODE_CLASSES)
-    if step == "closure" and head_moved:
+    if step == "closure" and head_moved and delta:
         parts.append(
             "Closure check: verify the rulings below first. For each ruled finding answer "
             '"fixed" or "still_open" in "previous", judged against the operator\'s decision '
             "text. Code changed since the last review, so judge that delta too: a defect inside "
             "it is still a finding."
+        )
+    elif step == "closure" and head_moved:
+        parts.append(
+            "Closure check: verify the rulings below first. For each ruled finding answer "
+            '"fixed" or "still_open" in "previous", judged against the operator\'s decision '
+            "text. No delta exists since the last review, so the whole pull request is judged: "
+            "a defect anywhere in it is still a finding."
         )
     elif step == "closure":
         parts.append(

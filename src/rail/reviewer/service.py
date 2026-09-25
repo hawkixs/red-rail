@@ -526,6 +526,7 @@ def _finish(
     round_: int | None,
     artifact,
     delta: str | None,
+    whole: str,
     cf_open: list[str],
     section: dict,
     delta_bound: bool = False,
@@ -536,6 +537,10 @@ def _finish(
     `delta_bound`: a closure on a head that moved since the last judged verdict, with or
     without `fix` rulings (Ruling 29, Q82). A new finding inside the delta keeps its class, as
     in round 3; anywhere else it is demoted. On the judged head, D10: every new one is a note.
+    `whole`: the pull request's own diff, base...head — used as the delta for demotion (round 3
+    and `delta_bound`) whenever `delta` is None: a rebase, a delta reaching outside the pull
+    request, or the rerun label all mean no delta was computed, and Q84 counts the whole pull
+    request as the delta rather than demoting every new finding for lack of one.
 
     Mechanical carry-forward findings are recomputed from the pull request's body every round
     (`carry.reconcile`), never judged: `judged_state` leaves them out of `known`/`assign` so a
@@ -574,7 +579,7 @@ def _finish(
         fresh = iter(
             rounds.demote_outside(
                 [f for f in findings if f.status == "new"],
-                delta,
+                delta if delta is not None else whole,
                 artifact,
                 known=known,
                 skip=not state.has_findings_list,
@@ -729,13 +734,12 @@ def _review_started(
         findings = _mechanical_recomputed(findings, **recomputed)
         carry_forwards = None
         if artifact == "code":
-            addressed = (
-                rounds.carry_forwards_of(state.last_judged).addressed
-                if state.last_judged is not None
-                else ()
-            )
+            # A2 (residual minor): recomputed from the CURRENT body, the same rule as
+            # `_mechanical_recomputed` — an id the body now defers is not also addressed, so
+            # `deferred` and `addressed` never share an id.
+            addressed = rounds.confirmed_addressed(state, carry.addressed(cf_open, section), {})
             carry_forwards = CarryForwards(
-                addressed=addressed, deferred=_deferred(cf_open, section, findings)
+                addressed=tuple(addressed), deferred=_deferred(cf_open, section, findings)
             )
         verdict = ReviewVerdict(
             verdict="approve" if rounds.approves(findings) else "request_changes",
@@ -803,6 +807,7 @@ def _review_started(
         round_,
         artifact,
         head_moved=step == "closure" and not same_head,
+        delta=delta is not None,
     )
     common = dict(
         criteria=criteria,
@@ -889,6 +894,7 @@ def _review_started(
             round_=round_,
             artifact=artifact,
             delta=delta,
+            whole=whole,
             cf_open=cf_open,
             section=section,
             delta_bound=step == "closure" and not same_head,

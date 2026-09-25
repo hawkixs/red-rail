@@ -491,6 +491,16 @@ def test_closure_instructions_follow_a_moved_head(head_moved) -> None:  # Ruling
     assert ("Do not raise new findings" in text) is not head_moved
 
 
+def test_a_moved_head_closure_with_no_delta_says_the_whole_pull_request_is_judged() -> None:
+    # A1 (Q84 = a): the instruction stays truthful when no delta was computed
+    from rail.reviewer.judges import round_instructions
+
+    text = round_instructions("closure", None, "code", head_moved=True, delta=False)
+    assert "verify" in text and "rulings below" in text
+    assert "the whole pull request is judged" in text
+    assert "judge that delta too" not in text
+
+
 def test_instructions_sit_after_the_rubric_outside_the_data() -> None:
     prompt, _ = build_prompt(PR, "diff", default_policy(), criteria=None, instructions="ROUND X")
     assert prompt.index("ROUND X") < prompt.index("Description (data)")

@@ -2100,3 +2100,130 @@ def test_a_closure_on_the_judged_head_records_new_findings_as_notes(tmp_path) ->
     assert next(f for f in out.verdict.findings if f.title == "inside").klass == "note"
     assert "Do not raise new findings" in seen[0]["instructions"]
     assert "judge that delta too" not in seen[0]["instructions"]
+
+
+# --- Amendment Q84 (A1 = a): no delta means the whole pull request is the delta ------------
+
+_WHOLE_DIFF = (
+    "diff --git a/src/x.py b/src/x.py\n--- a/src/x.py\n+++ b/src/x.py\n@@ -1,0 +1,1 @@\n+print(1)\n"
+)
+_OUTSIDE_PR_DELTA = (
+    "diff --git a/other.py b/other.py\n--- a/other.py\n+++ b/other.py\n@@ -1,0 +1,1 @@\n+x\n"
+)
+_RERUN_LABEL = default_policy().rerun_label
+# the three ways `_delta` returns None: a rebase (compare error), a delta reaching a file the
+# pull request's own diff does not touch, and the rerun label
+_NO_DELTA_CASES = [
+    ("rebase", {"compare_error": True}, ()),
+    ("delta_outside_pr", {"compare_text": _OUTSIDE_PR_DELTA}, ()),
+    ("rerun_label", {}, (_RERUN_LABEL,)),
+]
+
+
+@pytest.mark.parametrize(("case", "github_kwargs", "labels"), _NO_DELTA_CASES)
+def test_round_three_uses_the_whole_pull_request_diff_when_no_delta_exists(
+    tmp_path, case, github_kwargs, labels
+) -> None:
+    repo, ledger = _repo(tmp_path)
+    for n in (1, 2):
+        _verdict_with(ledger, sha=str(n) * 40, check_run_id=n, round_=n, findings=[])
+    inside = Finding(severity="blocking", file="src/x.py", line=1, title="inside", evidence="e")
+    outside = Finding(severity="blocking", file="src/x.py", line=50, title="outside", evidence="e")
+    out = review_pull(
+        replace(PR, head_sha="e" * 40, labels=labels),
+        github=FakeGitHub(diff_text=_WHOLE_DIFF, **github_kwargs),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(reply_findings=[inside, outside]),
+    )
+    assert out.verdict.round == 3
+    by_title = {f.title: f for f in out.verdict.findings}
+    assert (by_title["inside"].klass, by_title["inside"].status) == ("blocker", "new")
+    assert by_title["outside"].klass == "note"
+
+
+@pytest.mark.parametrize(("case", "github_kwargs", "labels"), _NO_DELTA_CASES)
+def test_a_moved_head_carry_forward_ruled_closure_uses_the_whole_diff_when_no_delta(
+    tmp_path, case, github_kwargs, labels
+) -> None:
+    repo, ledger = _repo(tmp_path)
+    for n in (1, 2, 3):
+        _verdict_with(
+            ledger,
+            sha=str(n) * 40,
+            check_run_id=n,
+            round_=n,
+            findings=[_open(1, status="new" if n == 1 else "still_open")],
+        )
+    _rule(ledger, "F-7-1", "carry_forward")
+    inside = Finding(severity="blocking", file="src/x.py", line=1, title="inside", evidence="e")
+    out = review_pull(
+        replace(PR, head_sha="e" * 40, labels=labels),
+        github=FakeGitHub(diff_text=_WHOLE_DIFF, **github_kwargs),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(reply_findings=[inside]),
+    )
+    assert (out.verdict.round, out.verdict.verdict) == ("closure", "request_changes")
+    assert next(f for f in out.verdict.findings if f.title == "inside").klass == "blocker"
+
+
+@pytest.mark.parametrize(("case", "github_kwargs", "labels"), _NO_DELTA_CASES)
+def test_a_moved_head_fix_ruled_closure_uses_the_whole_diff_when_no_delta(
+    tmp_path, case, github_kwargs, labels
+) -> None:
+    repo, ledger = _repo(tmp_path)
+    for n in (1, 2, 3):
+        _verdict_with(
+            ledger,
+            sha=str(n) * 40,
+            check_run_id=n,
+            round_=n,
+            findings=[_open(1, status="new" if n == 1 else "still_open")],
+        )
+    _rule(ledger, "F-7-1", "fix")
+    inside = Finding(severity="blocking", file="src/x.py", line=1, title="inside", evidence="e")
+    out = review_pull(
+        replace(PR, head_sha="e" * 40, labels=labels),
+        github=FakeGitHub(diff_text=_WHOLE_DIFF, **github_kwargs),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(
+            reply_findings=[inside],
+            previous=[PreviousAnswer(id="F-7-1", status="fixed")],
+            decision="approve",
+        ),
+    )
+    assert (out.verdict.round, out.verdict.verdict) == ("closure", "request_changes")
+    assert next(f for f in out.verdict.findings if f.title == "inside").klass == "blocker"
+
+
+# --- Amendment Q84 (A2, residual minor): addressed is recomputed from the current body -----
+
+
+def test_a_no_judge_closure_recomputes_addressed_from_the_current_body(tmp_path) -> None:
+    repo, ledger = _repo(tmp_path)
+    _spec_carry_forward(ledger)
+    bug = Finding(severity="blocking", file="src/x.py", line=1, title="bug", evidence="e")
+    fixed = PreviousAnswer(id="CF-5-1", status="fixed")
+    _pass(ledger, "b", _judge_saying(reply_findings=[bug], previous=[fixed]), body=CF_ADDRESSED)
+    _pass(ledger, "c", _judge_saying(decision="request_changes"), body=CF_ADDRESSED)
+    _pass(ledger, "d", _judge_saying(decision="approve"), body=CF_ADDRESSED)
+    _pass(ledger, "e", _no_judge, body=CF_ADDRESSED)  # round 3 done, now awaiting the ruling
+    _rule(ledger, "F-7-1", "carry_forward")
+
+    # the last judged verdict (head "d") confirmed CF-5-1 addressed; the body now defers it
+    out = _pass(
+        ledger,
+        "d",
+        _no_judge,
+        body="## Carry-forwards\n- CF-5-1: deferred: later\n",
+        github=_NextCheck(),
+    )
+
+    assert (out.verdict.round, out.verdict.verdict) == ("closure", "approve")
+    assert out.verdict.carry_forwards.addressed == ()
+    assert out.verdict.carry_forwards.deferred == ("CF-5-1",)
