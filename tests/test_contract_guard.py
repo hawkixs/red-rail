@@ -84,3 +84,12 @@ def test_the_message_names_what_was_found_and_where() -> None:
 def test_empty_and_absent_fields_are_fine() -> None:
     refuse_unwritable([])
     refuse_unwritable(["an objective"], constraints=None)
+
+
+def test_a_loopback_address_is_refused_and_the_refusal_says_so() -> None:
+    """Loopback routes nowhere, so its refusal surprises: the message names the rule — the
+    literal is refused, whatever the range — and the words to write instead."""
+    loopback = ".".join(["127", "0", "0", "1"])  # built at run time: no literal in the tree
+    with pytest.raises(Unwritable, match="loopback and private ranges included") as refused:
+        refuse_unwritable([], constraints=[f"listens on {loopback} only"])
+    assert "the loopback interface" in str(refused.value)

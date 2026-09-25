@@ -85,7 +85,9 @@ def refuse_unwritable(
                 raise Unwritable(
                     f"{label}: {', '.join(addresses)} is a literal address, and a contract "
                     "revision cannot be corrected — only amended, leaving this one in "
-                    "history. Describe the target instead, or use the documentation range "
+                    "history. Every literal address is refused, loopback and private ranges "
+                    'included. Describe the target instead ("the loopback interface", '
+                    '"the host\'s private address"), or use the documentation range '
                     "192.0.2.0/24"
                 )
             if names := _credentials(text):
