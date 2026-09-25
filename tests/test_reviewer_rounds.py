@@ -243,8 +243,10 @@ def _f(**over) -> Finding:
         ("code", None, "blocking", "blocker"),
         ("code", None, "minor", "note"),
         ("spec_plan", None, "blocking", "blocker"),
-        ("spec_plan", None, "important", "carry_forward"),
-        ("spec_plan", "note", "minor", "carry_forward"),
+        # Q83: only a real implementation gap the judge names becomes a carry-forward
+        ("spec_plan", None, "important", "note"),
+        ("spec_plan", "note", "minor", "note"),
+        ("spec_plan", "carry_forward", "minor", "carry_forward"),
         ("spec_plan", "carry_forward", "blocking", "carry_forward"),
         ("code", "note", "blocking", "blocker"),
         ("spec_plan", "note", "blocking", "blocker"),

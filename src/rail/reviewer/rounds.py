@@ -186,15 +186,12 @@ def enforce_class(f: Finding, artifact: Artifact) -> Finding:
 
     On `code`, severity alone decides — a judge's "note" no longer downgrades a blocking
     finding. On `spec_plan`, a proposed "blocker" or "carry_forward" is kept; anything else
-    (None or "note") falls back on severity: blocking -> "blocker", otherwise ->
-    "carry_forward"."""
-    if artifact == "code":
+    (None or "note") falls back on severity: blocking -> "blocker", otherwise -> "note".
+    Only a gap the judge names a carry-forward is tracked (Q83)."""
+    if artifact == "code" or f.klass not in ("blocker", "carry_forward"):
         klass = "blocker" if f.severity == "blocking" else "note"
     else:
-        if f.klass in ("blocker", "carry_forward"):
-            klass = f.klass
-        else:
-            klass = "blocker" if f.severity == "blocking" else "carry_forward"
+        klass = f.klass
     return f if f.klass == klass else f.model_copy(update={"klass": klass})
 
 

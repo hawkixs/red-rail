@@ -314,3 +314,7 @@ only the rulings below". The artifact type selects the class definitions of deci
   need a ruling; the author clears them by editing the body (resolves D9/D11).
 - A carry_forward ruling on a "CF-x not addressed" blocker defers CF-x; a carry_forward ruling
   opens a carry-forward only once its pull request is approved (amends D11).
+- A spec/plan pull request keeps the class `note`: the judge proposes `blocker`,
+  `carry_forward` or `note`, and a finding with no class that is not `blocking` is a `note`.
+  Only a real gap at implementation level becomes a carry-forward (Q83, amends D2). A blocker
+  demoted outside the round-3 delta is still a carry-forward on a spec or a plan.

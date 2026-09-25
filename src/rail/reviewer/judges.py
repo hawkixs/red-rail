@@ -71,7 +71,9 @@ _SPEC_PLAN_CLASSES = (
     'This pull request is a spec or a plan. Classify each finding: "blocker" when it '
     "contradicts the spec, misses a requirement, or makes a wrong design decision; "
     '"carry_forward" when it is a real gap at implementation level that the code can close '
-    "later. A carry_forward never blocks the approval of a spec or a plan."
+    'later; "note" for anything else worth saying (wording, style, a suggestion). A '
+    "carry_forward is tracked until a code pull request closes it, so use it only for a real "
+    "gap. Neither a carry_forward nor a note blocks the approval of a spec or a plan."
 )
 
 
