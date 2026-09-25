@@ -1,0 +1,273 @@
+"""The review loop's state, from receipts only (spec 2026-09-25-review-loop-closure).
+
+Pure: no GitHub, no ledger I/O, no judge. `service.py` hands it the pull request's
+`review_verdict` and `review_ruling` records and a delta; it answers what to do next, which
+findings are open, how new ones are numbered and classified, and which carry-forwards a code
+pull request must account for."""
+
+from __future__ import annotations
+
+import fnmatch
+import re
+from collections.abc import Collection, Iterable, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal
+
+from rail.ledger import Record
+from rail.reviewer.verdict import Artifact, Finding, PreviousAnswer
+
+Step = Literal["round", "awaiting_ruling", "closure"]
+JUDGED_ROUNDS = (1, 2, 3, None)  # None: a verdict recorded before this change
+SPEC_PLAN_DIRS = ("docs/specs/", "docs/plans/")
+_DIFF_FILE = re.compile(r"^diff --git a/(?P<path>\S+) b/", re.MULTILINE)
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class Ruling:
+    finding: str
+    ruling: Literal["fix", "carry_forward"]
+    decision: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True)
+class LoopState:
+    judged: int
+    last_judged: Record | None
+    findings: tuple[Finding, ...]
+    rulings: dict[str, Ruling]
+    awaiting: bool
+    has_findings_list: bool
+
+
+def cf_id(finding_id: str) -> str:
+    return "CF-" + finding_id.removeprefix("F-")
+
+
+def f_id(cf: str) -> str:
+    return "F-" + cf.removeprefix("CF-")
+
+
+def artifact_of(paths: Iterable[str], records_globs: Sequence[str]) -> Artifact:
+    """D1: spec/plan when every file is under docs/specs/ or docs/plans/, records ignored."""
+    own = [p for p in paths if not any(fnmatch.fnmatch(p, g) for g in records_globs)]
+    if own and all(p.startswith(SPEC_PLAN_DIRS) for p in own):
+        return "spec_plan"
+    return "code"
+
+
+def _findings(record: Record) -> tuple[Finding, ...] | None:
+    raw = record.data.get("findings")
+    if not isinstance(raw, list):
+        return None  # an integer count: recorded before the change
+    return tuple(
+        Finding.model_validate({**item, "evidence": item.get("evidence") or "(trimmed)"})
+        for item in raw
+    )
+
+
+def _judged(record: Record) -> bool:
+    return record.data.get("round") in JUDGED_ROUNDS
+
+
+def loop_state(verdicts: Sequence[Record], rulings: Sequence[Record]) -> LoopState:
+    judged = [v for v in verdicts if _judged(v)]
+    judging = [v for v in verdicts if _judged(v) or v.data.get("round") == "closure"]
+    last_judged = judging[-1] if judging else None
+    latest = verdicts[-1] if verdicts else None
+    findings = (_findings(latest) if latest is not None else None) or ()
+    has_list = latest is not None and _findings(latest) is not None
+    after = last_judged.recorded_at if last_judged is not None else None
+    ruled: dict[str, Ruling] = {}
+    for r in rulings:
+        if after is not None and r.recorded_at <= after:
+            continue
+        ruled[str(r.data["finding"])] = Ruling(
+            finding=str(r.data["finding"]),
+            ruling=r.data["ruling"],
+            decision=str(r.data.get("decision", "")),
+            recorded_at=r.recorded_at,
+        )
+    open_ = any(f.open_blocker for f in findings)
+    last_round = last_judged.data.get("round") if last_judged is not None else None
+    awaiting = open_ and (last_round == "closure" or (last_round == 3))
+    return LoopState(
+        judged=len(judged),
+        last_judged=last_judged,
+        findings=tuple(findings),
+        rulings=ruled,
+        awaiting=awaiting,
+        has_findings_list=has_list,
+    )
+
+
+def open_blockers(state: LoopState) -> list[Finding]:
+    return [f for f in state.findings if f.open_blocker]
+
+
+def unruled(state: LoopState) -> list[Finding]:
+    return [f for f in open_blockers(state) if f.id not in state.rulings]
+
+
+def next_step(state: LoopState) -> tuple[Step, int | None]:
+    if state.awaiting:
+        if not unruled(state):
+            return "closure", None
+        return "awaiting_ruling", None
+    return "round", min(state.judged + 1, 3)
+
+
+def changed_lines(delta: str) -> dict[str, set[int]]:
+    """New-side line numbers each hunk covers, per file."""
+    lines: dict[str, set[int]] = {}
+    for block in re.split(r"(?=^diff --git )", delta, flags=re.MULTILINE):
+        match = _DIFF_FILE.search(block)
+        if not match:
+            continue
+        covered = lines.setdefault(match["path"], set())
+        for hunk in _HUNK.finditer(block):
+            start = int(hunk["start"])
+            count = int(hunk["count"]) if hunk["count"] is not None else 1
+            covered.update(range(start, start + count))
+    return lines
+
+
+def _demoted(artifact: Artifact) -> str:
+    return "carry_forward" if artifact == "spec_plan" else "note"
+
+
+def enforce_class(f: Finding, artifact: Artifact) -> Finding:
+    """D2: the judge proposes, the table decides."""
+    if artifact == "code":
+        klass = "blocker" if f.severity == "blocking" else "note"
+        if f.klass == "note":
+            klass = "note"
+    else:
+        if f.klass in ("blocker", "carry_forward"):
+            klass = f.klass
+        else:
+            klass = "blocker" if (f.klass is None and f.severity == "blocking") else "carry_forward"
+    return f if f.klass == klass else f.model_copy(update={"klass": klass})
+
+
+def demote_outside(
+    findings: Sequence[Finding],
+    delta: str | None,
+    artifact: Artifact,
+    *,
+    known: Collection[str] = (),
+) -> list[Finding]:
+    """D5 round 3: a NEW finding survives only on a line the delta changed; with no delta
+    (a rebase, a lost base) every new finding is demoted. A finding whose id is in `known`
+    is an earlier one and is untouched; an id the judge invented is new (Review Focus 4)."""
+    covered = changed_lines(delta) if delta else {}
+    out: list[Finding] = []
+    for f in findings:
+        if (f.id is not None and f.id in known) or f.klass != "blocker":
+            out.append(f)
+            continue
+        lines = covered.get(f.file)
+        inside = lines is not None and (f.line is None or f.line in lines)
+        out.append(f if inside else f.model_copy(update={"klass": _demoted(artifact)}))
+    return out
+
+
+def _number(identifier: str) -> int:
+    return int(identifier.rsplit("-", 1)[1])
+
+
+def assign(
+    new: Sequence[Finding],
+    previous: Sequence[PreviousAnswer],
+    state: LoopState,
+    *,
+    pr: int,
+    artifact: Artifact,
+) -> list[Finding]:
+    """The verdict's full findings list: every earlier finding with its new status, then the
+    new ones numbered after the highest id so far (D2, D7)."""
+    known = {f.id: f for f in state.findings if f.id}
+    answers = {a.id: a.status for a in previous if a.id in known}
+    repeated = {f.id for f in new if f.id in known}
+    out: list[Finding] = []
+    for fid, f in known.items():
+        if f.status in ("fixed", "ruled"):
+            out.append(f)
+        elif answers.get(fid) == "fixed" and fid not in repeated:
+            out.append(f.model_copy(update={"status": "fixed"}))
+        else:
+            out.append(f.model_copy(update={"status": "still_open"}))
+    highest = max((_number(i) for i in known), default=0)
+    for f in new:
+        if f.id in known:
+            continue
+        highest += 1
+        fresh = f.model_copy(update={"id": f"F-{pr}-{highest}", "status": "new"})
+        out.append(enforce_class(fresh, artifact))
+    return out
+
+
+def approves(findings: Sequence[Finding]) -> bool:
+    """D3: no open blocker."""
+    return not any(f.open_blocker for f in findings)
+
+
+def append_new(
+    findings: Sequence[Finding], extra: Sequence[Finding], *, pr: int, artifact: Artifact
+) -> list[Finding]:
+    """`findings` unchanged, then `extra` numbered after the highest id among them."""
+    highest = max((_number(f.id) for f in findings if f.id), default=0)
+    out = list(findings)
+    for f in extra:
+        highest += 1
+        out.append(
+            enforce_class(
+                f.model_copy(update={"id": f"F-{pr}-{highest}", "status": "new"}), artifact
+            )
+        )
+    return out
+
+
+def apply_rulings(findings: Sequence[Finding], rulings: dict[str, Ruling]) -> list[Finding]:
+    """D9: a carry_forward ruling reclassifies its finding without a judge."""
+    return [
+        f.model_copy(update={"klass": "carry_forward", "status": "ruled"})
+        if f.id in rulings and rulings[f.id].ruling == "carry_forward"
+        else f
+        for f in findings
+    ]
+
+
+def open_carry_forwards(
+    verdicts: Sequence[Record],
+    rulings: Sequence[Record],
+    *,
+    repository: str,
+    excluding_pr: int | None = None,
+) -> list[str]:
+    """D11: CF- of approving verdicts, plus carry_forward rulings of pull requests that were
+    later approved, minus every id an approving code verdict recorded as addressed."""
+    mine = [v for v in verdicts if v.data.get("repository") == repository]
+    approved_prs = {v.data.get("pr") for v in mine if v.data.get("verdict") == "approve"}
+    opened: dict[str, None] = {}
+    addressed: set[str] = set()
+    for v in mine:
+        if v.data.get("verdict") != "approve":
+            continue
+        for f in _findings(v) or ():
+            if f.klass == "carry_forward" and f.id:
+                opened.setdefault(cf_id(f.id), None)
+        carry = v.data.get("carry_forwards") or {}
+        addressed.update(carry.get("addressed", []))
+    for r in rulings:
+        if r.data.get("repository") != repository or r.data.get("ruling") != "carry_forward":
+            continue
+        if r.data.get("pr") in approved_prs:
+            opened.setdefault(cf_id(str(r.data["finding"])), None)
+    excluded = f"CF-{excluding_pr}-" if excluding_pr is not None else None
+    return sorted(
+        (i for i in opened if i not in addressed and not (excluded and i.startswith(excluded))),
+        key=lambda i: (int(i.split("-")[1]), _number(i)),
+    )
