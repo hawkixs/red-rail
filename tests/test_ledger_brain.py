@@ -245,7 +245,7 @@ def test_a_key_brain_holds_with_the_same_payload_is_already_recorded(tmp_path: P
         "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
     )
     assert later == first, "brain's row, although the clock gave the retry a new instant"
-    assert len(brain.attestations) == 1 and not list(ledger.spool.root.glob("*.json"))
+    assert len(brain.attestations) == 1 and ledger.pending() == []
 
 
 def test_a_key_brain_holds_with_another_payload_is_a_conflict_that_leaves_the_spool(
@@ -262,7 +262,33 @@ def test_a_key_brain_holds_with_another_payload_is_a_conflict_that_leaves_the_sp
             "red-probe", AttestationKind.RELEASED, other, issuer="op", idempotency_key="r1"
         )
     assert brain_digest(RELEASE) in str(exc.value) and brain_digest(other) in str(exc.value)
-    assert not list(ledger.spool.root.glob("*.json"))
+    assert ledger.pending() == []
+
+
+def test_pending_is_oldest_first_and_replay_says_what_happened(tmp_path: Path) -> None:
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    done = ledger.attest(
+        "red-probe", AttestationKind.DEPLOYED, {"sha": "a" * 40}, issuer="op", idempotency_key="d0"
+    )
+    brain.enabled = False
+    for key, sha in (("d1", "b"), ("d2", "c")):
+        with pytest.raises(Unattested):
+            ledger.attest(
+                "red-probe",
+                AttestationKind.DEPLOYED,
+                {"sha": sha * 40},
+                issuer="op",
+                idempotency_key=key,
+            )
+    brain.enabled = True
+    ledger.spool.mirror(done)  # the crash window: recorded by brain, not yet removed
+    waiting = ledger.pending()
+    assert [r.idempotency_key for r in waiting] == ["d0", "d1", "d2"]
+    assert [ledger.replay(r) for r in waiting] == ["already recorded", "recorded", "recorded"]
+    assert ledger.pending() == [] and len(brain.attestations) == 3
 
 
 def test_an_unanswerable_reuse_leaves_the_receipt_waiting(tmp_path: Path) -> None:
@@ -273,9 +299,7 @@ def test_an_unanswerable_reuse_leaves_the_receipt_waiting(tmp_path: Path) -> Non
     ledger.contract_set(
         "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
     )
-    ledger.attest(
-        "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
-    )
+    ledger.attest("red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1")
     ledger._row_by_key = lambda kind, key: None  # type: ignore[method-assign]
     with pytest.raises(Unattested) as exc:
         ledger.attest(

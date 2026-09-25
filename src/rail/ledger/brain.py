@@ -15,7 +15,7 @@ import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from rail.brain.client import BrainClient, BrainToolError, BrainUnreachable
@@ -241,6 +241,30 @@ class BrainLedger:
             raise LedgerError("brain stored a different payload digest than the spooled receipt's")
         receipt.unlink(missing_ok=True)
         return record
+
+    def pending(self) -> list[Record]:
+        """The attestations waiting in this project's spool, oldest first."""
+        return self.spool.list(self.project, kind=RecordKind.ATTESTATION)
+
+    def replay(self, record: Record) -> Literal["recorded", "already recorded"]:
+        """Send one waiting receipt again; it leaves the spool once brain holds its payload."""
+        kind = record.attestation
+        if kind is None:
+            raise LedgerError(f"{record.idempotency_key}: not an attestation")
+        receipt = self.spool.path_of(record)
+        row = self._lookup(receipt, kind, record.idempotency_key)
+        if row is not None:
+            self._settle(record, receipt, row)
+            return "already recorded"
+        self.attest(
+            self.project,
+            kind,
+            record.data,
+            issuer=record.issuer,
+            idempotency_key=record.idempotency_key,
+            emitted_at=record.recorded_at,
+        )
+        return "recorded"
 
     def accept(
         self, project: str, *, rationale: str, issuer: str, sha: str | None = None
