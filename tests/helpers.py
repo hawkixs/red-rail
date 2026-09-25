@@ -97,6 +97,17 @@ RUST_TOOLCHAIN_TOML = (
 )
 
 
+def added_receipt_diff(path: Path, name: str | None = None) -> str:
+    """The pull-request diff that adds the receipt at `path` under docs/receipts/."""
+    lines = path.read_text().splitlines()
+    target = f"docs/receipts/{name or path.name}"
+    body = "\n".join("+" + line for line in lines)
+    return (
+        f"diff --git a/{target} b/{target}\nnew file mode 100644\nindex 0000000..1111111\n"
+        f"--- /dev/null\n+++ b/{target}\n@@ -0,0 +1,{len(lines)} @@\n{body}\n"
+    )
+
+
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=GIT_ENV

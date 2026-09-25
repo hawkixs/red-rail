@@ -22,7 +22,7 @@ from rail.ledger import (
     idempotency_key_for,
 )
 from rail.ledger.file import receipt_filename
-from rail.reviewer import carry, rounds
+from rail.reviewer import carry, records, rounds
 from rail.reviewer.github import GitHubError, PullRequest
 from rail.reviewer.judges import JudgeReply, diff_budget, judge, round_instructions
 from rail.reviewer.policy import ReviewPolicy, producer_provider
@@ -31,7 +31,15 @@ from rail.reviewer.verdict import CarryForwards, Finding, PreviousAnswer, Review
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
 _DIFF_HEADER = re.compile(r"^diff --git a/(?P<path>\S+) b/", re.MULTILINE)
+_ANY_HEADER = re.compile(r"^diff --git ", re.MULTILINE)
 RunJudge = Callable[..., JudgeReply]
+
+
+def _headers_parsed(diff: str) -> bool:
+    """Every `diff --git` line names its path the way `_DIFF_HEADER` reads it. A path with
+    a space, or a path git quotes, does not; such a diff is judged, never classified on the
+    paths we could read (spec 2026-09-25-spool-replaces-committed-mirrors, D5: fail closed)."""
+    return len(_ANY_HEADER.findall(diff)) == len(_DIFF_HEADER.findall(diff))
 
 
 class GitHubLike(Protocol):
@@ -91,7 +99,11 @@ def pending_reviews(github: Any, repository: str, policy: ReviewPolicy) -> list[
 
 def docs_only(diff: str, policy: ReviewPolicy) -> bool:
     paths = _DIFF_HEADER.findall(diff)
-    return bool(paths) and all(any(fnmatch.fnmatch(p, g) for g in policy.docs_globs) for p in paths)
+    return (
+        _headers_parsed(diff)
+        and bool(paths)
+        and all(any(fnmatch.fnmatch(p, g) for g in policy.docs_globs) for p in paths)
+    )
 
 
 def _criteria(ledger: Ledger, project: str, pr: PullRequest) -> list[str] | None:
@@ -690,12 +702,31 @@ def _review_started(
     run_judge: RunJudge,
     root: Path | None,
 ) -> ReviewOutcome:
+    whole = github.diff(pr.repository, pr.number)
+    artifact = rounds.artifact_of(_files(whole), policy.records_globs)
+    if not _headers_parsed(whole):
+        # C1: a file whose header we cannot read is invisible to `_files`; a hidden file must
+        # never make a pull request look like records (or a spec) — fail closed, judge it.
+        artifact = "code"
+    if artifact == "records":
+        # spec 2026-09-25-spool-replaces-committed-mirrors, D5: form only, no judge, no round
+        verdict = records.mechanical_verdict(whole, project=project)
+        return _publish(
+            pr,
+            check,
+            verdict,
+            verdict.verdict,
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            failures=[],
+        )
     history = previous_verdicts(ledger, project, pr)
     rulings = rulings_of(ledger, project, pr)
     state = rounds.loop_state(history, rulings)
     step, round_ = rounds.next_step(state)
-    whole = github.diff(pr.repository, pr.number)
-    artifact = rounds.artifact_of(_files(whole), policy.records_globs)
     cf_open: list[str] = []
     section: dict = {}
     if artifact == "code":

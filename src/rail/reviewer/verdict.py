@@ -14,8 +14,8 @@ Severity = Literal["blocking", "important", "minor"]
 Decision = Literal["approve", "request_changes"]
 FindingClass = Literal["blocker", "carry_forward", "note"]
 FindingStatus = Literal["new", "still_open", "fixed", "ruled"]
-RoundLabel = Literal[1, 2, 3, "awaiting_ruling", "closure", "no_verdict"]
-Artifact = Literal["spec_plan", "code"]
+RoundLabel = Literal[1, 2, 3, "awaiting_ruling", "closure", "no_verdict", "mechanical"]
+Artifact = Literal["spec_plan", "code", "records"]
 FINDING_ID = r"^F-\d+-\d+$"
 ANY_ID = r"^(F|CF)-\d+-\d+$"
 # bytes of canonical JSON the findings list may take in a review_verdict payload: brain refuses
@@ -73,7 +73,9 @@ class ReviewVerdict(BaseModel):
     verdict: Decision
     summary: str = Field(min_length=1, max_length=4000)
     findings: list[Finding] = Field(default_factory=list, max_length=100)
-    mode: Literal["light", "deep", "incremental", "awaiting_ruling", "closure"] = "light"
+    mode: Literal["light", "deep", "incremental", "awaiting_ruling", "closure", "mechanical"] = (
+        "light"
+    )
     providers: tuple[str, ...] = ()
     diff_truncated: bool = False
     round: RoundLabel | None = None
