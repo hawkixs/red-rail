@@ -416,3 +416,84 @@ def test_an_unbound_prompt_says_no_contract_is_bound() -> None:
     assert "(none declared)" not in head
     declared, _ = build_prompt(PR, DIFF, default_policy(), criteria=[])
     assert "(none declared)" in declared.split("BEGIN DIFF")[0]
+
+
+def test_parse_verdict_reads_classes_ids_and_previous_answers() -> None:
+    text = json.dumps(
+        {
+            "verdict": "request_changes",
+            "summary": "s",
+            "findings": [
+                {"severity": "blocking", "file": "a.py", "line": 1, "title": "t",
+                 "evidence": "e", "class": "blocker", "id": "F-7-2"},
+            ],
+            "previous": [{"id": "F-7-1", "status": "fixed", "evidence": "gone"}],
+        }
+    )
+    verdict = parse_verdict(text)
+    assert verdict.findings[0].klass == "blocker" and verdict.findings[0].id == "F-7-2"
+    assert verdict.previous[0].id == "F-7-1" and verdict.previous[0].status == "fixed"
+
+
+def test_a_malformed_previous_entry_is_dropped_not_fatal() -> None:
+    text = json.dumps(
+        {"verdict": "approve", "summary": "s", "findings": [],
+         "previous": [{"id": "nope", "status": "fixed"}, {"id": "F-7-1", "status": "fixed"}]}
+    )
+    verdict = parse_verdict(text)
+    assert [p.id for p in verdict.previous] == ["F-7-1"]
+
+
+def test_a_reply_without_the_new_fields_still_parses() -> None:
+    verdict = parse_verdict('{"verdict": "approve", "summary": "s", "findings": []}')
+    assert verdict.previous == () and verdict.verdict == "approve"
+
+
+@pytest.mark.parametrize(
+    ("step", "round_", "artifact", "needle"),
+    [
+        ("round", 1, "code", ""),
+        ("round", 1, "spec_plan", "carry_forward"),
+        ("round", 2, "code", "exhaustive"),
+        ("round", 3, "spec_plan", "do not look for new findings"),
+        ("closure", None, "code", "verify only the rulings"),
+    ],
+)
+def test_round_instructions(step, round_, artifact, needle) -> None:
+    from rail.reviewer.judges import round_instructions
+
+    text = round_instructions(step, round_, artifact)
+    assert needle in text
+    if (step, round_, artifact) == ("round", 1, "code"):
+        assert text == ""  # round 1 on code: today's prompt, byte for byte
+
+
+def test_instructions_sit_after_the_rubric_outside_the_data() -> None:
+    prompt, _ = build_prompt(PR, "diff", default_policy(), criteria=None, instructions="ROUND X")
+    assert prompt.index("ROUND X") < prompt.index("Description (data)")
+
+
+def test_discount_records_also_downgrades_the_class_of_a_receipt_finding(tmp_path: Path) -> None:
+    """Ruling 1: a judge's `class: blocker` on a receipt must not survive the discount, or the
+    class alone could keep blocking the merge after the severity was already downgraded."""
+    receipt = {
+        "severity": "blocking",
+        "file": RECEIPT,
+        "title": "stale head",
+        "evidence": "x",
+        "class": "blocker",
+    }
+
+    reply = judge(
+        PR,
+        DIFF,
+        default_policy(),
+        provider="codex",
+        tier="light",
+        runner=lambda p, s: (0, _reply(receipt)),
+        root=tmp_path,
+    )
+
+    assert reply.verdict is not None
+    finding = reply.verdict.findings[0]
+    assert finding.klass == "note" and finding.severity == "minor"
