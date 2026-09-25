@@ -152,6 +152,11 @@ def test_docs_only_reads_the_diff_headers() -> None:
     assert not docs_only(
         "diff --git a/docs/x.md b/docs/x.md\ndiff --git a/src/a.py b/src/a.py\n", default_policy()
     )
+    # C1: a path the pattern cannot read (a space) must never select the light tier
+    assert not docs_only(
+        "diff --git a/docs/x.md b/docs/x.md\ndiff --git a/src/pwn me.py b/src/pwn me.py\n+evil\n",
+        default_policy(),
+    )
 
 
 def _bind(ledger: FileLedger, pr: PullRequest = PR) -> None:
@@ -2333,3 +2338,34 @@ def test_a_tampered_receipt_gets_request_changes_and_still_no_judge(tmp_path: Pa
     )
     assert outcome.verdict.verdict == "request_changes"
     assert ("review", 7, "REQUEST_CHANGES") in github.calls
+
+
+def test_a_path_the_header_pattern_cannot_read_is_always_judged(tmp_path: Path) -> None:  # C1
+    repo, ledger = _repo(tmp_path)
+    other = FileLedger(tmp_path / "made")
+    made = other.attest(
+        "red-alpha", AttestationKind.DEPLOYED, {"sha": "e" * 40}, issuer="op", idempotency_key="d9"
+    )
+    unparsed = (
+        "diff --git a/src/pwn me.py b/src/pwn me.py\nnew file mode 100644\n"
+        "index 0000000..1111111\n--- /dev/null\n+++ b/src/pwn me.py\n@@ -0,0 +1 @@\n+print(1)\n"
+    )
+    github = FakeGitHub(diff_text=unparsed + added_receipt_diff(other.path_of(made)))
+    calls = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+        calls.append(provider)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert calls  # the judge was called: a hidden file never gets a mechanical approve
+    assert outcome.verdict.mode != "mechanical"
