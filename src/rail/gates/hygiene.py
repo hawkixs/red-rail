@@ -21,6 +21,7 @@ from rail import gitrepo, markdown
 from rail.gates import GateResult, GateSpec, Stage
 from rail.ledger import BRAIN_MILESTONES, RECEIPTS_DIR, LedgerError, RecordKind, open_ledger
 from rail.ledger.file import FileLedger, load_receipt, receipt_filename
+from rail.ledger.spool import spool_directory
 from rail.model import (
     MISSING_HINT,
     LedgerBackend,
@@ -358,11 +359,12 @@ def receipts(repo: Path) -> GateResult:
 
 
 def mirrors(repo: Path) -> GateResult:
-    """`ledger: brain`: every attestation receipt in the checkout is a mirror of a row in
-    the shared ledger — matched by record digest (same fields, same digest). A mirror
-    without its attestation is drift (ADR-0002), the phase-2 proof line. Milestone receipts
-    (`integrated`, `fulfilled`) are brain's own receipts, never attested by the rail: the ones
-    kept from a file-ledger past are history, not drift."""
+    """`ledger: brain`: nothing waits in the host's spool, and every attestation
+    receipt kept in the checkout (history, spec 2026-09-25-spool-replaces-committed-mirrors)
+    mirrors a row in the shared ledger — matched by record digest (same fields, same digest).
+    A mirror without its attestation is drift (ADR-0002), the phase-2 proof line. Milestone
+    receipts (`integrated`, `fulfilled`) are brain's own receipts, never attested by the rail:
+    the ones kept from a file-ledger past are history, not drift."""
     decl = declarations(repo)
     if isinstance(decl, str):
         return GateResult(Stage.HYGIENE, "mirrors", False, decl)
@@ -371,6 +373,21 @@ def mirrors(repo: Path) -> GateResult:
         return GateResult(Stage.HYGIENE, "mirrors", True, f"{where}: the receipts are the ledger")
     cfg = decl.cfg
     assert cfg is not None  # a brain ledger is only ever declared by a manifest
+    try:
+        waiting = FileLedger(spool_directory(cfg.project)).list(
+            cfg.project, kind=RecordKind.ATTESTATION
+        )
+    except LedgerError as exc:
+        return GateResult(Stage.HYGIENE, "mirrors", False, f"spool: {exc}")
+    if waiting:
+        since = waiting[0].recorded_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return GateResult(
+            Stage.HYGIENE,
+            "mirrors",
+            False,
+            f"{len(waiting)} attestation(s) waiting in the spool since {since}: "
+            "replay with `rail ledger replay`",
+        )
     local = FileLedger(repo / RECEIPTS_DIR)
     try:
         kept = local.list(cfg.project, kind=RecordKind.ATTESTATION)
