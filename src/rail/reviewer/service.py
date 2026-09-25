@@ -299,12 +299,24 @@ def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdi
     return ReviewVerdict(
         verdict=decision,
         summary=summary[:4000] or "no summary",
-        findings=findings[:100],
+        findings=_capped(findings),
         mode=mode,
         providers=tuple(r.provider for r in replies if r.verdict),
         diff_truncated=truncated or any(v.diff_truncated for v in verdicts),
         previous=tuple(previous),
     )
+
+
+_MAX_FINDINGS = 100  # ReviewVerdict.findings' limit
+
+
+def _capped(findings: list[Finding]) -> list[Finding]:
+    """At most `_MAX_FINDINGS`, in order (M4): every open finding stays, then the newest closed
+    ones. More open findings than that fail validation, closed. A dropped id is never reused:
+    new ids are numbered above `LoopState.highest_id`."""
+    closed = [i for i, f in enumerate(findings) if f.status not in ("new", "still_open")]
+    dropped = set(closed[: max(0, len(findings) - _MAX_FINDINGS)])
+    return [f for i, f in enumerate(findings) if i not in dropped]
 
 
 def _render(verdict: ReviewVerdict) -> str:
@@ -497,7 +509,7 @@ def _awaiting(pr: PullRequest, state: rounds.LoopState, artifact) -> ReviewVerdi
             f"({', '.join(f.id or '?' for f in waiting)}). No fourth round: rule on each with\n"
             f"{commands}"
         )[:4000],
-        findings=list(state.findings),
+        findings=_capped(list(state.findings)),
         mode="awaiting_ruling",
         providers=(),
         round="awaiting_ruling",
@@ -545,12 +557,16 @@ def _finish(
         )
         for f in merged.findings
     ]
-    # C2 (Ruling 12): a new id is numbered above the highest id ANY finding of this pull
-    # request holds, mechanical carry-forward blockers included, not only `judged_state`'s —
-    # otherwise a fresh judged finding can collide with a mechanical one from an earlier round.
-    floor = max((int(f.id.rsplit("-", 1)[1]) for f in state.findings if f.id), default=0)
+    # C2 (Ruling 12), M4: a new id is numbered above the highest id ANY verdict of this pull
+    # request ever held, mechanical blockers and capped-out findings included, not only
+    # `judged_state`'s — otherwise a fresh finding could reuse an id already on record.
     findings = rounds.assign(
-        new, merged.previous, judged_state, pr=pr.number, artifact=artifact, floor=floor
+        new,
+        merged.previous,
+        judged_state,
+        pr=pr.number,
+        artifact=artifact,
+        floor=state.highest_id,
     )
     if round_ == 3 or delta_bound:
         # after `assign`, which re-derives a new finding's class from its severity: demoted
@@ -588,15 +604,14 @@ def _finish(
             # on something else.
             old = rounds.apply_rulings(old, state.rulings)
         kept, fresh = carry.reconcile(old, current)
-        findings = rounds.append_new(findings + kept, fresh, pr=pr.number, artifact=artifact)
+        findings = rounds.append_new(
+            findings + kept, fresh, pr=pr.number, artifact=artifact, floor=state.highest_id
+        )
         carry_forwards = CarryForwards(
             addressed=tuple(confirmed), deferred=_deferred(cf_open, section, findings)
         )
         strangers = carry.strangers(cf_open, section)
-    if len(findings) > 100:  # every open finding stays; the oldest closed ones go first
-        open_ = [f for f in findings if f.status in ("new", "still_open")]
-        closed = [f for f in findings if f.status not in ("new", "still_open")]
-        findings = open_ + closed[len(closed) - max(0, 100 - len(open_)) :]
+    findings = _capped(findings)
     decision = "approve" if rounds.approves(findings) else "request_changes"
     summary = merged.summary
     if strangers:
@@ -649,7 +664,9 @@ def _mechanical_recomputed(
     old = [f for f in findings if carry.is_mechanical(f)]
     non_mechanical = [f for f in findings if not carry.is_mechanical(f)]
     kept, fresh = carry.reconcile(old, current)
-    return rounds.append_new(non_mechanical + kept, fresh, pr=pr.number, artifact=artifact)
+    return rounds.append_new(
+        non_mechanical + kept, fresh, pr=pr.number, artifact=artifact, floor=state.highest_id
+    )
 
 
 def _review_started(
@@ -723,7 +740,7 @@ def _review_started(
         verdict = ReviewVerdict(
             verdict="approve" if rounds.approves(findings) else "request_changes",
             summary="closure: every open blocker ruled carry_forward by the operator",
-            findings=findings,
+            findings=_capped(findings),
             mode="closure",
             providers=(),
             round="closure",
@@ -850,7 +867,7 @@ def _review_started(
         verdict = ReviewVerdict(
             verdict="request_changes",
             summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
-            findings=findings,
+            findings=_capped(findings),
             mode=mode,
             providers=(),
             diff_truncated=truncated,

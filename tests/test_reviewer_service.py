@@ -2030,3 +2030,27 @@ def test_a_judge_finding_on_the_description_is_judged_not_mechanical(tmp_path) -
     second = _pass(ledger, "c", _judge_saying(decision="approve"))
     assert second.verdict.verdict == "request_changes"
     assert [(f.title, f.status) for f in second.verdict.findings] == [("untrue", "still_open")]
+
+
+# --- final review: minors (M4) ----------------------------------------------------------
+
+
+def test_a_verdict_keeps_every_open_finding_and_the_newest_closed_ones() -> None:  # M4
+    from rail.reviewer.service import _capped
+
+    def one(n: int, status: str) -> Finding:
+        return _open(n, status=status)
+
+    findings = [one(n, "fixed") for n in range(1, 61)] + [one(n, "new") for n in range(61, 121)]
+    kept = _capped(findings)
+    assert len(kept) == 100
+    assert [f.id for f in kept] == [f"F-7-{n}" for n in range(21, 121)]
+
+
+def test_a_new_finding_never_reuses_an_id_a_capped_verdict_dropped(tmp_path) -> None:  # M4
+    repo, ledger = _repo(tmp_path)
+    _verdict_with(ledger, sha="1" * 40, check_run_id=1, round_=1, findings=[_open(9, "fixed")])
+    _verdict_with(ledger, sha="2" * 40, check_run_id=2, round_=2, findings=[_open(1, "still_open")])
+    fresh = Finding(severity="minor", file="src/x.py", line=1, title="fresh", evidence="e")
+    out = _pass(ledger, "e", _judge_saying(reply_findings=[fresh]))
+    assert next(f for f in out.verdict.findings if f.title == "fresh").id == "F-7-10"

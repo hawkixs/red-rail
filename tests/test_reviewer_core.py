@@ -463,7 +463,7 @@ def test_a_reply_without_the_new_fields_still_parses() -> None:
 @pytest.mark.parametrize(
     ("step", "round_", "artifact", "needle"),
     [
-        ("round", 1, "code", ""),
+        ("round", 1, "code", '"class" is "blocker" for a finding that must block the merge'),
         ("round", 1, "spec_plan", "carry_forward"),
         ("round", 2, "code", "exhaustive"),
         ("round", 3, "spec_plan", "do not look for new findings"),
@@ -471,12 +471,14 @@ def test_a_reply_without_the_new_fields_still_parses() -> None:
     ],
 )
 def test_round_instructions(step, round_, artifact, needle) -> None:
-    from rail.reviewer.judges import round_instructions
+    from rail.reviewer.judges import RUBRIC, round_instructions
 
     text = round_instructions(step, round_, artifact)
     assert needle in text
     if (step, round_, artifact) == ("round", 1, "code"):
-        assert text == ""  # round 1 on code: today's prompt, byte for byte
+        # M2: the code class sentence moved out of the rubric, into the instructions
+        assert text.startswith('On code, "class" is "blocker"') and "\n" not in text
+        assert '"class" is "blocker" for a finding' not in RUBRIC
 
 
 def test_instructions_sit_after_the_rubric_outside_the_data() -> None:

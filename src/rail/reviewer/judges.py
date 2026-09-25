@@ -21,7 +21,7 @@ from pydantic import ValidationError
 
 from rail.reviewer.github import PullRequest
 from rail.reviewer.policy import Provider, ReviewPolicy, Tier
-from rail.reviewer.verdict import PreviousAnswer, ReviewVerdict
+from rail.reviewer.verdict import FINDING_ID, PreviousAnswer, ReviewVerdict
 
 GUARD = Path(__file__).resolve().parent / "guard.sh"
 Failure = Literal["timeout", "provider_fallback", "failed", "unparsable"]
@@ -50,7 +50,6 @@ else, matching exactly:
                "class": "blocker" | "carry_forward" | "note", "id": "<earlier id, or omit>"}],
  "previous": [{"id": "<id from the review context>", "status": "fixed" | "still_open",
                "evidence": "<what you checked>"}]}
-On code, "class" is "blocker" for a finding that must block the merge and "note" otherwise.
 "previous" answers every finding the review context lists as open; omit it when there is no
 review context. Repeat an earlier finding with its "id" rather than as a new one.
 A "blocking" finding means the change must not merge as is: reserve it for a defect that is
@@ -65,6 +64,9 @@ the pull request that contains it. You may check a receipt's form; never ask tha
 the head, and never ask that a receipt be added, kept or replaced."""
 
 
+_CODE_CLASSES = (
+    'On code, "class" is "blocker" for a finding that must block the merge and "note" otherwise.'
+)
 _SPEC_PLAN_CLASSES = (
     'This pull request is a spec or a plan. Classify each finding: "blocker" when it '
     "contradicts the spec, misses a requirement, or makes a wrong design decision; "
@@ -78,8 +80,7 @@ def round_instructions(
 ) -> str:
     """D8: one paragraph per round, and the class definitions per artifact."""
     parts: list[str] = []
-    if artifact == "spec_plan":
-        parts.append(_SPEC_PLAN_CLASSES)
+    parts.append(_SPEC_PLAN_CLASSES if artifact == "spec_plan" else _CODE_CLASSES)
     if step == "closure":
         parts.append(
             "Closure check: verify only the rulings below. For each ruled finding answer "
@@ -267,7 +268,7 @@ def parse_verdict(text: str) -> ReviewVerdict | None:
     if isinstance(findings, list):
         for item in findings:
             if isinstance(item, dict):
-                if not re.fullmatch(r"F-\d+-\d+", str(item.get("id", ""))):
+                if not re.fullmatch(FINDING_ID, str(item.get("id", ""))):
                     item.pop("id", None)
                 if item.get("class") not in ("blocker", "carry_forward", "note"):
                     item.pop("class", None)

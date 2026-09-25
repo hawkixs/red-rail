@@ -43,6 +43,8 @@ class LoopState:
     has_findings_list: bool
     # every carry-forward an earlier judged verdict of this pull request recorded as addressed
     confirmed: frozenset[str] = frozenset()
+    # the highest id number any verdict of this pull request ever held, dropped ones included
+    highest_id: int = 0
 
 
 def cf_id(finding_id: str) -> str:
@@ -105,6 +107,9 @@ def loop_state(verdicts: Sequence[Record], rulings: Sequence[Record]) -> LoopSta
         awaiting=awaiting,
         has_findings_list=has_list,
         confirmed=frozenset(i for v in judging for i in carry_forwards_of(v).addressed),
+        highest_id=max(
+            (_number(f.id) for v in verdicts for f in _findings(v) or () if f.id), default=0
+        ),
     )
 
 
@@ -241,10 +246,9 @@ def assign(
     """The verdict's full findings list: every earlier finding with its new status, then the
     new ones numbered after the highest id so far (D2, D7).
 
-    `floor`: the highest id number already in use across every finding this pull request
-    holds, mechanical carry-forward blockers included — `state` here is the judged subset
-    only, so its own highest id can undercount and collide with one a mechanical blocker
-    already claimed (Ruling 12)."""
+    `floor`: the highest id number any verdict of this pull request ever held, mechanical
+    carry-forward blockers and findings a capped verdict dropped included — `state` here is the
+    judged subset only, so its own highest id can undercount and collide (Ruling 12, M4)."""
     known = {f.id: f for f in state.findings if f.id}
     answers = {a.id: a.status for a in previous if a.id in known}
     repeated = {f.id for f in new if f.id in known}
@@ -276,10 +280,16 @@ def approves(findings: Sequence[Finding]) -> bool:
 
 
 def append_new(
-    findings: Sequence[Finding], extra: Sequence[Finding], *, pr: int, artifact: Artifact
+    findings: Sequence[Finding],
+    extra: Sequence[Finding],
+    *,
+    pr: int,
+    artifact: Artifact,
+    floor: int = 0,
 ) -> list[Finding]:
-    """`findings` unchanged, then `extra` numbered after the highest id among them."""
-    highest = max((_number(f.id) for f in findings if f.id), default=0)
+    """`findings` unchanged, then `extra` numbered after the highest id among them and
+    `floor` — the highest id the pull request ever used, so a dropped id is never reused."""
+    highest = max(max((_number(f.id) for f in findings if f.id), default=0), floor)
     out = list(findings)
     for f in extra:
         highest += 1

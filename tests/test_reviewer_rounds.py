@@ -444,6 +444,21 @@ def test_confirmed_addressed_remembers_an_earlier_confirmation() -> None:  # I1
     assert rounds.confirmed_addressed(state, claimed, {"CF-5-1": "still_open"}) == []
 
 
+def test_new_ids_start_above_every_id_the_pull_request_ever_used() -> None:  # M4
+    dropped = verdict(1, 1, [_finding(9, status="fixed")])
+    state = rounds.loop_state([dropped, verdict(2, 2, [_finding(1, status="still_open")])], [])
+    assert state.highest_id == 9
+    base = [Finding.model_validate(_finding(1))]
+    out = rounds.append_new(
+        base,
+        [Finding.model_validate(_finding(2, id=None))],
+        pr=7,
+        artifact="code",
+        floor=state.highest_id,
+    )
+    assert out[-1].id == "F-7-10"
+
+
 def test_open_carry_forwards_across_pull_requests() -> None:
     spec_pr = verdict(
         1,
