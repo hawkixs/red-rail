@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from rail.commands._options import json_option, repo_option
 from rail.ledger import (
+    RECEIPTS_DIR,
     AttestationKind,
     LedgerError,
     Record,
@@ -60,10 +61,9 @@ def echo_record(record: Record, repo: Path, as_json: bool) -> None:
         click.echo(json.dumps(record.model_dump(mode="json"), indent=2))
         return
     label = record.attestation.value if record.attestation else record.kind.value
-    click.echo(
-        f"{label}  {record.idempotency_key}  {record.digest}  "
-        f"docs/receipts/{receipt_filename(record)}"
-    )
+    kept = repo / RECEIPTS_DIR / receipt_filename(record)
+    where = f"{RECEIPTS_DIR}/{kept.name}" if kept.is_file() else "recorded in brain"
+    click.echo(f"{label}  {record.idempotency_key}  {record.digest}  {where}")
 
 
 @click.command("attest")
