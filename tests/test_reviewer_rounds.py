@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from rail.ledger import Record, RecordKind
-from rail.reviewer import rounds
+from rail.reviewer import carry, rounds
 from rail.reviewer.verdict import Finding, PreviousAnswer
 
 T0 = datetime(2026, 9, 25, 8, 0, tzinfo=UTC)
@@ -154,6 +154,19 @@ def test_assign_numbers_new_findings_and_statuses_old_ones() -> None:
     assert by_id["F-7-3"].title == "fresh" and by_id["F-7-3"].status == "new"
     assert by_id["F-7-4"].title == "invented"  # an unknown id is a new finding (Review Focus 4)
     assert len(out) == 4
+
+
+def test_assign_floors_new_ids_above_a_mechanical_finding() -> None:  # C2
+    state = rounds.loop_state([verdict(1, 1, [_finding(1)])], [])
+    out = rounds.assign([_f(title="fresh")], [], state, pr=7, artifact="code", floor=2)
+    assert [(f.id, f.title) for f in out if f.status == "new"] == [("F-7-3", "fresh")]
+
+
+def test_unruled_ignores_a_mechanical_blocker() -> None:  # M8
+    mech = {"id": "F-7-2", "class": "blocker", "severity": "blocking", "file": carry.WHERE,
+            "title": "CF-5-1 not accounted for", "status": "new", "evidence": "e"}
+    state = rounds.loop_state([verdict(1, 3, [_finding(1), mech])], [])
+    assert [f.id for f in rounds.unruled(state)] == ["F-7-1"]
 
 
 def test_an_unanswered_open_finding_stays_still_open() -> None:  # C3

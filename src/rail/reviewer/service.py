@@ -27,7 +27,7 @@ from rail.reviewer.github import GitHubError, PullRequest
 from rail.reviewer.judges import JudgeReply, diff_budget, judge, round_instructions
 from rail.reviewer.policy import ReviewPolicy, producer_provider
 from rail.reviewer.split import oversized, split_diff
-from rail.reviewer.verdict import CarryForwards, Finding, ReviewVerdict
+from rail.reviewer.verdict import CarryForwards, Finding, PreviousAnswer, ReviewVerdict
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
 _DIFF_HEADER = re.compile(r"^diff --git a/(?P<path>\S+) b/", re.MULTILINE)
@@ -244,8 +244,7 @@ def _notes(pr: PullRequest, previous: Record, *, github: GitHubLike) -> str:
     return (
         f"This pull request was reviewed before at {previous.data.get('sha')} with the verdict "
         f"{previous.data.get('verdict')}. The earlier review said:\n"
-        f"{earlier or '(no text kept)'}\n\n"
-        f"{_DELTA_NOTE}"
+        f"{earlier or '(no text kept)'}"
     )
 
 
@@ -285,15 +284,17 @@ def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdi
     findings: list[Finding] = []
     for v in verdicts:
         findings.extend(f for f in v.findings if f not in findings)
-    # D7: each judge answers the same review context, so its "previous" carries the same ids;
-    # kept once each, first answer wins.
-    previous: list = []
-    seen_ids: set[str] = set()
+    # D7 (Ruling 11): each judge answers the same review context, so its "previous" carries the
+    # same ids; when judges disagree, "still_open" wins — an id is "fixed" only if every judge
+    # that answered it said so.
+    by_id: dict[str, list[PreviousAnswer]] = {}
     for v in verdicts:
         for p in v.previous:
-            if p.id not in seen_ids:
-                seen_ids.add(p.id)
-                previous.append(p)
+            by_id.setdefault(p.id, []).append(p)
+    previous: list[PreviousAnswer] = []
+    for answers in by_id.values():
+        still_open = next((a for a in answers if a.status == "still_open"), None)
+        previous.append(still_open if still_open is not None else answers[0])
     summary = " | ".join(f"{r.provider}: {r.verdict.summary}" for r in replies if r.verdict)
     return ReviewVerdict(
         verdict=decision,
@@ -527,7 +528,13 @@ def _finish(
         new = rounds.demote_outside(
             new, delta, artifact, known=known, skip=not state.has_findings_list
         )
-    findings = rounds.assign(new, merged.previous, judged_state, pr=pr.number, artifact=artifact)
+    # C2 (Ruling 12): a new id is numbered above the highest id ANY finding of this pull
+    # request holds, mechanical carry-forward blockers included, not only `judged_state`'s —
+    # otherwise a fresh judged finding can collide with a mechanical one from an earlier round.
+    floor = max((int(f.id.rsplit("-", 1)[1]) for f in state.findings if f.id), default=0)
+    findings = rounds.assign(
+        new, merged.previous, judged_state, pr=pr.number, artifact=artifact, floor=floor
+    )
     if step == "closure":
         findings = [
             f.model_copy(update={"klass": "note"}) if f.status == "new" else f for f in findings
@@ -571,6 +578,27 @@ def _finish(
     })
 
 
+def _mechanical_recomputed(
+    findings: list[Finding], *, ledger: Ledger, project: str, pr: PullRequest, artifact
+) -> list[Finding]:
+    """A code pull request's mechanical carry-forward blockers, recomputed from its current
+    body (D11): the operator may have updated it since the last pass, with no judge involved
+    (Ruling 14, Ruling 16)."""
+    if artifact != "code":
+        return list(findings)
+    every = ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
+    every_rulings = ledger.list(project, attestation=AttestationKind.REVIEW_RULING)
+    cf_open = rounds.open_carry_forwards(
+        every, every_rulings, repository=pr.repository, excluding_pr=pr.number
+    )
+    section = carry.parse_section(pr.body)
+    current = carry.mechanical_blockers(cf_open, section)
+    old = [f for f in findings if carry.is_mechanical(f)]
+    non_mechanical = [f for f in findings if not carry.is_mechanical(f)]
+    kept, fresh = carry.reconcile(old, current)
+    return rounds.append_new(non_mechanical + kept, fresh, pr=pr.number, artifact=artifact)
+
+
 def _review_started(
     pr: PullRequest,
     check: Any,
@@ -590,6 +618,17 @@ def _review_started(
     whole = github.diff(pr.repository, pr.number)
     artifact = rounds.artifact_of(_files(whole), policy.records_globs)
     if step == "awaiting_ruling":
+        # M8 (Ruling 16): a mechanical blocker never needs a ruling; the body may already have
+        # resolved it, so it is recomputed before telling the operator what is still unruled.
+        state = replace(
+            state,
+            findings=tuple(
+                _mechanical_recomputed(
+                    list(state.findings), ledger=ledger, project=project, pr=pr,
+                    artifact=artifact,
+                )
+            ),
+        )
         verdict = _awaiting(pr, state, artifact)
         return _publish(
             pr, check, verdict, "awaiting ruling", github=github, policy=policy, ledger=ledger,
@@ -597,12 +636,26 @@ def _review_started(
         )
     fix_rulings = {k: r for k, r in state.rulings.items() if r.ruling == "fix"}
     if step == "closure" and not fix_rulings:
-        # every open blocker was ruled carry_forward: the loop closes without a judge (D9).
+        # every open blocker was ruled carry_forward: the loop closes without a judge (D9),
+        # but a mechanical blocker still gets one last recompute from the body (Ruling 16),
+        # and the last judged verdict's carry-forward accounting survives the outage (Ruling 14).
         findings = rounds.apply_rulings(list(state.findings), state.rulings)
+        findings = _mechanical_recomputed(
+            findings, ledger=ledger, project=project, pr=pr, artifact=artifact
+        )
+        carry_forwards = None
+        if artifact == "code" and state.last_judged is not None:
+            raw = state.last_judged.data.get("carry_forwards")
+            if raw:
+                carry_forwards = CarryForwards(
+                    addressed=tuple(raw.get("addressed", [])),
+                    deferred=tuple(raw.get("deferred", [])),
+                )
         verdict = ReviewVerdict(
             verdict="approve" if rounds.approves(findings) else "request_changes",
             summary="closure: every open blocker ruled carry_forward by the operator",
             findings=findings, mode="closure", providers=(), round="closure", artifact=artifact,
+            carry_forwards=carry_forwards,
         )
         return _publish(
             pr, check, verdict, verdict.verdict, github=github, policy=policy, ledger=ledger,
@@ -621,12 +674,27 @@ def _review_started(
         section = carry.parse_section(pr.body)
     cf_addressed = carry.addressed(cf_open, section)
 
+    # I3: the context is built from the judged state, mechanical findings removed — they are
+    # never the judge's to answer. M11 (D10): a closure check verifies the fix-ruled findings
+    # only, with their ruling's decision text, not every earlier finding.
+    judged_state = replace(
+        state, findings=tuple(f for f in state.findings if not carry.is_mechanical(f))
+    )
+    if step == "closure":
+        context_state = replace(
+            judged_state,
+            findings=tuple(f for f in judged_state.findings if f.id in fix_rulings),
+            rulings=fix_rulings,
+        )
+    else:
+        context_state = judged_state
+
     delta = _delta(pr, state.last_judged, whole, github=github, policy=policy)
-    if state.findings or state.rulings or cf_addressed:
-        notes = _context(state, cf_open=cf_open, cf_addressed=cf_addressed)
-    elif state.last_judged is not None:
-        # a verdict recorded before this change, or one with no findings list: the migration
-        # fallback of D6.
+    if context_state.findings or context_state.rulings or cf_addressed:
+        notes = _context(context_state, cf_open=cf_open, cf_addressed=cf_addressed)
+    elif not state.has_findings_list and state.last_judged is not None:
+        # M7: a verdict recorded before this change carries no findings list — the check-run
+        # fallback of D6 covers only that migration case, never an explicit empty list.
         notes = _notes(pr, state.last_judged, github=github)
     else:
         notes = ""

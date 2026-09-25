@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Literal
 
 from rail.ledger import Record
+from rail.reviewer import carry
 from rail.reviewer.verdict import Artifact, Finding, PreviousAnswer
 
 Step = Literal["round", "awaiting_ruling", "closure"]
@@ -109,7 +110,12 @@ def open_blockers(state: LoopState) -> list[Finding]:
 
 
 def unruled(state: LoopState) -> list[Finding]:
-    return [f for f in open_blockers(state) if f.id not in state.rulings]
+    """D9. A mechanical carry-forward blocker (Ruling 16) never needs a ruling: it is
+    recomputed from the pull request's body every round, not judged."""
+    return [
+        f for f in open_blockers(state)
+        if f.id not in state.rulings and not carry.is_mechanical(f)
+    ]
 
 
 def next_step(state: LoopState) -> tuple[Step, int | None]:
@@ -202,9 +208,15 @@ def assign(
     *,
     pr: int,
     artifact: Artifact,
+    floor: int = 0,
 ) -> list[Finding]:
     """The verdict's full findings list: every earlier finding with its new status, then the
-    new ones numbered after the highest id so far (D2, D7)."""
+    new ones numbered after the highest id so far (D2, D7).
+
+    `floor`: the highest id number already in use across every finding this pull request
+    holds, mechanical carry-forward blockers included — `state` here is the judged subset
+    only, so its own highest id can undercount and collide with one a mechanical blocker
+    already claimed (Ruling 12)."""
     known = {f.id: f for f in state.findings if f.id}
     answers = {a.id: a.status for a in previous if a.id in known}
     repeated = {f.id for f in new if f.id in known}
@@ -220,6 +232,7 @@ def assign(
         else:
             out.append(f.model_copy(update={"status": "still_open"}))
     highest = max((_number(i) for i in known), default=0)
+    highest = max(highest, floor)
     for f in new:
         if f.id in known:
             continue
