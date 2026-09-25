@@ -110,18 +110,25 @@ def open_blockers(state: LoopState) -> list[Finding]:
 
 
 def unruled(state: LoopState) -> list[Finding]:
-    """D9. A mechanical carry-forward blocker (Ruling 16) never needs a ruling: it is
-    recomputed from the pull request's body every round, not judged."""
+    """D9. A body-derived mechanical blocker (Ruling 19) never needs a ruling: it is
+    recomputed from the pull request's body every round, not judged. A "not addressed"
+    mechanical blocker is different — it records a gap in the judge's confirmation, not in the
+    body's own shape, so it needs a ruling like any other blocker."""
     return [
         f for f in open_blockers(state)
-        if f.id not in state.rulings and not carry.is_mechanical(f)
+        if f.id not in state.rulings and not carry.is_body_derived(f)
     ]
 
 
 def next_step(state: LoopState) -> tuple[Step, int | None]:
     if state.awaiting:
         if not unruled(state):
-            return "closure", None
+            # Ruling 21: with nothing left to rule on, close only if the operator actually
+            # ruled on something; a body-derived gap resolving itself is not a ruling, and
+            # gets another judged round 3 instead of a no-judge closure.
+            if state.rulings:
+                return "closure", None
+            return "round", 3
         return "awaiting_ruling", None
     return "round", min(state.judged + 1, 3)
 

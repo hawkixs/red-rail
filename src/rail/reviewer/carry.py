@@ -92,6 +92,18 @@ def is_mechanical(f: Finding) -> bool:
     return f.file == WHERE
 
 
+_BODY_DERIVED_SUFFIXES = ("not accounted for", "deferred without a reason")
+
+
+def is_body_derived(f: Finding) -> bool:
+    """A mechanical blocker computed purely from the body's own shape — nothing not accounted
+    for, or a deferral with no reason (Ruling 19). It never needs a ruling: it is recomputed,
+    and resolves itself, as soon as the body changes. A "not addressed" blocker is different:
+    it records that the judge never confirmed the body's own claim, so it needs a ruling like
+    any other blocker."""
+    return is_mechanical(f) and f.title.endswith(_BODY_DERIVED_SUFFIXES)
+
+
 def reconcile(
     old: Sequence[Finding], current: Sequence[Finding]
 ) -> tuple[list[Finding], list[Finding]]:

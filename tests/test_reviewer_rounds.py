@@ -85,6 +85,12 @@ def ruling(minutes: int, finding: str, as_: str = "fix", pr: int = 7) -> Record:
           verdict(3, 3, [_finding(1, status="fixed")], decision="approve")], [], ("round", 3)),
         # verdicts recorded before the change count as judged rounds
         ([verdict(1, None, None), verdict(2, None, None)], [], ("round", 3)),
+        # only a body-derived accounting gap open, no ruling on it: another judged round 3,
+        # never a no-judge closure (Ruling 21, NB2)
+        ([verdict(1, 1, [_finding(1)]), verdict(2, 2, [_finding(1)]),
+          verdict(3, 3, [{"id": "F-7-2", "class": "blocker", "severity": "blocking",
+                          "file": carry.WHERE, "title": "CF-5-1 not accounted for",
+                          "status": "still_open", "evidence": "e"}])], [], ("round", 3)),
     ],
 )
 def test_next_step(verdicts, rulings, expected) -> None:
@@ -167,6 +173,17 @@ def test_unruled_ignores_a_mechanical_blocker() -> None:  # M8
             "title": "CF-5-1 not accounted for", "status": "new", "evidence": "e"}
     state = rounds.loop_state([verdict(1, 3, [_finding(1), mech])], [])
     assert [f.id for f in rounds.unruled(state)] == ["F-7-1"]
+
+
+def test_unruled_keeps_a_not_addressed_blocker() -> None:  # NB1b
+    accounting_gap = {"id": "F-7-2", "class": "blocker", "severity": "blocking",
+                      "file": carry.WHERE, "title": "CF-5-1 not accounted for",
+                      "status": "new", "evidence": "e"}
+    not_addressed = {"id": "F-7-3", "class": "blocker", "severity": "blocking",
+                     "file": carry.WHERE, "title": "CF-5-1 not addressed",
+                     "status": "new", "evidence": "e"}
+    state = rounds.loop_state([verdict(1, 3, [accounting_gap, not_addressed])], [])
+    assert [f.id for f in rounds.unruled(state)] == ["F-7-3"]
 
 
 def test_an_unanswered_open_finding_stays_still_open() -> None:  # C3

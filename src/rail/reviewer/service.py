@@ -579,11 +579,17 @@ def _finish(
 
 
 def _mechanical_recomputed(
-    findings: list[Finding], *, ledger: Ledger, project: str, pr: PullRequest, artifact
+    findings: list[Finding], *, ledger: Ledger, project: str, pr: PullRequest, artifact,
+    last_judged: Record | None,
 ) -> list[Finding]:
     """A code pull request's mechanical carry-forward blockers, recomputed from its current
     body (D11): the operator may have updated it since the last pass, with no judge involved
-    (Ruling 14, Ruling 16)."""
+    (Ruling 14, Ruling 16).
+
+    A body claim of "addressed" is not enough on its own (Ruling 18): with no judge running
+    here, the only confirmation on record is `last_judged`'s own `carry_forwards.addressed` —
+    an id the body claims but that record never confirmed keeps its "not addressed" blocker
+    open, the same shape `_finish` builds when a judge is the one checking."""
     if artifact != "code":
         return list(findings)
     every = ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
@@ -592,7 +598,17 @@ def _mechanical_recomputed(
         every, every_rulings, repository=pr.repository, excluding_pr=pr.number
     )
     section = carry.parse_section(pr.body)
-    current = carry.mechanical_blockers(cf_open, section)
+    claimed = carry.addressed(cf_open, section)
+    confirmed = set(
+        (last_judged.data.get("carry_forwards") or {}).get("addressed", [])
+        if last_judged is not None else ()
+    )
+    current = carry.mechanical_blockers(cf_open, section) + [
+        Finding.model_validate({"severity": "blocking", "file": carry.WHERE,
+                                "title": f"{i} not addressed", "class": "blocker",
+                                "evidence": "the judge did not confirm it is addressed"})
+        for i in claimed if i not in confirmed
+    ]
     old = [f for f in findings if carry.is_mechanical(f)]
     non_mechanical = [f for f in findings if not carry.is_mechanical(f)]
     kept, fresh = carry.reconcile(old, current)
@@ -625,7 +641,7 @@ def _review_started(
             findings=tuple(
                 _mechanical_recomputed(
                     list(state.findings), ledger=ledger, project=project, pr=pr,
-                    artifact=artifact,
+                    artifact=artifact, last_judged=state.last_judged,
                 )
             ),
         )
@@ -641,7 +657,8 @@ def _review_started(
         # and the last judged verdict's carry-forward accounting survives the outage (Ruling 14).
         findings = rounds.apply_rulings(list(state.findings), state.rulings)
         findings = _mechanical_recomputed(
-            findings, ledger=ledger, project=project, pr=pr, artifact=artifact
+            findings, ledger=ledger, project=project, pr=pr, artifact=artifact,
+            last_judged=state.last_judged,
         )
         carry_forwards = None
         if artifact == "code" and state.last_judged is not None:
@@ -765,19 +782,23 @@ def _review_started(
     if merged is None:
         # No verdict at all: fail closed. A failed pass still counts as a judged round (the
         # ledger already holds the earlier ones), so the next pass moves on; the open findings
-        # stay open until a real judge answers them.
+        # stay open until a real judge answers them. I5 (Ruling 15): a failed pass DURING a
+        # closure check is recorded as "awaiting_ruling", not "closure" — it was never judged,
+        # so it must not become `last_judged`, or the rulings that made this a closure check
+        # would look too old on the next pass and drop out of `state.rulings`.
         findings = [
             f.model_copy(update={"status": "still_open"}) if f.open_blocker else f
             for f in state.findings
         ]
+        no_verdict_closure = step == "closure"
         verdict = ReviewVerdict(
             verdict="request_changes",
             summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
             findings=findings,
-            mode=mode,
+            mode="awaiting_ruling" if no_verdict_closure else mode,
             providers=(),
             diff_truncated=truncated,
-            round="closure" if step == "closure" else round_,
+            round="awaiting_ruling" if no_verdict_closure else round_,
             artifact=artifact,
         )
         title = "no verdict"
