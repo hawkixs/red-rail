@@ -20,6 +20,7 @@ _LINE = re.compile(
 )
 _FENCE = re.compile(r"^(```|~~~)")
 WHERE = "(pull request description)"
+_NOT_ADDRESSED = " not addressed"
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,11 @@ def _blocker(title: str, evidence: str) -> Finding:
     )
 
 
+def not_addressed(cf: str) -> Finding:
+    """A carry-forward the body claims addressed that no judge confirmed (D11)."""
+    return _blocker(f"{cf}{_NOT_ADDRESSED}", "the judge did not confirm it is addressed")
+
+
 def mechanical_blockers(open_ids: Sequence[str], section: dict[str, Accounting]) -> list[Finding]:
     out: list[Finding] = []
     for cf in open_ids:
@@ -107,6 +113,16 @@ def is_body_derived(f: Finding) -> bool:
     it records that the judge never confirmed the body's own claim, so it needs a ruling like
     any other blocker."""
     return is_mechanical(f) and f.title.endswith(_BODY_DERIVED_SUFFIXES)
+
+
+def ruled_deferred(findings: Sequence[Finding]) -> list[str]:
+    """The carry-forwards whose "not addressed" gap the operator ruled carry_forward: the
+    ruling defers the carry-forward itself (Ruling 28)."""
+    return [
+        f.title.removesuffix(_NOT_ADDRESSED)
+        for f in findings
+        if is_mechanical(f) and f.status == "ruled" and f.title.endswith(_NOT_ADDRESSED)
+    ]
 
 
 def reconcile(

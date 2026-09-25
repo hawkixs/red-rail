@@ -307,6 +307,11 @@ def open_carry_forwards(
     later approved, minus every id an approving code verdict recorded as addressed."""
     mine = [v for v in verdicts if v.data.get("repository") == repository]
     approved_prs = {v.data.get("pr") for v in mine if v.data.get("verdict") == "approve"}
+    # Ruling 28: a mechanical finding is the pull request's accounting of someone else's
+    # carry-forward, never a carry-forward of its own, even once ruled carry_forward
+    mechanical = {
+        (v.data.get("pr"), f.id) for v in mine for f in _findings(v) or () if carry.is_mechanical(f)
+    }
     opened: dict[str, None] = {}
     addressed: set[str] = set()
     for v in mine:
@@ -314,13 +319,15 @@ def open_carry_forwards(
             continue
         for f in _findings(v) or ():
             if f.klass == "carry_forward" and f.id and f.status != "fixed":
-                opened.setdefault(cf_id(f.id), None)
+                if not carry.is_mechanical(f):
+                    opened.setdefault(cf_id(f.id), None)
         addressed.update(carry_forwards_of(v).addressed)
     for r in rulings:
         if r.data.get("repository") != repository or r.data.get("ruling") != "carry_forward":
             continue
-        if r.data.get("pr") in approved_prs:
-            opened.setdefault(cf_id(str(r.data["finding"])), None)
+        finding = str(r.data["finding"])
+        if r.data.get("pr") in approved_prs and (r.data.get("pr"), finding) not in mechanical:
+            opened.setdefault(cf_id(finding), None)
     excluded = f"CF-{excluding_pr}-" if excluding_pr is not None else None
     return sorted(
         (i for i in opened if i not in addressed and not (excluded and i.startswith(excluded))),

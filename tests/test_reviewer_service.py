@@ -1064,8 +1064,9 @@ def test_a_carry_forward_ruling_closes_without_a_judge(tmp_path) -> None:
     def run_judge(*args, **kwargs):
         raise AssertionError("a carry_forward ruling needs no judge")
 
+    # the head round 3 judged: nothing new to read (Ruling 29)
     outcome = review_pull(
-        PR,
+        replace(PR, head_sha="2" * 40),
         github=FakeGitHub(),
         policy=default_policy(),
         ledger=ledger,
@@ -1333,9 +1334,10 @@ def test_a_carry_forward_ruling_closure_keeps_the_carry_forward_accounting(tmp_p
     def no_judge(*args, **kwargs):
         raise AssertionError("a carry_forward closure needs no judge")
 
+    # the head round 3 judged: nothing new to read (Ruling 29)
     outcome = review_pull(
-        replace(code_pr, head_sha="e" * 40),
-        github=FakeGitHub(),
+        replace(code_pr, head_sha="d" * 40),
+        github=_NextCheck(),
         policy=default_policy(),
         ledger=ledger,
         project="red-alpha",
@@ -1543,7 +1545,7 @@ def test_a_no_verdict_pass_at_round_two_keeps_blockers_open(tmp_path) -> None:  
         project="red-alpha",
         run_judge=failing_judge,
     )
-    assert outcome.verdict.round == 2
+    assert outcome.verdict.round == "no_verdict"  # Ruling 32: an outage is not round 2
     assert outcome.verdict.verdict == "request_changes"
     assert outcome.verdict.findings[0].status == "still_open"
 
@@ -1588,8 +1590,9 @@ def test_a_failed_closure_check_keeps_the_ruling(tmp_path) -> None:  # I5
         project="red-alpha",
         run_judge=failing_judge,
     )
-    assert outcome.verdict.round == "awaiting_ruling"
-    assert outcome.verdict.mode == "awaiting_ruling"
+    # I3 (Ruling 32): an outage is "no_verdict", never judged, so the ruling survives it
+    assert outcome.verdict.round == "no_verdict"
+    assert outcome.verdict.mode == "incremental"
 
     state = rounds.loop_state(
         previous_verdicts(ledger, "red-alpha", PR), rulings_of(ledger, "red-alpha", PR)
@@ -1835,3 +1838,159 @@ def test_the_closure_context_asks_the_judge_to_confirm_a_not_addressed_blocker(
     assert "CF-5-1" in seen[0]["notes"]
     assert outcome2.verdict.verdict == "approve"
     assert outcome2.verdict.carry_forwards.addressed == ("CF-5-1",)
+
+
+# --- final review: fail-closed loop (C1, C2, I3) ---------------------------------------
+
+CF_ADDRESSED = "## Carry-forwards\n- CF-5-1: addressed\n"
+
+
+def _spec_carry_forward(ledger) -> None:
+    """Spec PR #5 approved with the carry-forward F-5-1: CF-5-1 is open for code PR #7."""
+    _verdict_with(
+        ledger,
+        sha="9" * 40,
+        check_run_id=5,
+        round_=1,
+        decision="approve",
+        artifact="spec_plan",
+        pr=replace(PR, number=5),
+        findings=[
+            Finding.model_validate(
+                {
+                    "severity": "important",
+                    "file": "docs/specs/s.md",
+                    "title": "edge",
+                    "evidence": "e",
+                    "id": "F-5-1",
+                    "class": "carry_forward",
+                }
+            )
+        ],
+    )
+
+
+def _rule(ledger, finding: str, ruling: str, k: int = 1) -> None:
+    ledger.attest(
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": finding,
+            "ruling": ruling,
+            "decision": "later",
+        },
+        issuer="operator",
+        idempotency_key=f"review_ruling:{PR.repository}#7:{finding}:{k}",
+    )
+
+
+def _pass(ledger, head: str, run_judge, *, body: str = "", github=None):
+    return review_pull(
+        replace(PR, head_sha=head * 40, body=body),
+        github=github or FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
+
+
+class _NextCheck(FakeGitHub):
+    """A later pass on the same head gets a check run of its own, as on GitHub."""
+
+    def start_check(self, repository, head_sha, *, name):
+        return CheckRun(id=100, status="in_progress", conclusion=None)
+
+
+def _no_judge(*args, **kwargs):
+    raise AssertionError("no judge may run here")
+
+
+def _dead(pr, diff, policy, *, provider, tier, **kwargs):
+    return JudgeReply(provider=provider, tier=tier, model="m", verdict=None, failure="down", raw="")
+
+
+# "d": the last judged head, closed without a judge; "f": a moved head, closed by a judge
+@pytest.mark.parametrize("head", ["d", "f"])
+def test_a_carry_forward_ruling_on_a_not_addressed_gap_defers_it(tmp_path, head) -> None:  # C1
+    from rail.gates.evidence import carry_forward
+
+    repo, ledger = _repo(tmp_path)
+    _spec_carry_forward(ledger)
+    for h in "bcd":
+        _pass(ledger, h, _judge_saying(decision="approve"), body=CF_ADDRESSED)
+    waiting = _pass(ledger, "e", _no_judge, body=CF_ADDRESSED)
+    gap = next(f for f in waiting.verdict.findings if f.title == "CF-5-1 not addressed")
+    _rule(ledger, gap.id, "carry_forward")
+
+    judge = _no_judge if head == "d" else _judge_saying(decision="approve")
+    out = _pass(ledger, head, judge, body=CF_ADDRESSED, github=_NextCheck())
+
+    assert (out.verdict.round, out.verdict.verdict) == ("closure", "approve")
+    assert out.verdict.carry_forwards.deferred == ("CF-5-1",)
+    gate = carry_forward(repo)
+    assert gate.passed, gate.details
+    assert gate.details == "1 open: CF-5-1"  # still open, deferred; no CF-7-n of its own
+
+
+def test_a_closure_on_a_moved_head_is_judged_on_the_delta(tmp_path) -> None:  # C2
+    repo, ledger = _repo(tmp_path)
+    for n in (1, 2, 3):
+        _verdict_with(
+            ledger,
+            sha=str(n) * 40,
+            check_run_id=n,
+            round_=n,
+            findings=[_open(1, status="new" if n == 1 else "still_open")],
+        )
+    _rule(ledger, "F-7-1", "carry_forward")
+    delta = (
+        "diff --git a/src/x.py b/src/x.py\n--- a/src/x.py\n+++ b/src/x.py\n"
+        "@@ -1,0 +1,1 @@\n+print(2)\n"
+    )
+    inside, outside = (
+        Finding(severity="blocking", file="src/x.py", line=line, title=title, evidence="e")
+        for line, title in ((1, "inside"), (50, "outside"))
+    )
+    seen: list = []
+    out = _pass(
+        ledger,
+        "e",
+        _judge_saying(reply_findings=[inside, outside], seen=seen),
+        github=FakeGitHub(compare_text=delta),
+    )
+
+    assert seen and seen[0]["diff"] == delta
+    assert (out.verdict.round, out.verdict.verdict) == ("closure", "request_changes")
+    by_title = {f.title: f for f in out.verdict.findings}
+    assert (by_title["inside"].klass, by_title["inside"].status) == ("blocker", "new")
+    assert by_title["outside"].klass == "note"
+    assert by_title["bug1"].status == "ruled"
+
+
+def test_round_three_demotes_a_new_code_finding_outside_the_delta(tmp_path) -> None:  # C2
+    repo, ledger = _repo(tmp_path)
+    for n in (1, 2):
+        _verdict_with(ledger, sha=str(n) * 40, check_run_id=n, round_=n, findings=[])
+    far = Finding(severity="blocking", file="src/x.py", line=50, title="far", evidence="e")
+    delta = (
+        "diff --git a/src/x.py b/src/x.py\n--- a/src/x.py\n+++ b/src/x.py\n"
+        "@@ -1,0 +1,1 @@\n+print(2)\n"
+    )
+    out = _pass(
+        ledger, "e", _judge_saying(reply_findings=[far]), github=FakeGitHub(compare_text=delta)
+    )
+    assert out.verdict.round == 3 and out.verdict.verdict == "approve"
+    assert [(f.title, f.klass) for f in out.verdict.findings] == [("far", "note")]
+
+
+def test_an_outage_does_not_burn_a_round(tmp_path) -> None:  # I3
+    repo, ledger = _repo(tmp_path)
+    bug = Finding(severity="blocking", file="src/x.py", line=1, title="bug", evidence="e")
+    _pass(ledger, "b", _judge_saying(reply_findings=[bug]))
+    for head in "cd":
+        down = _pass(ledger, head, _dead)
+        assert (down.verdict.round, down.verdict.verdict) == ("no_verdict", "request_changes")
+    assert _pass(ledger, "e", _judge_saying(decision="approve")).verdict.round == 2

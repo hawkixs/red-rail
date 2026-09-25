@@ -516,9 +516,14 @@ def _finish(
     delta: str | None,
     cf_open: list[str],
     section: dict,
+    delta_bound: bool = False,
 ) -> ReviewVerdict:
     """Number, classify and status the findings; apply round 3's demotion and the closure
     check's limits; recompute the carry-forward blockers; decide by D3.
+
+    `delta_bound`: a closure with no `fix` ruling, judged only because the head moved since
+    the last judged verdict (Ruling 29). A new finding inside the delta keeps its class, as in
+    round 3; anywhere else it is demoted.
 
     Mechanical carry-forward findings are recomputed from the pull request's body every round
     (`carry.reconcile`), never judged: `judged_state` leaves them out of `known`/`assign` so a
@@ -532,10 +537,6 @@ def _finish(
     )
     known = {f.id for f in judged_state.findings if f.id}
     new = [rounds.enforce_class(f, artifact) for f in merged.findings]
-    if round_ == 3:
-        new = rounds.demote_outside(
-            new, delta, artifact, known=known, skip=not state.has_findings_list
-        )
     # C2 (Ruling 12): a new id is numbered above the highest id ANY finding of this pull
     # request holds, mechanical carry-forward blockers included, not only `judged_state`'s —
     # otherwise a fresh judged finding can collide with a mechanical one from an earlier round.
@@ -543,10 +544,24 @@ def _finish(
     findings = rounds.assign(
         new, merged.previous, judged_state, pr=pr.number, artifact=artifact, floor=floor
     )
+    if round_ == 3 or delta_bound:
+        # after `assign`, which re-derives a new finding's class from its severity: demoted
+        # before, a code finding outside the delta came back a blocker
+        fresh = iter(
+            rounds.demote_outside(
+                [f for f in findings if f.status == "new"],
+                delta,
+                artifact,
+                known=known,
+                skip=not state.has_findings_list,
+            )
+        )
+        findings = [next(fresh) if f.status == "new" else f for f in findings]
     if step == "closure":
-        findings = [
-            f.model_copy(update={"klass": "note"}) if f.status == "new" else f for f in findings
-        ]
+        if not delta_bound:
+            findings = [
+                f.model_copy(update={"klass": "note"}) if f.status == "new" else f for f in findings
+            ]
         findings = rounds.apply_rulings(findings, state.rulings)
     carry_forwards = None
     strangers: list[str] = []
@@ -555,17 +570,7 @@ def _finish(
         claimed = carry.addressed(cf_open, section)
         confirmed = [i for i in claimed if answers.get(i) == "fixed"]
         current = carry.mechanical_blockers(cf_open, section) + [
-            Finding.model_validate(
-                {
-                    "severity": "blocking",
-                    "file": carry.WHERE,
-                    "title": f"{i} not addressed",
-                    "class": "blocker",
-                    "evidence": "the judge did not confirm it is addressed",
-                }
-            )
-            for i in claimed
-            if i not in confirmed
+            carry.not_addressed(i) for i in claimed if i not in confirmed
         ]
         old = [f for f in state.findings if carry.is_mechanical(f)]
         if step == "closure":
@@ -577,7 +582,7 @@ def _finish(
         kept, fresh = carry.reconcile(old, current)
         findings = rounds.append_new(findings + kept, fresh, pr=pr.number, artifact=artifact)
         carry_forwards = CarryForwards(
-            addressed=tuple(confirmed), deferred=tuple(carry.deferred(cf_open, section))
+            addressed=tuple(confirmed), deferred=_deferred(cf_open, section, findings)
         )
         strangers = carry.strangers(cf_open, section)
     if len(findings) > 100:  # every open finding stays; the oldest closed ones go first
@@ -601,14 +606,21 @@ def _finish(
     )
 
 
+def _deferred(cf_open: list[str], section: dict, findings: list[Finding]) -> tuple[str, ...]:
+    """The body's reasoned deferrals, plus every open carry-forward whose "not addressed" gap
+    the operator ruled carry_forward: the ruling's decision is the reason (Ruling 28)."""
+    ruled = [i for i in carry.ruled_deferred(findings) if i in cf_open]
+    return tuple(dict.fromkeys(carry.deferred(cf_open, section) + ruled))
+
+
 def _mechanical_recomputed(
     findings: list[Finding],
     *,
-    ledger: Ledger,
-    project: str,
     pr: PullRequest,
     artifact,
-    last_judged: Record | None,
+    state: rounds.LoopState,
+    cf_open: list[str],
+    section: dict,
 ) -> list[Finding]:
     """A code pull request's mechanical carry-forward blockers, recomputed from its current
     body (D11): the operator may have updated it since the last pass, with no judge involved
@@ -620,30 +632,13 @@ def _mechanical_recomputed(
     open, the same shape `_finish` builds when a judge is the one checking."""
     if artifact != "code":
         return list(findings)
-    every = ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
-    every_rulings = ledger.list(project, attestation=AttestationKind.REVIEW_RULING)
-    cf_open = rounds.open_carry_forwards(
-        every, every_rulings, repository=pr.repository, excluding_pr=pr.number
-    )
-    section = carry.parse_section(pr.body)
+    last_judged = state.last_judged
     claimed = carry.addressed(cf_open, section)
     confirmed = set(
-        (last_judged.data.get("carry_forwards") or {}).get("addressed", [])
-        if last_judged is not None
-        else ()
+        rounds.carry_forwards_of(last_judged).addressed if last_judged is not None else ()
     )
     current = carry.mechanical_blockers(cf_open, section) + [
-        Finding.model_validate(
-            {
-                "severity": "blocking",
-                "file": carry.WHERE,
-                "title": f"{i} not addressed",
-                "class": "blocker",
-                "evidence": "the judge did not confirm it is addressed",
-            }
-        )
-        for i in claimed
-        if i not in confirmed
+        carry.not_addressed(i) for i in claimed if i not in confirmed
     ]
     old = [f for f in findings if carry.is_mechanical(f)]
     non_mechanical = [f for f in findings if not carry.is_mechanical(f)]
@@ -669,21 +664,22 @@ def _review_started(
     step, round_ = rounds.next_step(state)
     whole = github.diff(pr.repository, pr.number)
     artifact = rounds.artifact_of(_files(whole), policy.records_globs)
+    cf_open: list[str] = []
+    section: dict = {}
+    if artifact == "code":
+        every = ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
+        every_rulings = ledger.list(project, attestation=AttestationKind.REVIEW_RULING)
+        cf_open = rounds.open_carry_forwards(
+            every, every_rulings, repository=pr.repository, excluding_pr=pr.number
+        )
+        section = carry.parse_section(pr.body)
+    recomputed = dict(pr=pr, artifact=artifact, state=state, cf_open=cf_open, section=section)
     if step == "awaiting_ruling":
         # M8 (Ruling 16): a mechanical blocker never needs a ruling; the body may already have
         # resolved it, so it is recomputed before telling the operator what is still unruled.
         state = replace(
             state,
-            findings=tuple(
-                _mechanical_recomputed(
-                    list(state.findings),
-                    ledger=ledger,
-                    project=project,
-                    pr=pr,
-                    artifact=artifact,
-                    last_judged=state.last_judged,
-                )
-            ),
+            findings=tuple(_mechanical_recomputed(list(state.findings), **recomputed)),
         )
         verdict = _awaiting(pr, state, artifact)
         return _publish(
@@ -699,27 +695,25 @@ def _review_started(
             failures=[],
         )
     fix_rulings = {k: r for k, r in state.rulings.items() if r.ruling == "fix"}
-    if step == "closure" and not fix_rulings:
-        # every open blocker was ruled carry_forward: the loop closes without a judge (D9),
-        # but a mechanical blocker still gets one last recompute from the body (Ruling 16),
-        # and the last judged verdict's carry-forward accounting survives the outage (Ruling 14).
+    same_head = state.last_judged is not None and pr.head_sha == state.last_judged.data.get("sha")
+    if step == "closure" and not fix_rulings and same_head:
+        # every open blocker was ruled carry_forward and no judge has anything new to read: the
+        # loop closes without a judge (D9). A moved head is judged instead (Ruling 29). A
+        # mechanical blocker still gets one last recompute from the body (Ruling 16); the last
+        # judged verdict's `addressed` survives (Ruling 14), the deferrals are the body's own
+        # plus the ruled ones (M1, Ruling 28).
         findings = rounds.apply_rulings(list(state.findings), state.rulings)
-        findings = _mechanical_recomputed(
-            findings,
-            ledger=ledger,
-            project=project,
-            pr=pr,
-            artifact=artifact,
-            last_judged=state.last_judged,
-        )
+        findings = _mechanical_recomputed(findings, **recomputed)
         carry_forwards = None
-        if artifact == "code" and state.last_judged is not None:
-            raw = state.last_judged.data.get("carry_forwards")
-            if raw:
-                carry_forwards = CarryForwards(
-                    addressed=tuple(raw.get("addressed", [])),
-                    deferred=tuple(raw.get("deferred", [])),
-                )
+        if artifact == "code":
+            addressed = (
+                rounds.carry_forwards_of(state.last_judged).addressed
+                if state.last_judged is not None
+                else ()
+            )
+            carry_forwards = CarryForwards(
+                addressed=addressed, deferred=_deferred(cf_open, section, findings)
+            )
         verdict = ReviewVerdict(
             verdict="approve" if rounds.approves(findings) else "request_changes",
             summary="closure: every open blocker ruled carry_forward by the operator",
@@ -744,15 +738,6 @@ def _review_started(
         )
 
     failures: list[str] = []
-    cf_open: list[str] = []
-    section: dict = {}
-    if artifact == "code":
-        every = ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
-        every_rulings = ledger.list(project, attestation=AttestationKind.REVIEW_RULING)
-        cf_open = rounds.open_carry_forwards(
-            every, every_rulings, repository=pr.repository, excluding_pr=pr.number
-        )
-        section = carry.parse_section(pr.body)
     cf_addressed = carry.addressed(cf_open, section)
 
     # I3: the context is built from the judged state, mechanical findings removed — they are
@@ -848,25 +833,22 @@ def _review_started(
         merged = _merge(replies, mode, truncated) if any(r.verdict for r in replies) else None
 
     if merged is None:
-        # No verdict at all: fail closed. A failed pass still counts as a judged round (the
-        # ledger already holds the earlier ones), so the next pass moves on; the open findings
-        # stay open until a real judge answers them. I5 (Ruling 15): a failed pass DURING a
-        # closure check is recorded as "awaiting_ruling", not "closure" — it was never judged,
-        # so it must not become `last_judged`, or the rulings that made this a closure check
-        # would look too old on the next pass and drop out of `state.rulings`.
+        # No verdict at all: fail closed. An outage is not a judged round (Ruling 32): it is
+        # recorded as "no_verdict", which moves neither the round counter nor `last_judged`, so
+        # an outage never burns a round and never ages the rulings of a closure check out of
+        # `state.rulings`. The open findings stay open until a real judge answers them.
         findings = [
             f.model_copy(update={"status": "still_open"}) if f.open_blocker else f
             for f in state.findings
         ]
-        no_verdict_closure = step == "closure"
         verdict = ReviewVerdict(
             verdict="request_changes",
             summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
             findings=findings,
-            mode="awaiting_ruling" if no_verdict_closure else mode,
+            mode=mode,
             providers=(),
             diff_truncated=truncated,
-            round="awaiting_ruling" if no_verdict_closure else round_,
+            round="no_verdict",
             artifact=artifact,
         )
         title = "no verdict"
@@ -881,6 +863,7 @@ def _review_started(
             delta=delta,
             cf_open=cf_open,
             section=section,
+            delta_bound=step == "closure" and not fix_rulings,
         )
         title = verdict.verdict
     return _publish(

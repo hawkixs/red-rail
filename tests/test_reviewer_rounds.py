@@ -413,6 +413,29 @@ def test_demote_outside_skip_classifies_without_demoting() -> None:
 # --- D11: open carry-forwards --------------------------------------------------------------
 
 
+def test_a_no_verdict_pass_moves_neither_the_round_nor_last_judged() -> None:  # I3
+    verdicts = [
+        verdict(1, 1, [_finding(1)]),
+        verdict(2, "no_verdict", [_finding(1, status="still_open")]),
+        verdict(3, "no_verdict", [_finding(1, status="still_open")]),
+    ]
+    state = rounds.loop_state(verdicts, [])
+    assert state.judged == 1 and state.last_judged is verdicts[0]
+    assert rounds.next_step(state) == ("round", 2)
+
+
+def test_a_mechanical_finding_never_opens_a_carry_forward_of_its_own() -> None:  # C1
+    gap = _finding(
+        2, klass="carry_forward", status="ruled", file=carry.WHERE, title="CF-5-1 not addressed"
+    )
+    verdicts = [
+        verdict(1, 1, [_finding(1, klass="carry_forward", pr=5)], "approve", 5, "spec_plan"),
+        verdict(3, "closure", [gap], "approve", carry={"addressed": [], "deferred": ["CF-5-1"]}),
+    ]
+    rulings = [ruling(2, "F-7-2", as_="carry_forward")]
+    assert rounds.open_carry_forwards(verdicts, rulings, repository=REPO) == ["CF-5-1"]
+
+
 def test_open_carry_forwards_across_pull_requests() -> None:
     spec_pr = verdict(
         1,
