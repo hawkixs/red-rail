@@ -527,3 +527,19 @@ def test_carry_forwards_of_validates_the_shape() -> None:
     )
     with pytest.raises(ValidationError):
         rounds.carry_forwards_of(addressed_as_a_string)
+
+
+def test_a_mechanical_verdict_is_not_part_of_the_loop() -> None:
+    mechanical = _record(
+        "review_verdict",
+        {
+            "verdict": "request_changes",
+            "round": "mechanical",
+            "mode": "mechanical",
+            "artifact": "records",
+            "findings": [_finding(1)],
+        },
+        minutes=1,
+    )
+    state = rounds.loop_state([mechanical], [])
+    assert state.judged == 0 and state.findings == () and state.last_judged is None

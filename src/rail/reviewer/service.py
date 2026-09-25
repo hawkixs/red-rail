@@ -22,7 +22,7 @@ from rail.ledger import (
     idempotency_key_for,
 )
 from rail.ledger.file import receipt_filename
-from rail.reviewer import carry, rounds
+from rail.reviewer import carry, records, rounds
 from rail.reviewer.github import GitHubError, PullRequest
 from rail.reviewer.judges import JudgeReply, diff_budget, judge, round_instructions
 from rail.reviewer.policy import ReviewPolicy, producer_provider
@@ -690,12 +690,27 @@ def _review_started(
     run_judge: RunJudge,
     root: Path | None,
 ) -> ReviewOutcome:
+    whole = github.diff(pr.repository, pr.number)
+    artifact = rounds.artifact_of(_files(whole), policy.records_globs)
+    if artifact == "records":
+        # spec 2026-09-25-spool-replaces-committed-mirrors, D5: form only, no judge, no round
+        verdict = records.mechanical_verdict(whole, project=project)
+        return _publish(
+            pr,
+            check,
+            verdict,
+            verdict.verdict,
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            failures=[],
+        )
     history = previous_verdicts(ledger, project, pr)
     rulings = rulings_of(ledger, project, pr)
     state = rounds.loop_state(history, rulings)
     step, round_ = rounds.next_step(state)
-    whole = github.diff(pr.repository, pr.number)
-    artifact = rounds.artifact_of(_files(whole), policy.records_globs)
     cf_open: list[str] = []
     section: dict = {}
     if artifact == "code":

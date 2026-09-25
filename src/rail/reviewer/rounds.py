@@ -82,6 +82,8 @@ def _judged(record: Record) -> bool:
 
 
 def loop_state(verdicts: Sequence[Record], rulings: Sequence[Record]) -> LoopState:
+    # a mechanical verdict judged the form of receipts, never a round (D5)
+    verdicts = [v for v in verdicts if v.data.get("round") != "mechanical"]
     judged = [v for v in verdicts if _judged(v)]
     judging = [v for v in verdicts if _judged(v) or v.data.get("round") == "closure"]
     last_judged = judging[-1] if judging else None

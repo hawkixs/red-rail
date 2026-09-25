@@ -13,7 +13,7 @@ from rail.reviewer.judges import JudgeReply, build_prompt
 from rail.reviewer.policy import default_policy
 from rail.reviewer.service import _DELTA_NOTE, docs_only, needs_review, review_pull
 from rail.reviewer.verdict import Finding, PreviousAnswer, ReviewVerdict
-from tests.helpers import conforming_tree
+from tests.helpers import added_receipt_diff, conforming_tree
 
 PR = PullRequest(
     repository="hawkixs/red-alpha",
@@ -2282,3 +2282,54 @@ def test_a_verdict_on_the_brain_ledger_leaves_no_file_in_the_checkout(tmp_path: 
     )
     assert outcome.attested and outcome.receipt is None
     assert not list((repo / RECEIPTS_DIR).glob("*review_verdict*")) and ledger.pending() == []
+
+
+# --- Task B2: a records-only pull request is judged mechanically, no judge, no round -------
+
+
+def test_a_records_only_pull_request_is_judged_mechanically(tmp_path: Path) -> None:
+    repo, ledger = _repo(tmp_path)
+    other = FileLedger(tmp_path / "made")
+    made = other.attest(
+        "red-alpha", AttestationKind.DEPLOYED, {"sha": "e" * 40}, issuer="op", idempotency_key="d9"
+    )
+    github = FakeGitHub(diff_text=added_receipt_diff(other.path_of(made)))
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=_no_judge,
+        root=tmp_path,
+    )
+    assert outcome.verdict.verdict == "approve" and outcome.verdict.mode == "mechanical"
+    assert ("complete", 99, "success", "approve") in github.calls
+    assert ("review", 7, "APPROVE") in github.calls
+    record = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)[-1]
+    assert record.issuer == "red-rail-reviewer" and record.data["independent"] is True
+    assert (record.data["mode"], record.data["round"]) == ("mechanical", "mechanical")
+
+
+def test_a_tampered_receipt_gets_request_changes_and_still_no_judge(tmp_path: Path) -> None:
+    repo, ledger = _repo(tmp_path)
+    other = FileLedger(tmp_path / "made")
+    made = other.attest(
+        "red-alpha", AttestationKind.DEPLOYED, {"sha": "e" * 40}, issuer="op", idempotency_key="d9"
+    )
+    path = other.path_of(made)
+    path.write_text(path.read_text().replace("e" * 40, "f" * 40))
+    github = FakeGitHub(diff_text=added_receipt_diff(path))
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=_no_judge,
+        root=tmp_path,
+    )
+    assert outcome.verdict.verdict == "request_changes"
+    assert ("review", 7, "REQUEST_CHANGES") in github.calls
