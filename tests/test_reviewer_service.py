@@ -4,6 +4,8 @@
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import pytest
+
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable, PullRequestRef
 from rail.ledger.file import FileLedger
 from rail.reviewer.github import CheckRun, PullRequest
@@ -485,6 +487,7 @@ def test_a_delta_reaching_outside_the_pull_request_gets_a_full_review(tmp_path: 
     assert seen == [DIFF]  # the whole PR diff (base...head), not the delta
 
 
+@pytest.mark.skip(reason="budget removed: replaced by rounds in Task 6")
 def test_the_pass_budget_fails_the_check_without_a_judge_until_relabelled(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
     policy = default_policy().model_copy(update={"max_passes_per_pr": 2})
