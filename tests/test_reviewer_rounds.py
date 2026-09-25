@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from rail.ledger import Record, RecordKind
 from rail.reviewer import carry, rounds
@@ -308,3 +309,25 @@ def test_open_carry_forwards_across_pull_requests() -> None:
         [spec_pr, unapproved, code_pr, approved_9, fixed_cf], [ruled],
         repository=REPO, excluding_pr=9
     ) == ["CF-5-2"]
+
+
+def test_carry_forwards_of_defaults_when_absent() -> None:
+    v = verdict(1, 1, [], decision="approve", pr=5, artifact="code")
+    cf = rounds.carry_forwards_of(v)
+    assert cf.addressed == () and cf.deferred == ()
+
+
+def test_carry_forwards_of_validates_the_shape() -> None:
+    v = verdict(1, 1, [], decision="approve", pr=5, artifact="code",
+                carry={"addressed": ["CF-5-1"]})
+    cf = rounds.carry_forwards_of(v)
+    assert cf.addressed == ("CF-5-1",) and cf.deferred == ()
+
+    not_a_mapping = verdict(2, 1, [], decision="approve", pr=8, artifact="code", carry="bogus")
+    with pytest.raises(ValidationError):
+        rounds.carry_forwards_of(not_a_mapping)
+
+    addressed_as_a_string = verdict(3, 1, [], decision="approve", pr=9, artifact="code",
+                                     carry={"addressed": "CF-5-1"})
+    with pytest.raises(ValidationError):
+        rounds.carry_forwards_of(addressed_as_a_string)

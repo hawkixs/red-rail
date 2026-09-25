@@ -730,3 +730,40 @@ def test_carry_forward_reports_a_malformed_receipt_as_a_failure_not_a_crash(tmp_
     )
     result = carry_forward(repo)
     assert not result.passed and "malformed receipt" in result.details
+
+
+def _bad_cf_verdict(ledger, *, pr, minutes, carry_forwards) -> None:
+    """A raw receipt bypassing `CarryForwards` validation — a receipt written some other way,
+    or a reviewer regression, must not be assumed well-shaped."""
+    ledger.attest(
+        "red-alpha",
+        AttestationKind.REVIEW_VERDICT,
+        {
+            "sha": f"{minutes:040d}",
+            "verdict": "approve",
+            "artifact": "code",
+            "repository": "hawkixs/red-alpha",
+            "pr": pr,
+            "carry_forwards": carry_forwards,
+        },
+        issuer="red-rail-reviewer",
+        idempotency_key=f"review_verdict:{minutes}",
+    )
+
+
+def test_carry_forward_fails_not_crashes_when_carry_forwards_is_not_a_mapping(tmp_path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    _cf_verdict(ledger, pr=5, minutes=1, decision="approve", artifact="spec_plan", findings=[CF])
+    _bad_cf_verdict(ledger, pr=8, minutes=2, carry_forwards="bogus")
+    result = carry_forward(repo)
+    assert not result.passed and "hawkixs/red-alpha#8" in result.details
+
+
+def test_carry_forward_fails_not_crashes_when_addressed_is_a_bare_string(tmp_path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    _cf_verdict(ledger, pr=5, minutes=1, decision="approve", artifact="spec_plan", findings=[CF])
+    _bad_cf_verdict(ledger, pr=8, minutes=2, carry_forwards={"addressed": "CF-5-1"})
+    result = carry_forward(repo)
+    assert not result.passed and "hawkixs/red-alpha#8" in result.details

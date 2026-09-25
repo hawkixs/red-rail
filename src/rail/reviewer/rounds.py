@@ -16,7 +16,7 @@ from typing import Literal
 
 from rail.ledger import Record
 from rail.reviewer import carry
-from rail.reviewer.verdict import Artifact, Finding, PreviousAnswer
+from rail.reviewer.verdict import Artifact, CarryForwards, Finding, PreviousAnswer
 
 Step = Literal["round", "awaiting_ruling", "closure"]
 JUDGED_ROUNDS = (1, 2, 3, None)  # None: a verdict recorded before this change
@@ -285,6 +285,17 @@ def apply_rulings(findings: Sequence[Finding], rulings: dict[str, Ruling]) -> li
     ]
 
 
+def carry_forwards_of(record: Record) -> CarryForwards:
+    """The pull request's carry-forward accounting from its receipt (D11): `CarryForwards()`
+    when `carry_forwards` is absent or None, else validated — a malformed shape (not a
+    mapping, `addressed` not a sequence of strings) raises `ValidationError` rather than being
+    silently read as empty, or worse, `addressed` a string read as a set of characters."""
+    raw = record.data.get("carry_forwards")
+    if raw is None:
+        return CarryForwards()
+    return CarryForwards.model_validate(raw)
+
+
 def open_carry_forwards(
     verdicts: Sequence[Record],
     rulings: Sequence[Record],
@@ -304,8 +315,7 @@ def open_carry_forwards(
         for f in _findings(v) or ():
             if f.klass == "carry_forward" and f.id and f.status != "fixed":
                 opened.setdefault(cf_id(f.id), None)
-        carry = v.data.get("carry_forwards") or {}
-        addressed.update(carry.get("addressed", []))
+        addressed.update(carry_forwards_of(v).addressed)
     for r in rulings:
         if r.data.get("repository") != repository or r.data.get("ruling") != "carry_forward":
             continue
