@@ -91,6 +91,13 @@ def ruling(minutes: int, finding: str, as_: str = "fix", pr: int = 7) -> Record:
           verdict(3, 3, [{"id": "F-7-2", "class": "blocker", "severity": "blocking",
                           "file": carry.WHERE, "title": "CF-5-1 not accounted for",
                           "status": "still_open", "evidence": "e"}])], [], ("round", 3)),
+        # a ruling recorded on the only open blocker, but it is body-derived: still no
+        # no-judge closure (Ruling 23) — the ruling must land on a real, open blocker
+        ([verdict(1, 1, [_finding(1)]), verdict(2, 2, [_finding(1)]),
+          verdict(3, 3, [{"id": "F-7-2", "class": "blocker", "severity": "blocking",
+                          "file": carry.WHERE, "title": "CF-5-1 not accounted for",
+                          "status": "still_open", "evidence": "e"}])],
+         [ruling(5, "F-7-2")], ("round", 3)),
     ],
 )
 def test_next_step(verdicts, rulings, expected) -> None:

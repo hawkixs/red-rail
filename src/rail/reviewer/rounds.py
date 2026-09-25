@@ -123,10 +123,15 @@ def unruled(state: LoopState) -> list[Finding]:
 def next_step(state: LoopState) -> tuple[Step, int | None]:
     if state.awaiting:
         if not unruled(state):
-            # Ruling 21: with nothing left to rule on, close only if the operator actually
-            # ruled on something; a body-derived gap resolving itself is not a ruling, and
-            # gets another judged round 3 instead of a no-judge closure.
-            if state.rulings:
+            # Ruling 21/23: with nothing left to rule on, close only if the operator actually
+            # ruled on an open, non-body-derived blocker; a body-derived gap resolving on its
+            # own, or a ruling that lands on something else, is not a closing ruling — another
+            # judged round 3 instead of a no-judge closure.
+            closing = any(
+                f.id in state.rulings and not carry.is_body_derived(f)
+                for f in open_blockers(state)
+            )
+            if closing:
                 return "closure", None
             return "round", 3
         return "awaiting_ruling", None

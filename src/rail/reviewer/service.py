@@ -553,6 +553,12 @@ def _finish(
             for i in claimed if i not in confirmed
         ]
         old = [f for f in state.findings if carry.is_mechanical(f)]
+        if step == "closure":
+            # Ruling 22: a ruling on a mechanical blocker (e.g. a "not addressed" one) applies
+            # here too, or `reconcile` would re-derive its status from `current` alone and lose
+            # the operator's carry_forward call the moment this closure also has a fix ruling
+            # on something else.
+            old = rounds.apply_rulings(old, state.rulings)
         kept, fresh = carry.reconcile(old, current)
         findings = rounds.append_new(findings + kept, fresh, pr=pr.number, artifact=artifact)
         carry_forwards = CarryForwards(

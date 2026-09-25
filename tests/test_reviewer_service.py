@@ -1298,6 +1298,56 @@ def test_a_body_claim_without_a_judges_confirmation_stays_open(tmp_path) -> None
     assert any(f.title == "CF-5-1 not addressed" for f in outcome4.verdict.findings)
 
 
+def test_a_ruling_reclassifies_a_mechanical_blocker_in_a_judged_closure(tmp_path) -> None:  # R3-1
+    repo, ledger = _repo(tmp_path)
+    spec_pr = replace(PR, number=5)
+    _verdict_with(ledger, sha="9" * 40, check_run_id=5, round_=1, decision="approve",
+                  artifact="spec_plan", pr=spec_pr,
+                  findings=[Finding.model_validate({
+                      "severity": "important", "file": "docs/specs/s.md", "title": "edge",
+                      "evidence": "e", "id": "F-5-1", "class": "carry_forward",
+                  })])
+    body = "## Carry-forwards\n- CF-5-1: addressed\n"
+    code_pr = replace(PR, body=body)
+    bug = Finding(severity="blocking", file="src/x.py", title="bug1", evidence="e")
+
+    review_pull(code_pr, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
+               project="red-alpha",
+               run_judge=_judge_saying(reply_findings=[bug], decision="request_changes"))
+    review_pull(replace(code_pr, head_sha="c" * 40), github=FakeGitHub(),
+               policy=default_policy(), ledger=ledger, project="red-alpha",
+               run_judge=_judge_saying(decision="request_changes"))
+    round3 = review_pull(replace(code_pr, head_sha="d" * 40), github=FakeGitHub(),
+                         policy=default_policy(), ledger=ledger, project="red-alpha",
+                         run_judge=_judge_saying(decision="request_changes"))
+    assert round3.verdict.round == 3
+    ids = sorted(f.id for f in round3.verdict.findings if f.open_blocker)
+    assert ids == ["F-7-1", "F-7-2"]
+
+    ledger.attest(
+        "red-alpha", AttestationKind.REVIEW_RULING,
+        {"repository": PR.repository, "pr": 7, "finding": "F-7-1", "ruling": "fix",
+         "decision": "rename the flag"},
+        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
+    )
+    ledger.attest(
+        "red-alpha", AttestationKind.REVIEW_RULING,
+        {"repository": PR.repository, "pr": 7, "finding": "F-7-2", "ruling": "carry_forward",
+         "decision": "later"},
+        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-2:1",
+    )
+    outcome = review_pull(
+        replace(code_pr, head_sha="f" * 40), github=FakeGitHub(), policy=default_policy(),
+        ledger=ledger, project="red-alpha",
+        run_judge=_judge_saying(previous=[PreviousAnswer(id="F-7-1", status="fixed")],
+                                decision="approve"),
+    )
+    assert outcome.verdict.round == "closure" and outcome.verdict.verdict == "approve"
+    by_id = {f.id: f for f in outcome.verdict.findings}
+    assert by_id["F-7-1"].status == "fixed"
+    assert by_id["F-7-2"].klass == "carry_forward" and by_id["F-7-2"].status == "ruled"
+
+
 def test_the_closure_context_asks_the_judge_to_confirm_a_not_addressed_blocker(
     tmp_path,
 ) -> None:  # NB1c
