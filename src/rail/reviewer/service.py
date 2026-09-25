@@ -265,7 +265,7 @@ def _context(state: rounds.LoopState, *, cf_open: list[str], cf_addressed: list[
     if cf_addressed:
         lines.append("")
         lines.append(
-            "Carry-forwards this pull request says it addresses (answer each in \"previous\"): "
+            'Carry-forwards this pull request says it addresses (answer each in "previous"): '
             + ", ".join(cf_addressed)
         )
     return "\n".join(lines).strip()
@@ -506,8 +506,16 @@ def _awaiting(pr: PullRequest, state: rounds.LoopState, artifact) -> ReviewVerdi
 
 
 def _finish(
-    merged: ReviewVerdict, *, pr: PullRequest, state: rounds.LoopState, step: str,
-    round_: int | None, artifact, delta: str | None, cf_open: list[str], section: dict,
+    merged: ReviewVerdict,
+    *,
+    pr: PullRequest,
+    state: rounds.LoopState,
+    step: str,
+    round_: int | None,
+    artifact,
+    delta: str | None,
+    cf_open: list[str],
+    section: dict,
 ) -> ReviewVerdict:
     """Number, classify and status the findings; apply round 3's demotion and the closure
     check's limits; recompute the carry-forward blockers; decide by D3.
@@ -547,10 +555,17 @@ def _finish(
         claimed = carry.addressed(cf_open, section)
         confirmed = [i for i in claimed if answers.get(i) == "fixed"]
         current = carry.mechanical_blockers(cf_open, section) + [
-            Finding.model_validate({"severity": "blocking", "file": carry.WHERE,
-                                    "title": f"{i} not addressed", "class": "blocker",
-                                    "evidence": "the judge did not confirm it is addressed"})
-            for i in claimed if i not in confirmed
+            Finding.model_validate(
+                {
+                    "severity": "blocking",
+                    "file": carry.WHERE,
+                    "title": f"{i} not addressed",
+                    "class": "blocker",
+                    "evidence": "the judge did not confirm it is addressed",
+                }
+            )
+            for i in claimed
+            if i not in confirmed
         ]
         old = [f for f in state.findings if carry.is_mechanical(f)]
         if step == "closure":
@@ -573,19 +588,26 @@ def _finish(
     summary = merged.summary
     if strangers:
         summary = (summary + " | ids not open: " + ", ".join(strangers))[:4000]
-    return merged.model_copy(update={
-        "verdict": decision,
-        "summary": summary,
-        "findings": findings,
-        "round": "closure" if step == "closure" else round_,
-        "artifact": artifact,
-        "carry_forwards": carry_forwards,
-        "mode": "closure" if step == "closure" else merged.mode,
-    })
+    return merged.model_copy(
+        update={
+            "verdict": decision,
+            "summary": summary,
+            "findings": findings,
+            "round": "closure" if step == "closure" else round_,
+            "artifact": artifact,
+            "carry_forwards": carry_forwards,
+            "mode": "closure" if step == "closure" else merged.mode,
+        }
+    )
 
 
 def _mechanical_recomputed(
-    findings: list[Finding], *, ledger: Ledger, project: str, pr: PullRequest, artifact,
+    findings: list[Finding],
+    *,
+    ledger: Ledger,
+    project: str,
+    pr: PullRequest,
+    artifact,
     last_judged: Record | None,
 ) -> list[Finding]:
     """A code pull request's mechanical carry-forward blockers, recomputed from its current
@@ -607,13 +629,21 @@ def _mechanical_recomputed(
     claimed = carry.addressed(cf_open, section)
     confirmed = set(
         (last_judged.data.get("carry_forwards") or {}).get("addressed", [])
-        if last_judged is not None else ()
+        if last_judged is not None
+        else ()
     )
     current = carry.mechanical_blockers(cf_open, section) + [
-        Finding.model_validate({"severity": "blocking", "file": carry.WHERE,
-                                "title": f"{i} not addressed", "class": "blocker",
-                                "evidence": "the judge did not confirm it is addressed"})
-        for i in claimed if i not in confirmed
+        Finding.model_validate(
+            {
+                "severity": "blocking",
+                "file": carry.WHERE,
+                "title": f"{i} not addressed",
+                "class": "blocker",
+                "evidence": "the judge did not confirm it is addressed",
+            }
+        )
+        for i in claimed
+        if i not in confirmed
     ]
     old = [f for f in findings if carry.is_mechanical(f)]
     non_mechanical = [f for f in findings if not carry.is_mechanical(f)]
@@ -646,15 +676,27 @@ def _review_started(
             state,
             findings=tuple(
                 _mechanical_recomputed(
-                    list(state.findings), ledger=ledger, project=project, pr=pr,
-                    artifact=artifact, last_judged=state.last_judged,
+                    list(state.findings),
+                    ledger=ledger,
+                    project=project,
+                    pr=pr,
+                    artifact=artifact,
+                    last_judged=state.last_judged,
                 )
             ),
         )
         verdict = _awaiting(pr, state, artifact)
         return _publish(
-            pr, check, verdict, "awaiting ruling", github=github, policy=policy, ledger=ledger,
-            project=project, repo_path=repo_path, failures=[],
+            pr,
+            check,
+            verdict,
+            "awaiting ruling",
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            failures=[],
         )
     fix_rulings = {k: r for k, r in state.rulings.items() if r.ruling == "fix"}
     if step == "closure" and not fix_rulings:
@@ -663,7 +705,11 @@ def _review_started(
         # and the last judged verdict's carry-forward accounting survives the outage (Ruling 14).
         findings = rounds.apply_rulings(list(state.findings), state.rulings)
         findings = _mechanical_recomputed(
-            findings, ledger=ledger, project=project, pr=pr, artifact=artifact,
+            findings,
+            ledger=ledger,
+            project=project,
+            pr=pr,
+            artifact=artifact,
             last_judged=state.last_judged,
         )
         carry_forwards = None
@@ -677,12 +723,24 @@ def _review_started(
         verdict = ReviewVerdict(
             verdict="approve" if rounds.approves(findings) else "request_changes",
             summary="closure: every open blocker ruled carry_forward by the operator",
-            findings=findings, mode="closure", providers=(), round="closure", artifact=artifact,
+            findings=findings,
+            mode="closure",
+            providers=(),
+            round="closure",
+            artifact=artifact,
             carry_forwards=carry_forwards,
         )
         return _publish(
-            pr, check, verdict, verdict.verdict, github=github, policy=policy, ledger=ledger,
-            project=project, repo_path=repo_path, failures=[],
+            pr,
+            check,
+            verdict,
+            verdict.verdict,
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            failures=[],
         )
 
     failures: list[str] = []
@@ -734,7 +792,11 @@ def _review_started(
     criteria = _criteria(ledger, project, pr)
     instructions = round_instructions("closure" if step == "closure" else "round", round_, artifact)
     common = dict(
-        criteria=criteria, run_judge=run_judge, root=root, failures=failures, notes=notes,
+        criteria=criteria,
+        run_judge=run_judge,
+        root=root,
+        failures=failures,
+        notes=notes,
         instructions=instructions,
     )
     # One depth for the whole review, computed once from the change. The chunked path below
@@ -810,8 +872,15 @@ def _review_started(
         title = "no verdict"
     else:
         verdict = _finish(
-            merged, pr=pr, state=state, step=step, round_=round_, artifact=artifact,
-            delta=delta, cf_open=cf_open, section=section,
+            merged,
+            pr=pr,
+            state=state,
+            step=step,
+            round_=round_,
+            artifact=artifact,
+            delta=delta,
+            cf_open=cf_open,
+            section=section,
         )
         title = verdict.verdict
     return _publish(

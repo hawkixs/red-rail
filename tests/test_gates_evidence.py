@@ -662,18 +662,32 @@ def _cf_verdict(ledger, *, pr, minutes, decision, artifact, findings=(), carry=N
     from rail.reviewer.verdict import CarryForwards, Finding, ReviewVerdict
 
     verdict = ReviewVerdict(
-        verdict=decision, summary="s", artifact=artifact, round=1,
+        verdict=decision,
+        summary="s",
+        artifact=artifact,
+        round=1,
         findings=[Finding.model_validate(f) for f in findings],
         carry_forwards=CarryForwards(**carry) if carry else None,
     )
-    ledger.attest("red-alpha", AttestationKind.REVIEW_VERDICT,
-                  verdict.as_attestation_data(sha=f"{minutes:040d}", check_run_id=minutes,
-                                              repository="hawkixs/red-alpha", pr=pr),
-                  issuer="red-rail-reviewer", idempotency_key=f"review_verdict:{minutes}")
+    ledger.attest(
+        "red-alpha",
+        AttestationKind.REVIEW_VERDICT,
+        verdict.as_attestation_data(
+            sha=f"{minutes:040d}", check_run_id=minutes, repository="hawkixs/red-alpha", pr=pr
+        ),
+        issuer="red-rail-reviewer",
+        idempotency_key=f"review_verdict:{minutes}",
+    )
 
 
-CF = {"severity": "important", "file": "docs/specs/s.md", "title": "t", "evidence": "e",
-      "id": "F-5-1", "class": "carry_forward"}
+CF = {
+    "severity": "important",
+    "file": "docs/specs/s.md",
+    "title": "t",
+    "evidence": "e",
+    "id": "F-5-1",
+    "class": "carry_forward",
+}
 
 
 def test_carry_forward_passes_with_nothing_recorded(tmp_path) -> None:
@@ -703,8 +717,14 @@ def test_carry_forward_passes_once_addressed(tmp_path) -> None:
     repo = conforming_tree(tmp_path, "red-alpha", "dev")
     ledger = FileLedger(repo / RECEIPTS_DIR)
     _cf_verdict(ledger, pr=5, minutes=1, decision="approve", artifact="spec_plan", findings=[CF])
-    _cf_verdict(ledger, pr=8, minutes=2, decision="approve", artifact="code",
-                carry={"addressed": ("CF-5-1",)})
+    _cf_verdict(
+        ledger,
+        pr=8,
+        minutes=2,
+        decision="approve",
+        artifact="code",
+        carry={"addressed": ("CF-5-1",)},
+    )
     result = carry_forward(repo)
     assert result.passed and "0 open" in result.details
 

@@ -66,8 +66,7 @@ def test_mechanical_blockers_are_recomputed_each_round() -> None:
 
 def test_reconcile_reopens_a_fixed_mechanical_blocker() -> None:  # Review Focus 1
     round1 = [
-        b.model_copy(update={"id": "F-9-1"})
-        for b in carry.mechanical_blockers(["CF-5-1"], {})
+        b.model_copy(update={"id": "F-9-1"}) for b in carry.mechanical_blockers(["CF-5-1"], {})
     ]
     fixed, fresh_after_fix = carry.reconcile(round1, carry.mechanical_blockers([], {}))
     assert [(f.id, f.status) for f in fixed] == [("F-9-1", "fixed")]

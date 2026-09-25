@@ -398,7 +398,9 @@ def carry_forward(repo: Path) -> GateResult:
             rounds.carry_forwards_of(v)
         except (ValidationError, ValueError, TypeError) as exc:
             return GateResult(
-                Stage.REVIEW, "carry_forward", False,
+                Stage.REVIEW,
+                "carry_forward",
+                False,
                 f"malformed carry-forward receipt on {v.data.get('repository')}#"
                 f"{v.data.get('pr')}: {exc}",
             )
@@ -409,7 +411,9 @@ def carry_forward(repo: Path) -> GateResult:
                 continue
             before = [r for r in rulings if r.recorded_at < v.recorded_at]
             open_ = rounds.open_carry_forwards(
-                verdicts[:index], before, repository=str(data.get("repository")),
+                verdicts[:index],
+                before,
+                repository=str(data.get("repository")),
                 excluding_pr=data.get("pr"),
             )
             carry = rounds.carry_forwards_of(v)
@@ -417,15 +421,20 @@ def carry_forward(repo: Path) -> GateResult:
             missing = [i for i in open_ if i not in accounted]
             if missing:
                 return GateResult(
-                    Stage.REVIEW, "carry_forward", False,
+                    Stage.REVIEW,
+                    "carry_forward",
+                    False,
                     f"approving verdict on {data.get('repository')}#{data.get('pr')} left "
                     f"{', '.join(missing)} unaccounted",
                 )
         if not verdicts:
             return GateResult(Stage.REVIEW, "carry_forward", True, "no carry-forward recorded")
         repositories = sorted({str(v.data.get("repository")) for v in verdicts})
-        open_all = [i for repo_slug in repositories
-                    for i in rounds.open_carry_forwards(verdicts, rulings, repository=repo_slug)]
+        open_all = [
+            i
+            for repo_slug in repositories
+            for i in rounds.open_carry_forwards(verdicts, rulings, repository=repo_slug)
+        ]
     except (ValidationError, ValueError, TypeError) as exc:
         return GateResult(Stage.REVIEW, "carry_forward", False, f"malformed receipt: {exc}")
     if not open_all and not any(
@@ -437,7 +446,9 @@ def carry_forward(repo: Path) -> GateResult:
     more = f" and {len(open_all) - 10} more" if len(open_all) > 10 else ""
     shown = ", ".join(open_all[:10]) + more
     return GateResult(
-        Stage.REVIEW, "carry_forward", True,
+        Stage.REVIEW,
+        "carry_forward",
+        True,
         f"{len(open_all)} open" + (f": {shown}" if open_all else ""),
     )
 

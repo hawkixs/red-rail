@@ -115,7 +115,8 @@ def unruled(state: LoopState) -> list[Finding]:
     mechanical blocker is different — it records a gap in the judge's confirmation, not in the
     body's own shape, so it needs a ruling like any other blocker."""
     return [
-        f for f in open_blockers(state)
+        f
+        for f in open_blockers(state)
         if f.id not in state.rulings and not carry.is_body_derived(f)
     ]
 
@@ -128,8 +129,7 @@ def next_step(state: LoopState) -> tuple[Step, int | None]:
             # own, or a ruling that lands on something else, is not a closing ruling — another
             # judged round 3 instead of a no-judge closure.
             closing = any(
-                f.id in state.rulings and not carry.is_body_derived(f)
-                for f in open_blockers(state)
+                f.id in state.rulings and not carry.is_body_derived(f) for f in open_blockers(state)
             )
             if closing:
                 return "closure", None

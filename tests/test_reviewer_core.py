@@ -424,8 +424,15 @@ def test_parse_verdict_reads_classes_ids_and_previous_answers() -> None:
             "verdict": "request_changes",
             "summary": "s",
             "findings": [
-                {"severity": "blocking", "file": "a.py", "line": 1, "title": "t",
-                 "evidence": "e", "class": "blocker", "id": "F-7-2"},
+                {
+                    "severity": "blocking",
+                    "file": "a.py",
+                    "line": 1,
+                    "title": "t",
+                    "evidence": "e",
+                    "class": "blocker",
+                    "id": "F-7-2",
+                },
             ],
             "previous": [{"id": "F-7-1", "status": "fixed", "evidence": "gone"}],
         }
@@ -437,8 +444,12 @@ def test_parse_verdict_reads_classes_ids_and_previous_answers() -> None:
 
 def test_a_malformed_previous_entry_is_dropped_not_fatal() -> None:
     text = json.dumps(
-        {"verdict": "approve", "summary": "s", "findings": [],
-         "previous": [{"id": "nope", "status": "fixed"}, {"id": "F-7-1", "status": "fixed"}]}
+        {
+            "verdict": "approve",
+            "summary": "s",
+            "findings": [],
+            "previous": [{"id": "nope", "status": "fixed"}, {"id": "F-7-1", "status": "fixed"}],
+        }
     )
     verdict = parse_verdict(text)
     assert [p.id for p in verdict.previous] == ["F-7-1"]

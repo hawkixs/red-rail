@@ -256,9 +256,7 @@ def test_no_verdict_at_all_fails_closed(tmp_path: Path) -> None:
         ledger=ledger,
         project="red-alpha",
         repo_path=repo,
-        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, **_: fail(
-            provider, tier
-        ),
+        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, **_: fail(provider, tier),
         root=tmp_path,
     )
     assert outcome.verdict.verdict == "request_changes" and "no verdict" in outcome.verdict.summary
@@ -332,9 +330,7 @@ def test_a_crash_after_the_check_started_completes_it_as_failure(tmp_path: Path)
     repo, ledger = _repo(tmp_path)
     github = FakeGitHub(messages=["chore: plain"])
 
-    def exploding_judge(
-        pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""
-    ):
+    def exploding_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
         raise RuntimeError("judge exploded")
 
     with pytest.raises(RuntimeError, match="judge exploded"):
@@ -391,10 +387,20 @@ def _earlier_verdict(
     """A verdict recorded before this change: `findings` is a bare count, not a list — its
     findings survive only in the check-run text (D6's migration fallback, M7)."""
     data = {
-        "sha": sha, "independent": True, "verdict": verdict, "check_run_id": check_run_id,
-        "repository": PR.repository, "pr": PR.number, "mode": "deep", "providers": ["codex"],
-        "finding_count": 0, "blocking": False, "diff_truncated": False, "round": None,
-        "artifact": None, "findings": 0,
+        "sha": sha,
+        "independent": True,
+        "verdict": verdict,
+        "check_run_id": check_run_id,
+        "repository": PR.repository,
+        "pr": PR.number,
+        "mode": "deep",
+        "providers": ["codex"],
+        "finding_count": 0,
+        "blocking": False,
+        "diff_truncated": False,
+        "round": None,
+        "artifact": None,
+        "findings": 0,
     }
     ledger.attest(
         "red-alpha",
@@ -835,32 +841,63 @@ def test_rulings_of_reads_this_pull_request_only(tmp_path: Path) -> None:
         ledger.attest(
             "red-alpha",
             AttestationKind.REVIEW_RULING,
-            {"repository": PR.repository, "pr": pr, "finding": finding, "ruling": "fix",
-             "decision": "d"},
+            {
+                "repository": PR.repository,
+                "pr": pr,
+                "finding": finding,
+                "ruling": "fix",
+                "decision": "d",
+            },
             issuer="operator",
             idempotency_key=f"review_ruling:{PR.repository}#{pr}:{finding}:1",
         )
     assert [r.data["finding"] for r in rulings_of(ledger, "red-alpha", PR)] == ["F-7-1"]
 
 
-def _verdict_with(ledger, *, sha, check_run_id, round_, findings, decision="request_changes",
-                  artifact="code", pr=PR):
+def _verdict_with(
+    ledger,
+    *,
+    sha,
+    check_run_id,
+    round_,
+    findings,
+    decision="request_changes",
+    artifact="code",
+    pr=PR,
+):
     verdict = ReviewVerdict(
-        verdict=decision, summary="earlier", findings=findings, mode="deep",
-        providers=("codex",), round=round_, artifact=artifact,
+        verdict=decision,
+        summary="earlier",
+        findings=findings,
+        mode="deep",
+        providers=("codex",),
+        round=round_,
+        artifact=artifact,
     )
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_VERDICT,
-        verdict.as_attestation_data(sha=sha, check_run_id=check_run_id,
-                                    repository=pr.repository, pr=pr.number),
-        issuer="red-rail-reviewer", idempotency_key=f"review_verdict:{sha}:{check_run_id}",
+        "red-alpha",
+        AttestationKind.REVIEW_VERDICT,
+        verdict.as_attestation_data(
+            sha=sha, check_run_id=check_run_id, repository=pr.repository, pr=pr.number
+        ),
+        issuer="red-rail-reviewer",
+        idempotency_key=f"review_verdict:{sha}:{check_run_id}",
     )
 
 
 def _open(n=1, status="new", klass="blocker"):
-    return Finding.model_validate({"severity": "blocking", "file": "src/x.py", "line": 1,
-                                   "title": f"bug{n}", "evidence": "e", "id": f"F-7-{n}",
-                                   "class": klass, "status": status})
+    return Finding.model_validate(
+        {
+            "severity": "blocking",
+            "file": "src/x.py",
+            "line": 1,
+            "title": f"bug{n}",
+            "evidence": "e",
+            "id": f"F-7-{n}",
+            "class": klass,
+            "status": status,
+        }
+    )
 
 
 class NoCheckText(FakeGitHub):
@@ -869,14 +906,23 @@ class NoCheckText(FakeGitHub):
 
 
 def _judge_saying(reply_findings=(), previous=(), decision="request_changes", seen=None):
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes="",
-                  instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         if seen is not None:
             seen.append({"diff": diff, "notes": notes, "instructions": instructions})
-        verdict = ReviewVerdict(verdict=decision, summary="s", findings=list(reply_findings),
-                                mode=tier, providers=(provider,), previous=tuple(previous))
-        return JudgeReply(provider=provider, tier=tier, model="m", verdict=verdict,
-                          failure=None, raw="")
+        verdict = ReviewVerdict(
+            verdict=decision,
+            summary="s",
+            findings=list(reply_findings),
+            mode=tier,
+            providers=(provider,),
+            previous=tuple(previous),
+        )
+        return JudgeReply(
+            provider=provider, tier=tier, model="m", verdict=verdict, failure=None, raw=""
+        )
+
     return run_judge
 
 
@@ -885,9 +931,14 @@ def test_round_two_carries_every_earlier_finding_from_the_receipts(tmp_path) -> 
     _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=[_open(1)])
     seen: list[dict] = []
     outcome = review_pull(
-        PR, github=NoCheckText(), policy=default_policy(), ledger=ledger, project="red-alpha",
-        run_judge=_judge_saying(previous=[PreviousAnswer(id="F-7-1", status="fixed")],
-                                decision="approve", seen=seen),
+        PR,
+        github=NoCheckText(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(
+            previous=[PreviousAnswer(id="F-7-1", status="fixed")], decision="approve", seen=seen
+        ),
     )
     assert "F-7-1" in seen[0]["notes"] and "verify" in seen[0]["notes"].lower()
     assert "exhaustive" in seen[0]["instructions"]
@@ -899,7 +950,11 @@ def test_an_unanswered_blocker_blocks_even_on_an_approving_reply(tmp_path) -> No
     repo, ledger = _repo(tmp_path)
     _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=[_open(1)])
     outcome = review_pull(
-        PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger, project="red-alpha",
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
         run_judge=_judge_saying(decision="approve"),
     )
     assert outcome.verdict.verdict == "request_changes"
@@ -909,16 +964,27 @@ def test_an_unanswered_blocker_blocks_even_on_an_approving_reply(tmp_path) -> No
 def test_after_round_three_the_loop_awaits_a_ruling_without_a_judge(tmp_path) -> None:
     repo, ledger = _repo(tmp_path)
     for n, sha in ((1, "0"), (2, "1"), (3, "2")):
-        _verdict_with(ledger, sha=sha * 40, check_run_id=10 + n, round_=n,
-                      findings=[_open(1, status="new" if n == 1 else "still_open")])
+        _verdict_with(
+            ledger,
+            sha=sha * 40,
+            check_run_id=10 + n,
+            round_=n,
+            findings=[_open(1, status="new" if n == 1 else "still_open")],
+        )
     calls: list[str] = []
 
     def run_judge(*args, **kwargs):
         calls.append("judged")
         raise AssertionError("no judge while awaiting a ruling")
 
-    outcome = review_pull(PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
-                          project="red-alpha", run_judge=run_judge)
+    outcome = review_pull(
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
     assert calls == [] and outcome.attested
     assert outcome.verdict.round == "awaiting_ruling"
     assert outcome.verdict.verdict == "request_changes"
@@ -931,20 +997,39 @@ def test_after_round_three_the_loop_awaits_a_ruling_without_a_judge(tmp_path) ->
 def test_the_closure_check_verifies_the_fix_ruling_only(tmp_path) -> None:
     repo, ledger = _repo(tmp_path)
     for n, sha in ((1, "0"), (2, "1"), (3, "2")):
-        _verdict_with(ledger, sha=sha * 40, check_run_id=10 + n, round_=n,
-                      findings=[_open(1, status="new" if n == 1 else "still_open")])
+        _verdict_with(
+            ledger,
+            sha=sha * 40,
+            check_run_id=10 + n,
+            round_=n,
+            findings=[_open(1, status="new" if n == 1 else "still_open")],
+        )
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_RULING,
-        {"repository": PR.repository, "pr": 7, "finding": "F-7-1", "ruling": "fix",
-         "decision": "rename the flag"},
-        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": "F-7-1",
+            "ruling": "fix",
+            "decision": "rename the flag",
+        },
+        issuer="operator",
+        idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
     )
     seen: list[dict] = []
     new_blocker = Finding(severity="blocking", file="src/y.py", title="new", evidence="e")
     outcome = review_pull(
-        PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger, project="red-alpha",
-        run_judge=_judge_saying(reply_findings=[new_blocker],
-                                previous=[PreviousAnswer(id="F-7-1", status="fixed")], seen=seen),
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(
+            reply_findings=[new_blocker],
+            previous=[PreviousAnswer(id="F-7-1", status="fixed")],
+            seen=seen,
+        ),
     )
     assert "rename the flag" in seen[0]["notes"] and "rulings" in seen[0]["instructions"]
     assert outcome.verdict.round == "closure" and outcome.verdict.verdict == "approve"
@@ -955,20 +1040,38 @@ def test_the_closure_check_verifies_the_fix_ruling_only(tmp_path) -> None:
 def test_a_carry_forward_ruling_closes_without_a_judge(tmp_path) -> None:
     repo, ledger = _repo(tmp_path)
     for n, sha in ((1, "0"), (2, "1"), (3, "2")):
-        _verdict_with(ledger, sha=sha * 40, check_run_id=10 + n, round_=n,
-                      findings=[_open(1, status="new" if n == 1 else "still_open")])
+        _verdict_with(
+            ledger,
+            sha=sha * 40,
+            check_run_id=10 + n,
+            round_=n,
+            findings=[_open(1, status="new" if n == 1 else "still_open")],
+        )
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_RULING,
-        {"repository": PR.repository, "pr": 7, "finding": "F-7-1", "ruling": "carry_forward",
-         "decision": "later"},
-        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": "F-7-1",
+            "ruling": "carry_forward",
+            "decision": "later",
+        },
+        issuer="operator",
+        idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
     )
 
     def run_judge(*args, **kwargs):
         raise AssertionError("a carry_forward ruling needs no judge")
 
-    outcome = review_pull(PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
-                          project="red-alpha", run_judge=run_judge)
+    outcome = review_pull(
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
     assert outcome.verdict.verdict == "approve" and outcome.verdict.round == "closure"
     assert [(f.id, f.klass, f.status) for f in outcome.verdict.findings] == [
         ("F-7-1", "carry_forward", "ruled")
@@ -978,24 +1081,49 @@ def test_a_carry_forward_ruling_closes_without_a_judge(tmp_path) -> None:
 def test_a_code_pull_request_must_account_for_open_carry_forwards(tmp_path) -> None:  # C7
     repo, ledger = _repo(tmp_path)
     spec_pr = replace(PR, number=5)
-    _verdict_with(ledger, sha="9" * 40, check_run_id=5, round_=1, decision="approve",
-                  artifact="spec_plan", pr=spec_pr,
-                  findings=[Finding.model_validate({
-                      "severity": "important", "file": "docs/specs/s.md", "title": "edge",
-                      "evidence": "e", "id": "F-5-1", "class": "carry_forward",
-                  })])
-    outcome = review_pull(PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
-                          project="red-alpha", run_judge=_judge_saying(decision="approve"))
+    _verdict_with(
+        ledger,
+        sha="9" * 40,
+        check_run_id=5,
+        round_=1,
+        decision="approve",
+        artifact="spec_plan",
+        pr=spec_pr,
+        findings=[
+            Finding.model_validate(
+                {
+                    "severity": "important",
+                    "file": "docs/specs/s.md",
+                    "title": "edge",
+                    "evidence": "e",
+                    "id": "F-5-1",
+                    "class": "carry_forward",
+                }
+            )
+        ],
+    )
+    outcome = review_pull(
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
     assert outcome.verdict.verdict == "request_changes"
     assert any(f.title == "CF-5-1 not accounted for" for f in outcome.verdict.findings)
 
     body = "## Carry-forwards\n- CF-5-1: addressed\n"
     seen: list[dict] = []
     outcome = review_pull(
-        replace(PR, body=body, head_sha="c" * 40), github=FakeGitHub(), policy=default_policy(),
-        ledger=ledger, project="red-alpha",
-        run_judge=_judge_saying(previous=[PreviousAnswer(id="CF-5-1", status="fixed")],
-                                decision="approve", seen=seen),
+        replace(PR, body=body, head_sha="c" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(
+            previous=[PreviousAnswer(id="CF-5-1", status="fixed")], decision="approve", seen=seen
+        ),
     )
     assert "CF-5-1" in seen[0]["notes"]
     assert outcome.verdict.verdict == "approve"
@@ -1015,17 +1143,30 @@ def test_disagreeing_judges_keep_a_finding_open(tmp_path) -> None:  # C1
     big_pr = replace(PR, additions=300, deletions=0)
     policy = default_policy().model_copy(update={"incremental": False})
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes="",
-                  instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         status = "fixed" if provider == "agy" else "still_open"
-        verdict = ReviewVerdict(verdict="approve", summary="s", findings=[], mode=tier,
-                                providers=(provider,),
-                                previous=(PreviousAnswer(id="F-7-1", status=status),))
-        return JudgeReply(provider=provider, tier=tier, model="m", verdict=verdict,
-                          failure=None, raw="")
+        verdict = ReviewVerdict(
+            verdict="approve",
+            summary="s",
+            findings=[],
+            mode=tier,
+            providers=(provider,),
+            previous=(PreviousAnswer(id="F-7-1", status=status),),
+        )
+        return JudgeReply(
+            provider=provider, tier=tier, model="m", verdict=verdict, failure=None, raw=""
+        )
 
-    outcome = review_pull(big_pr, github=FakeGitHub(), policy=policy, ledger=ledger,
-                          project="red-alpha", run_judge=run_judge)
+    outcome = review_pull(
+        big_pr,
+        github=FakeGitHub(),
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
     assert outcome.verdict.verdict == "request_changes"
     assert [(f.id, f.status) for f in outcome.verdict.findings] == [("F-7-1", "still_open")]
 
@@ -1033,17 +1174,37 @@ def test_disagreeing_judges_keep_a_finding_open(tmp_path) -> None:  # C1
 def test_new_ids_stay_unique_across_a_mechanical_blocker(tmp_path) -> None:  # C2, I3
     repo, ledger = _repo(tmp_path)
     spec_pr = replace(PR, number=5)
-    _verdict_with(ledger, sha="9" * 40, check_run_id=5, round_=1, decision="approve",
-                  artifact="spec_plan", pr=spec_pr,
-                  findings=[Finding.model_validate({
-                      "severity": "important", "file": "docs/specs/s.md", "title": "edge",
-                      "evidence": "e", "id": "F-5-1", "class": "carry_forward",
-                  })])
+    _verdict_with(
+        ledger,
+        sha="9" * 40,
+        check_run_id=5,
+        round_=1,
+        decision="approve",
+        artifact="spec_plan",
+        pr=spec_pr,
+        findings=[
+            Finding.model_validate(
+                {
+                    "severity": "important",
+                    "file": "docs/specs/s.md",
+                    "title": "edge",
+                    "evidence": "e",
+                    "id": "F-5-1",
+                    "class": "carry_forward",
+                }
+            )
+        ],
+    )
     outcome = review_pull(
-        PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger, project="red-alpha",
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
         run_judge=_judge_saying(
-            reply_findings=[Finding(severity="blocking", file="src/z.py", title="one",
-                                    evidence="e")],
+            reply_findings=[
+                Finding(severity="blocking", file="src/z.py", title="one", evidence="e")
+            ],
             decision="request_changes",
         ),
     )
@@ -1051,13 +1212,18 @@ def test_new_ids_stay_unique_across_a_mechanical_blocker(tmp_path) -> None:  # C
 
     seen: list[dict] = []
     outcome2 = review_pull(
-        replace(PR, head_sha="c" * 40), github=FakeGitHub(), policy=default_policy(),
-        ledger=ledger, project="red-alpha",
+        replace(PR, head_sha="c" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
         run_judge=_judge_saying(
-            reply_findings=[Finding(severity="blocking", file="src/w.py", title="two",
-                                    evidence="e")],
+            reply_findings=[
+                Finding(severity="blocking", file="src/w.py", title="two", evidence="e")
+            ],
             previous=[PreviousAnswer(id="F-7-1", status="still_open")],
-            decision="request_changes", seen=seen,
+            decision="request_changes",
+            seen=seen,
         ),
     )
     ids = [f.id for f in outcome2.verdict.findings]
@@ -1069,58 +1235,112 @@ def test_new_ids_stay_unique_across_a_mechanical_blocker(tmp_path) -> None:  # C
 def test_a_carry_forward_ruling_closure_keeps_the_carry_forward_accounting(tmp_path) -> None:  # I4
     repo, ledger = _repo(tmp_path)
     spec_pr = replace(PR, number=5)
-    _verdict_with(ledger, sha="9" * 40, check_run_id=5, round_=1, decision="approve",
-                  artifact="spec_plan", pr=spec_pr,
-                  findings=[Finding.model_validate({
-                      "severity": "important", "file": "docs/specs/s.md", "title": "edge",
-                      "evidence": "e", "id": "F-5-1", "class": "carry_forward",
-                  })])
+    _verdict_with(
+        ledger,
+        sha="9" * 40,
+        check_run_id=5,
+        round_=1,
+        decision="approve",
+        artifact="spec_plan",
+        pr=spec_pr,
+        findings=[
+            Finding.model_validate(
+                {
+                    "severity": "important",
+                    "file": "docs/specs/s.md",
+                    "title": "edge",
+                    "evidence": "e",
+                    "id": "F-5-1",
+                    "class": "carry_forward",
+                }
+            )
+        ],
+    )
     body = "## Carry-forwards\n- CF-5-1: addressed\n"
     code_pr = replace(PR, body=body)
 
-    def round_one(pr, diff, policy, *, provider, tier, criteria, root=None, notes="",
-                  instructions=""):
+    def round_one(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         verdict = ReviewVerdict(
-            verdict="request_changes", summary="s",
+            verdict="request_changes",
+            summary="s",
             findings=[Finding(severity="blocking", file="src/z.py", title="f1", evidence="e")],
-            mode=tier, providers=(provider,),
+            mode=tier,
+            providers=(provider,),
             previous=(PreviousAnswer(id="CF-5-1", status="fixed"),),
         )
-        return JudgeReply(provider=provider, tier=tier, model="m", verdict=verdict,
-                          failure=None, raw="")
-
-    def still_open_round(pr, diff, policy, *, provider, tier, criteria, root=None, notes="",
-                         instructions=""):
-        verdict = ReviewVerdict(
-            verdict="request_changes", summary="s", findings=[], mode=tier,
-            providers=(provider,),
-            previous=(PreviousAnswer(id="F-7-1", status="still_open"),
-                     PreviousAnswer(id="CF-5-1", status="fixed")),
+        return JudgeReply(
+            provider=provider, tier=tier, model="m", verdict=verdict, failure=None, raw=""
         )
-        return JudgeReply(provider=provider, tier=tier, model="m", verdict=verdict,
-                          failure=None, raw="")
 
-    review_pull(code_pr, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
-               project="red-alpha", run_judge=round_one)
-    review_pull(replace(code_pr, head_sha="c" * 40), github=FakeGitHub(),
-               policy=default_policy(), ledger=ledger, project="red-alpha",
-               run_judge=still_open_round)
-    review_pull(replace(code_pr, head_sha="d" * 40), github=FakeGitHub(),
-               policy=default_policy(), ledger=ledger, project="red-alpha",
-               run_judge=still_open_round)
+    def still_open_round(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
+        verdict = ReviewVerdict(
+            verdict="request_changes",
+            summary="s",
+            findings=[],
+            mode=tier,
+            providers=(provider,),
+            previous=(
+                PreviousAnswer(id="F-7-1", status="still_open"),
+                PreviousAnswer(id="CF-5-1", status="fixed"),
+            ),
+        )
+        return JudgeReply(
+            provider=provider, tier=tier, model="m", verdict=verdict, failure=None, raw=""
+        )
+
+    review_pull(
+        code_pr,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=round_one,
+    )
+    review_pull(
+        replace(code_pr, head_sha="c" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=still_open_round,
+    )
+    review_pull(
+        replace(code_pr, head_sha="d" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=still_open_round,
+    )
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_RULING,
-        {"repository": PR.repository, "pr": 7, "finding": "F-7-1", "ruling": "carry_forward",
-         "decision": "later"},
-        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": "F-7-1",
+            "ruling": "carry_forward",
+            "decision": "later",
+        },
+        issuer="operator",
+        idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
     )
 
     def no_judge(*args, **kwargs):
         raise AssertionError("a carry_forward closure needs no judge")
 
-    outcome = review_pull(replace(code_pr, head_sha="e" * 40), github=FakeGitHub(),
-                          policy=default_policy(), ledger=ledger, project="red-alpha",
-                          run_judge=no_judge)
+    outcome = review_pull(
+        replace(code_pr, head_sha="e" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=no_judge,
+    )
     assert outcome.verdict.verdict == "approve" and outcome.verdict.round == "closure"
     assert outcome.verdict.carry_forwards.addressed == ("CF-5-1",)
 
@@ -1130,33 +1350,70 @@ def test_a_mechanical_only_awaiting_state_resolves_from_the_body(tmp_path) -> No
     # (Ruling 21): the next pass is another judged round 3, the fake judge included.
     repo, ledger = _repo(tmp_path)
     spec_pr = replace(PR, number=5)
-    _verdict_with(ledger, sha="9" * 40, check_run_id=5, round_=1, decision="approve",
-                  artifact="spec_plan", pr=spec_pr,
-                  findings=[Finding.model_validate({
-                      "severity": "important", "file": "docs/specs/s.md", "title": "edge",
-                      "evidence": "e", "id": "F-5-1", "class": "carry_forward",
-                  })])
-    review_pull(PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
-               project="red-alpha", run_judge=_judge_saying(decision="approve"))
-    review_pull(replace(PR, head_sha="c" * 40), github=FakeGitHub(), policy=default_policy(),
-               ledger=ledger, project="red-alpha",
-               run_judge=_judge_saying(decision="approve"))
-    review_pull(replace(PR, head_sha="d" * 40), github=FakeGitHub(), policy=default_policy(),
-               ledger=ledger, project="red-alpha",
-               run_judge=_judge_saying(decision="approve"))
+    _verdict_with(
+        ledger,
+        sha="9" * 40,
+        check_run_id=5,
+        round_=1,
+        decision="approve",
+        artifact="spec_plan",
+        pr=spec_pr,
+        findings=[
+            Finding.model_validate(
+                {
+                    "severity": "important",
+                    "file": "docs/specs/s.md",
+                    "title": "edge",
+                    "evidence": "e",
+                    "id": "F-5-1",
+                    "class": "carry_forward",
+                }
+            )
+        ],
+    )
+    review_pull(
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
+    review_pull(
+        replace(PR, head_sha="c" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
+    review_pull(
+        replace(PR, head_sha="d" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
 
     calls: list[str] = []
-    judge = _judge_saying(previous=[PreviousAnswer(id="CF-5-1", status="fixed")],
-                          decision="approve")
+    judge = _judge_saying(
+        previous=[PreviousAnswer(id="CF-5-1", status="fixed")], decision="approve"
+    )
 
     def judging(*args, **kwargs):
         calls.append("judged")
         return judge(*args, **kwargs)
 
     body = "## Carry-forwards\n- CF-5-1: addressed\n"
-    outcome = review_pull(replace(PR, head_sha="e" * 40, body=body), github=FakeGitHub(),
-                          policy=default_policy(), ledger=ledger, project="red-alpha",
-                          run_judge=judging)
+    outcome = review_pull(
+        replace(PR, head_sha="e" * 40, body=body),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=judging,
+    )
     assert calls == ["judged"]
     assert outcome.verdict.round == 3 and outcome.verdict.verdict == "approve"
     assert [f.status for f in outcome.verdict.findings] == ["fixed"]
@@ -1165,17 +1422,34 @@ def test_a_mechanical_only_awaiting_state_resolves_from_the_body(tmp_path) -> No
 def test_the_delta_note_is_added_only_when_a_delta_is_judged(tmp_path) -> None:  # M6
     repo, ledger = _repo(tmp_path)
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_VERDICT,
-        {"sha": "0" * 40, "verdict": "request_changes", "check_run_id": 11,
-         "repository": PR.repository, "pr": 7, "mode": "deep", "providers": ["codex"],
-         "finding_count": 1, "blocking": True, "diff_truncated": False, "round": 1,
-         "artifact": "code", "findings": 1},
-        issuer="red-rail-reviewer", idempotency_key="review_verdict:0x40:11",
+        "red-alpha",
+        AttestationKind.REVIEW_VERDICT,
+        {
+            "sha": "0" * 40,
+            "verdict": "request_changes",
+            "check_run_id": 11,
+            "repository": PR.repository,
+            "pr": 7,
+            "mode": "deep",
+            "providers": ["codex"],
+            "finding_count": 1,
+            "blocking": True,
+            "diff_truncated": False,
+            "round": 1,
+            "artifact": "code",
+            "findings": 1,
+        },
+        issuer="red-rail-reviewer",
+        idempotency_key="review_verdict:0x40:11",
     )
     seen: list[dict] = []
     review_pull(
-        replace(PR, head_sha="0" * 40), github=FakeGitHub(), policy=default_policy(),
-        ledger=ledger, project="red-alpha", run_judge=_judge_saying(decision="approve", seen=seen),
+        replace(PR, head_sha="0" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve", seen=seen),
     )
     assert _DELTA_NOTE not in seen[0]["notes"]
     assert "reviewed before" in seen[0]["notes"]
@@ -1186,8 +1460,12 @@ def test_no_check_run_fallback_when_the_findings_list_is_empty(tmp_path) -> None
     _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=[], decision="approve")
     seen: list[dict] = []
     outcome = review_pull(
-        replace(PR, head_sha="0" * 40), github=NoCheckText(), policy=default_policy(),
-        ledger=ledger, project="red-alpha", run_judge=_judge_saying(decision="approve", seen=seen),
+        replace(PR, head_sha="0" * 40),
+        github=NoCheckText(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve", seen=seen),
     )
     assert outcome.verdict.round == 2
     assert seen[0]["notes"] == ""
@@ -1196,26 +1474,52 @@ def test_no_check_run_fallback_when_the_findings_list_is_empty(tmp_path) -> None
 def test_the_closure_context_carries_only_the_fix_ruled_findings(tmp_path) -> None:  # M11
     repo, ledger = _repo(tmp_path)
     for n, sha in ((1, "0"), (2, "1"), (3, "2")):
-        _verdict_with(ledger, sha=sha * 40, check_run_id=10 + n, round_=n,
-                      findings=[_open(1, status="new" if n == 1 else "still_open"),
-                               _open(2, status="new" if n == 1 else "still_open")])
+        _verdict_with(
+            ledger,
+            sha=sha * 40,
+            check_run_id=10 + n,
+            round_=n,
+            findings=[
+                _open(1, status="new" if n == 1 else "still_open"),
+                _open(2, status="new" if n == 1 else "still_open"),
+            ],
+        )
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_RULING,
-        {"repository": PR.repository, "pr": 7, "finding": "F-7-1", "ruling": "fix",
-         "decision": "rename the flag"},
-        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": "F-7-1",
+            "ruling": "fix",
+            "decision": "rename the flag",
+        },
+        issuer="operator",
+        idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
     )
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_RULING,
-        {"repository": PR.repository, "pr": 7, "finding": "F-7-2", "ruling": "carry_forward",
-         "decision": "later"},
-        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-2:1",
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": "F-7-2",
+            "ruling": "carry_forward",
+            "decision": "later",
+        },
+        issuer="operator",
+        idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-2:1",
     )
     seen: list[dict] = []
     outcome = review_pull(
-        PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger, project="red-alpha",
-        run_judge=_judge_saying(previous=[PreviousAnswer(id="F-7-1", status="fixed")],
-                                decision="approve", seen=seen),
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(
+            previous=[PreviousAnswer(id="F-7-1", status="fixed")], decision="approve", seen=seen
+        ),
     )
     assert "rename the flag" in seen[0]["notes"]
     assert "F-7-2" not in seen[0]["notes"] and "later" not in seen[0]["notes"]
@@ -1227,11 +1531,18 @@ def test_a_no_verdict_pass_at_round_two_keeps_blockers_open(tmp_path) -> None:  
     _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=[_open(1)])
 
     def failing_judge(*args, **kwargs):
-        return JudgeReply(provider="agy", tier="light", model="m", verdict=None,
-                          failure="boom", raw="")
+        return JudgeReply(
+            provider="agy", tier="light", model="m", verdict=None, failure="boom", raw=""
+        )
 
-    outcome = review_pull(PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
-                          project="red-alpha", run_judge=failing_judge)
+    outcome = review_pull(
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=failing_judge,
+    )
     assert outcome.verdict.round == 2
     assert outcome.verdict.verdict == "request_changes"
     assert outcome.verdict.findings[0].status == "still_open"
@@ -1243,21 +1554,40 @@ def test_a_failed_closure_check_keeps_the_ruling(tmp_path) -> None:  # I5
 
     repo, ledger = _repo(tmp_path)
     for n, sha in ((1, "0"), (2, "1"), (3, "2")):
-        _verdict_with(ledger, sha=sha * 40, check_run_id=10 + n, round_=n,
-                      findings=[_open(1, status="new" if n == 1 else "still_open")])
+        _verdict_with(
+            ledger,
+            sha=sha * 40,
+            check_run_id=10 + n,
+            round_=n,
+            findings=[_open(1, status="new" if n == 1 else "still_open")],
+        )
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_RULING,
-        {"repository": PR.repository, "pr": 7, "finding": "F-7-1", "ruling": "fix",
-         "decision": "rename the flag"},
-        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": "F-7-1",
+            "ruling": "fix",
+            "decision": "rename the flag",
+        },
+        issuer="operator",
+        idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
     )
 
     def failing_judge(*args, **kwargs):
-        return JudgeReply(provider="agy", tier="light", model="m", verdict=None,
-                          failure="boom", raw="")
+        return JudgeReply(
+            provider="agy", tier="light", model="m", verdict=None, failure="boom", raw=""
+        )
 
-    outcome = review_pull(PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
-                          project="red-alpha", run_judge=failing_judge)
+    outcome = review_pull(
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=failing_judge,
+    )
     assert outcome.verdict.round == "awaiting_ruling"
     assert outcome.verdict.mode == "awaiting_ruling"
 
@@ -1271,29 +1601,65 @@ def test_a_failed_closure_check_keeps_the_ruling(tmp_path) -> None:  # I5
 def test_a_body_claim_without_a_judges_confirmation_stays_open(tmp_path) -> None:  # NB1
     repo, ledger = _repo(tmp_path)
     spec_pr = replace(PR, number=5)
-    _verdict_with(ledger, sha="9" * 40, check_run_id=5, round_=1, decision="approve",
-                  artifact="spec_plan", pr=spec_pr,
-                  findings=[Finding.model_validate({
-                      "severity": "important", "file": "docs/specs/s.md", "title": "edge",
-                      "evidence": "e", "id": "F-5-1", "class": "carry_forward",
-                  })])
+    _verdict_with(
+        ledger,
+        sha="9" * 40,
+        check_run_id=5,
+        round_=1,
+        decision="approve",
+        artifact="spec_plan",
+        pr=spec_pr,
+        findings=[
+            Finding.model_validate(
+                {
+                    "severity": "important",
+                    "file": "docs/specs/s.md",
+                    "title": "edge",
+                    "evidence": "e",
+                    "id": "F-5-1",
+                    "class": "carry_forward",
+                }
+            )
+        ],
+    )
     body = "## Carry-forwards\n- CF-5-1: addressed\n"
     code_pr = replace(PR, body=body)
-    review_pull(code_pr, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
-               project="red-alpha", run_judge=_judge_saying(decision="approve"))
-    review_pull(replace(code_pr, head_sha="c" * 40), github=FakeGitHub(),
-               policy=default_policy(), ledger=ledger, project="red-alpha",
-               run_judge=_judge_saying(decision="approve"))
-    outcome = review_pull(replace(code_pr, head_sha="d" * 40), github=FakeGitHub(),
-                          policy=default_policy(), ledger=ledger, project="red-alpha",
-                          run_judge=_judge_saying(decision="approve"))
+    review_pull(
+        code_pr,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
+    review_pull(
+        replace(code_pr, head_sha="c" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
+    outcome = review_pull(
+        replace(code_pr, head_sha="d" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
     assert outcome.verdict.round == 3
 
     # round 4: an unruled "not addressed" blocker is real, so this is "awaiting_ruling" — the
     # body's claim alone never resolves it.
-    outcome4 = review_pull(replace(code_pr, head_sha="e" * 40), github=FakeGitHub(),
-                           policy=default_policy(), ledger=ledger, project="red-alpha",
-                           run_judge=_judge_saying(decision="approve"))
+    outcome4 = review_pull(
+        replace(code_pr, head_sha="e" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
     assert outcome4.verdict.verdict != "approve"
     assert any(f.title == "CF-5-1 not addressed" for f in outcome4.verdict.findings)
 
@@ -1301,46 +1667,94 @@ def test_a_body_claim_without_a_judges_confirmation_stays_open(tmp_path) -> None
 def test_a_ruling_reclassifies_a_mechanical_blocker_in_a_judged_closure(tmp_path) -> None:  # R3-1
     repo, ledger = _repo(tmp_path)
     spec_pr = replace(PR, number=5)
-    _verdict_with(ledger, sha="9" * 40, check_run_id=5, round_=1, decision="approve",
-                  artifact="spec_plan", pr=spec_pr,
-                  findings=[Finding.model_validate({
-                      "severity": "important", "file": "docs/specs/s.md", "title": "edge",
-                      "evidence": "e", "id": "F-5-1", "class": "carry_forward",
-                  })])
+    _verdict_with(
+        ledger,
+        sha="9" * 40,
+        check_run_id=5,
+        round_=1,
+        decision="approve",
+        artifact="spec_plan",
+        pr=spec_pr,
+        findings=[
+            Finding.model_validate(
+                {
+                    "severity": "important",
+                    "file": "docs/specs/s.md",
+                    "title": "edge",
+                    "evidence": "e",
+                    "id": "F-5-1",
+                    "class": "carry_forward",
+                }
+            )
+        ],
+    )
     body = "## Carry-forwards\n- CF-5-1: addressed\n"
     code_pr = replace(PR, body=body)
     bug = Finding(severity="blocking", file="src/x.py", title="bug1", evidence="e")
 
-    review_pull(code_pr, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
-               project="red-alpha",
-               run_judge=_judge_saying(reply_findings=[bug], decision="request_changes"))
-    review_pull(replace(code_pr, head_sha="c" * 40), github=FakeGitHub(),
-               policy=default_policy(), ledger=ledger, project="red-alpha",
-               run_judge=_judge_saying(decision="request_changes"))
-    round3 = review_pull(replace(code_pr, head_sha="d" * 40), github=FakeGitHub(),
-                         policy=default_policy(), ledger=ledger, project="red-alpha",
-                         run_judge=_judge_saying(decision="request_changes"))
+    review_pull(
+        code_pr,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(reply_findings=[bug], decision="request_changes"),
+    )
+    review_pull(
+        replace(code_pr, head_sha="c" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="request_changes"),
+    )
+    round3 = review_pull(
+        replace(code_pr, head_sha="d" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="request_changes"),
+    )
     assert round3.verdict.round == 3
     ids = sorted(f.id for f in round3.verdict.findings if f.open_blocker)
     assert ids == ["F-7-1", "F-7-2"]
 
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_RULING,
-        {"repository": PR.repository, "pr": 7, "finding": "F-7-1", "ruling": "fix",
-         "decision": "rename the flag"},
-        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": "F-7-1",
+            "ruling": "fix",
+            "decision": "rename the flag",
+        },
+        issuer="operator",
+        idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
     )
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_RULING,
-        {"repository": PR.repository, "pr": 7, "finding": "F-7-2", "ruling": "carry_forward",
-         "decision": "later"},
-        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-2:1",
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": "F-7-2",
+            "ruling": "carry_forward",
+            "decision": "later",
+        },
+        issuer="operator",
+        idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-2:1",
     )
     outcome = review_pull(
-        replace(code_pr, head_sha="f" * 40), github=FakeGitHub(), policy=default_policy(),
-        ledger=ledger, project="red-alpha",
-        run_judge=_judge_saying(previous=[PreviousAnswer(id="F-7-1", status="fixed")],
-                                decision="approve"),
+        replace(code_pr, head_sha="f" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(
+            previous=[PreviousAnswer(id="F-7-1", status="fixed")], decision="approve"
+        ),
     )
     assert outcome.verdict.round == "closure" and outcome.verdict.verdict == "approve"
     by_id = {f.id: f for f in outcome.verdict.findings}
@@ -1353,35 +1767,70 @@ def test_the_closure_context_asks_the_judge_to_confirm_a_not_addressed_blocker(
 ) -> None:  # NB1c
     repo, ledger = _repo(tmp_path)
     spec_pr = replace(PR, number=5)
-    _verdict_with(ledger, sha="9" * 40, check_run_id=5, round_=1, decision="approve",
-                  artifact="spec_plan", pr=spec_pr,
-                  findings=[Finding.model_validate({
-                      "severity": "important", "file": "docs/specs/s.md", "title": "edge",
-                      "evidence": "e", "id": "F-5-1", "class": "carry_forward",
-                  })])
+    _verdict_with(
+        ledger,
+        sha="9" * 40,
+        check_run_id=5,
+        round_=1,
+        decision="approve",
+        artifact="spec_plan",
+        pr=spec_pr,
+        findings=[
+            Finding.model_validate(
+                {
+                    "severity": "important",
+                    "file": "docs/specs/s.md",
+                    "title": "edge",
+                    "evidence": "e",
+                    "id": "F-5-1",
+                    "class": "carry_forward",
+                }
+            )
+        ],
+    )
     body = "## Carry-forwards\n- CF-5-1: addressed\n"
     code_pr = replace(PR, body=body)
     for head in ("b", "c", "d"):
-        review_pull(replace(code_pr, head_sha=head * 40), github=FakeGitHub(),
-                   policy=default_policy(), ledger=ledger, project="red-alpha",
-                   run_judge=_judge_saying(decision="approve"))
-    outcome = review_pull(replace(code_pr, head_sha="e" * 40), github=FakeGitHub(),
-                          policy=default_policy(), ledger=ledger, project="red-alpha",
-                          run_judge=_judge_saying(decision="approve"))
+        review_pull(
+            replace(code_pr, head_sha=head * 40),
+            github=FakeGitHub(),
+            policy=default_policy(),
+            ledger=ledger,
+            project="red-alpha",
+            run_judge=_judge_saying(decision="approve"),
+        )
+    outcome = review_pull(
+        replace(code_pr, head_sha="e" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
     not_addressed = next(f for f in outcome.verdict.findings if f.title == "CF-5-1 not addressed")
     ledger.attest(
-        "red-alpha", AttestationKind.REVIEW_RULING,
-        {"repository": PR.repository, "pr": 7, "finding": not_addressed.id, "ruling": "fix",
-         "decision": "go confirm it"},
+        "red-alpha",
+        AttestationKind.REVIEW_RULING,
+        {
+            "repository": PR.repository,
+            "pr": 7,
+            "finding": not_addressed.id,
+            "ruling": "fix",
+            "decision": "go confirm it",
+        },
         issuer="operator",
         idempotency_key=f"review_ruling:hawkixs/red-alpha#7:{not_addressed.id}:1",
     )
     seen: list[dict] = []
     outcome2 = review_pull(
-        replace(code_pr, head_sha="f" * 40), github=FakeGitHub(), policy=default_policy(),
-        ledger=ledger, project="red-alpha",
-        run_judge=_judge_saying(previous=[PreviousAnswer(id="CF-5-1", status="fixed")],
-                                decision="approve", seen=seen),
+        replace(code_pr, head_sha="f" * 40),
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=_judge_saying(
+            previous=[PreviousAnswer(id="CF-5-1", status="fixed")], decision="approve", seen=seen
+        ),
     )
     assert "CF-5-1" in seen[0]["notes"]
     assert outcome2.verdict.verdict == "approve"

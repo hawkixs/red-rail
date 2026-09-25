@@ -61,8 +61,13 @@ def parse_section(body: str) -> dict[str, Accounting]:
 
 def _blocker(title: str, evidence: str) -> Finding:
     return Finding.model_validate(
-        {"severity": "blocking", "file": WHERE, "title": title, "evidence": evidence,
-         "class": "blocker"}
+        {
+            "severity": "blocking",
+            "file": WHERE,
+            "title": title,
+            "evidence": evidence,
+            "class": "blocker",
+        }
     )
 
 
@@ -127,7 +132,8 @@ def addressed(open_ids: Sequence[str], section: dict[str, Accounting]) -> list[s
 
 def deferred(open_ids: Sequence[str], section: dict[str, Accounting]) -> list[str]:
     return [
-        i for i in open_ids
+        i
+        for i in open_ids
         if (e := section.get(i)) is not None and e.status == "deferred" and e.reason
     ]
 

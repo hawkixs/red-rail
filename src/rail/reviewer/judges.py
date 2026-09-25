@@ -66,9 +66,9 @@ the head, and never ask that a receipt be added, kept or replaced."""
 
 
 _SPEC_PLAN_CLASSES = (
-    "This pull request is a spec or a plan. Classify each finding: \"blocker\" when it "
+    'This pull request is a spec or a plan. Classify each finding: "blocker" when it '
     "contradicts the spec, misses a requirement, or makes a wrong design decision; "
-    "\"carry_forward\" when it is a real gap at implementation level that the code can close "
+    '"carry_forward" when it is a real gap at implementation level that the code can close '
     "later. A carry_forward never blocks the approval of a spec or a plan."
 )
 
@@ -83,7 +83,7 @@ def round_instructions(
     if step == "closure":
         parts.append(
             "Closure check: verify only the rulings below. For each ruled finding answer "
-            "\"fixed\" or \"still_open\" in \"previous\", judged against the operator's decision "
+            '"fixed" or "still_open" in "previous", judged against the operator\'s decision '
             "text. Do not raise new findings."
         )
     elif round_ == 2:

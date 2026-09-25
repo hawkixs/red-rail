@@ -72,15 +72,28 @@ def test_once_refuses_a_repository_the_config_does_not_watch(tmp_path: Path, mon
 def _seed_three_verdicts(ledger) -> None:
     """Three judged rounds of the same open blocker: PR #7 lands on round 3, awaiting a
     ruling on F-7-1."""
-    blocker = Finding.model_validate({"severity": "blocking", "file": "a.py", "title": "t",
-                                      "evidence": "e", "id": "F-7-1", "class": "blocker",
-                                      "status": "still_open"})
+    blocker = Finding.model_validate(
+        {
+            "severity": "blocking",
+            "file": "a.py",
+            "title": "t",
+            "evidence": "e",
+            "id": "F-7-1",
+            "class": "blocker",
+            "status": "still_open",
+        }
+    )
     for n in (1, 2, 3):
-        data = ReviewVerdict(verdict="request_changes", summary="s", findings=[blocker],
-                             round=n, artifact="code").as_attestation_data(
-            sha=str(n) * 40, check_run_id=n, repository="hawkixs/red-alpha", pr=7)
-        ledger.attest("red-alpha", AttestationKind.REVIEW_VERDICT, data,
-                      issuer="red-rail-reviewer", idempotency_key=f"review_verdict:{n}")
+        data = ReviewVerdict(
+            verdict="request_changes", summary="s", findings=[blocker], round=n, artifact="code"
+        ).as_attestation_data(sha=str(n) * 40, check_run_id=n, repository="hawkixs/red-alpha", pr=7)
+        ledger.attest(
+            "red-alpha",
+            AttestationKind.REVIEW_VERDICT,
+            data,
+            issuer="red-rail-reviewer",
+            idempotency_key=f"review_verdict:{n}",
+        )
 
 
 def _awaiting_repo(tmp_path: Path) -> tuple[Path, Path]:
@@ -99,12 +112,34 @@ def _awaiting_repo(tmp_path: Path) -> tuple[Path, Path]:
     return repo, config
 
 
-def _rule(config: Path, finding: str = "F-7-1", decision: str = "rename it", confirm: str = "F-7-1",
-          tty: bool = True, monkeypatch=None, extra=()):
+def _rule(
+    config: Path,
+    finding: str = "F-7-1",
+    decision: str = "rename it",
+    confirm: str = "F-7-1",
+    tty: bool = True,
+    monkeypatch=None,
+    extra=(),
+):
     if monkeypatch is not None:
         monkeypatch.setattr("rail.commands.reviewer._interactive", lambda: tty)
-    args = ["reviewer", "rule", "--config", str(config), "--repository", "hawkixs/red-alpha",
-            "--pr", "7", "--finding", finding, "--as", "fix", "--decision", decision, *extra]
+    args = [
+        "reviewer",
+        "rule",
+        "--config",
+        str(config),
+        "--repository",
+        "hawkixs/red-alpha",
+        "--pr",
+        "7",
+        "--finding",
+        finding,
+        "--as",
+        "fix",
+        "--decision",
+        decision,
+        *extra,
+    ]
     return CliRunner().invoke(main, args, input=f"{confirm}\n")
 
 
@@ -154,9 +189,9 @@ def test_rule_writes_a_review_ruling_in_brain_mode(tmp_path: Path, monkeypatch) 
     repo = conforming_tree(tmp_path, "red-alpha", "dev")
     ticket = "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"
     (repo / "rail.yaml").write_text(
-        (repo / "rail.yaml").read_text().replace(
-            "ledger: file\n", f"ledger: brain\nticket: {ticket}\n"
-        )
+        (repo / "rail.yaml")
+        .read_text()
+        .replace("ledger: file\n", f"ledger: brain\nticket: {ticket}\n")
     )
     brain = FakeBrain(agent="operator")
     brain.add_ticket("red", "red-alpha", ticket)
@@ -196,8 +231,22 @@ def test_rule_writes_a_review_ruling_in_brain_mode(tmp_path: Path, monkeypatch) 
     monkeypatch.delenv("CI", raising=False)
     out = CliRunner().invoke(
         main,
-        ["reviewer", "rule", "--config", str(config), "--repository", "hawkixs/red-alpha",
-         "--pr", "7", "--finding", "F-7-1", "--as", "fix", "--decision", "rename it"],
+        [
+            "reviewer",
+            "rule",
+            "--config",
+            str(config),
+            "--repository",
+            "hawkixs/red-alpha",
+            "--pr",
+            "7",
+            "--finding",
+            "F-7-1",
+            "--as",
+            "fix",
+            "--decision",
+            "rename it",
+        ],
         input="F-7-1\n",
     )
     assert out.exit_code == 0, out.output
