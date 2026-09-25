@@ -60,9 +60,20 @@ class ReviewPolicy(BaseModel):
     # 98cce763 — a binding receipt carries the head at `rail bind` time, never the PR's head)
     records_globs: tuple[str, ...] = ("docs/receipts/*",)
     # convergence (2026-09-20): a pass after the first judges the delta since the last verdict
-    # with the earlier findings in hand; beyond the budget the check fails until the label
-    max_passes_per_pr: int = Field(default=4, ge=1)
+    # with the earlier findings in hand; review loops close by rounds and operator rulings
+    # (spec 2026-09-25-review-loop-closure), never by a pass count
     incremental: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_pass_budget(cls, data):
+        if isinstance(data, dict) and "max_passes_per_pr" in data:
+            raise ValueError(
+                "max_passes_per_pr is gone: review loops close by rounds and operator rulings "
+                "(docs/specs/2026-09-25-review-loop-closure.md); remove the line from "
+                "reviewer.yaml"
+            )
+        return data
 
     @model_validator(mode="after")
     def _every_provider_has_a_model(self) -> ReviewPolicy:

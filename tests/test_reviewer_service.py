@@ -12,7 +12,7 @@ from rail.reviewer.github import CheckRun, PullRequest
 from rail.reviewer.judges import JudgeReply, build_prompt
 from rail.reviewer.policy import default_policy
 from rail.reviewer.service import docs_only, needs_review, review_pull
-from rail.reviewer.verdict import Finding, ReviewVerdict
+from rail.reviewer.verdict import Finding, PreviousAnswer, ReviewVerdict
 from tests.helpers import conforming_tree
 
 PR = PullRequest(
@@ -169,7 +169,7 @@ def test_light_review_approves_publishes_and_attests(tmp_path: Path) -> None:
     github = FakeGitHub()
     seen = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None):
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
         seen.append((provider, tier, tuple(criteria)))
         return approve(provider, tier)
 
@@ -200,7 +200,7 @@ def test_deep_review_escalates_on_disagreement_and_the_deep_judge_wins(tmp_path:
     github = FakeGitHub(messages=["chore: plain"])
     seen = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None):
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
         seen.append((provider, tier))
         if tier == "deep":
             return block(provider, tier)
@@ -228,7 +228,7 @@ def test_a_failed_judge_walks_the_chain(tmp_path: Path) -> None:
     github = FakeGitHub(messages=["chore: plain"])
     seen = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None):
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
         seen.append(provider)
         return fail(provider) if provider == "agy" else approve(provider)
 
@@ -256,7 +256,7 @@ def test_no_verdict_at_all_fails_closed(tmp_path: Path) -> None:
         ledger=ledger,
         project="red-alpha",
         repo_path=repo,
-        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, root=None: fail(
+        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, **_: fail(
             provider, tier
         ),
         root=tmp_path,
@@ -281,7 +281,7 @@ def test_the_rerun_label_is_removed_after_the_review(tmp_path: Path) -> None:
         ledger=ledger,
         project="red-alpha",
         repo_path=repo,
-        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, root=None: approve(
+        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, **_: approve(
             provider, tier
         ),
         root=tmp_path,
@@ -311,7 +311,7 @@ def test_an_unattested_verdict_is_reported_not_fatal(tmp_path: Path) -> None:
         ledger=RefusingLedger(),
         project="red-alpha",
         repo_path=repo,
-        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, root=None: approve(
+        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, **_: approve(
             provider, tier
         ),
         root=tmp_path,
@@ -332,7 +332,9 @@ def test_a_crash_after_the_check_started_completes_it_as_failure(tmp_path: Path)
     repo, ledger = _repo(tmp_path)
     github = FakeGitHub(messages=["chore: plain"])
 
-    def exploding_judge(pr, diff, policy, *, provider, tier, criteria, root=None):
+    def exploding_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""
+    ):
         raise RuntimeError("judge exploded")
 
     with pytest.raises(RuntimeError, match="judge exploded"):
@@ -406,7 +408,9 @@ def test_a_second_pass_judges_the_delta_with_the_earlier_findings(tmp_path: Path
     github = FakeGitHub(check_texts={11: "- [important] src/x.py:1 — bug: e"})
     seen: list[dict] = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append({"diff": diff, "tier": tier, "notes": notes})
         return approve(provider, tier)
 
@@ -432,7 +436,9 @@ def test_a_rebased_head_or_the_label_gets_a_full_review_again(tmp_path: Path) ->
     github = FakeGitHub(compare_error=True)
     seen: list[str] = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append(diff)
         return approve(provider, tier)
 
@@ -471,7 +477,9 @@ def test_a_delta_reaching_outside_the_pull_request_gets_a_full_review(tmp_path: 
     )
     seen: list[str] = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append(diff)
         return approve(provider, tier)
 
@@ -485,41 +493,6 @@ def test_a_delta_reaching_outside_the_pull_request_gets_a_full_review(tmp_path: 
     )
     assert outcome.verdict.mode != "incremental"
     assert seen == [DIFF]  # the whole PR diff (base...head), not the delta
-
-
-@pytest.mark.skip(reason="budget removed: replaced by rounds in Task 6")
-def test_the_pass_budget_fails_the_check_without_a_judge_until_relabelled(tmp_path: Path) -> None:
-    repo, ledger = _repo(tmp_path)
-    policy = default_policy().model_copy(update={"max_passes_per_pr": 2})
-    _earlier_verdict(ledger, sha="0" * 40, check_run_id=11)
-    _earlier_verdict(ledger, sha="1" * 40, check_run_id=12)
-    github = FakeGitHub()
-    calls: list[str] = []
-
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
-        calls.append(provider)
-        return approve(provider, tier)
-
-    outcome = review_pull(
-        PR, github=github, policy=policy, ledger=ledger, project="red-alpha", run_judge=run_judge
-    )
-    assert calls == [] and outcome.attested
-    assert outcome.verdict.mode == "budget" and outcome.verdict.verdict == "request_changes"
-    assert "budget" in outcome.verdict.summary and "rail-review:rerun" in outcome.verdict.summary
-    assert ("complete", 99, "failure", "review budget exhausted") in github.calls
-    assert ("review", 7, "REQUEST_CHANGES") in github.calls
-    verdicts = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
-    assert [v.data["mode"] for v in verdicts][-1] == "budget"
-    relabelled = replace(PR, labels=("rail-review:rerun",), head_sha="c" * 40)
-    outcome = review_pull(
-        relabelled,
-        github=FakeGitHub(),
-        policy=policy,
-        ledger=ledger,
-        project="red-alpha",
-        run_judge=run_judge,
-    )
-    assert calls and outcome.verdict.mode == "light"
 
 
 def test_a_change_larger_than_the_budget_is_read_in_pieces_not_cut(tmp_path: Path) -> None:
@@ -537,7 +510,9 @@ def test_a_change_larger_than_the_budget_is_read_in_pieces_not_cut(tmp_path: Pat
     policy = default_policy().model_copy(update={"max_diff_chars": len(one("a.go", 400)) + 20})
     seen: list[str] = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append(diff)
         return approve(provider, tier)
 
@@ -580,7 +555,9 @@ def test_a_judge_that_had_to_cut_its_piece_makes_the_merged_verdict_truncated(
     policy = default_policy().model_copy(update={"max_diff_chars": len(one("a.go", 400)) + 20})
     seen: list[str] = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append(diff)
         reply = approve(provider, tier)
         if len(seen) != 2:  # the second piece is the one its judge could not hold
@@ -622,7 +599,9 @@ def test_a_large_docs_only_change_is_still_read_light_when_it_is_split(tmp_path:
     policy = default_policy().model_copy(update={"max_diff_chars": len(one("docs/a.md", 400)) + 20})
     tiers: list[str] = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         tiers.append(tier)
         return approve(provider, tier)
 
@@ -663,7 +642,9 @@ def test_the_split_uses_the_budget_the_judge_will_actually_enforce(tmp_path: Pat
     policy = default_policy().model_copy(update={"prompt_limits": {"agy": 12_000}})
     seen: list[str] = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         prompt, truncated = build_prompt(pr, diff, policy, criteria=criteria, notes=notes)
         assert not truncated, "a piece the judge still has to cut is not a bounded piece"
         assert len(prompt.encode("utf-8")) <= policy.prompt_limits[provider], (
@@ -697,7 +678,9 @@ def _criteria_seen(tmp_path: Path, *, bind: PullRequest | None) -> list:
         _bind(ledger, bind)
     seen: list = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append(criteria)
         return approve(provider, tier)
 
@@ -773,7 +756,9 @@ def test_a_slice_judge_cannot_block_on_a_file_outside_its_slice(tmp_path: Path) 
     code that lives in another part. A judge that did not read a file cannot block on it: the
     finding stays, as important, and a reply left with no blocking finding approves."""
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         if _patch("a.go") in diff:
             return _blocking_on(provider, tier, "c.go")
         return approve(provider, tier)
@@ -786,7 +771,9 @@ def test_a_slice_judge_cannot_block_on_a_file_outside_its_slice(tmp_path: Path) 
 
 
 def test_a_slice_judge_still_blocks_on_a_file_it_read(tmp_path: Path) -> None:
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         if _patch("a.go") in diff:
             return _blocking_on(provider, tier, "a.go")
         return approve(provider, tier)
@@ -799,7 +786,9 @@ def test_a_slice_judge_still_blocks_on_a_file_it_read(tmp_path: Path) -> None:
 def test_each_slice_judge_is_told_which_files_the_other_parts_hold(tmp_path: Path) -> None:
     notes_of_first: list[str] = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         if _patch("a.go") in diff:
             notes_of_first.append(notes)
         return approve(provider, tier)
@@ -812,7 +801,9 @@ def test_each_slice_judge_is_told_which_files_the_other_parts_hold(tmp_path: Pat
 
 
 def test_a_path_spelled_with_a_prefix_is_still_the_file_the_judge_read(tmp_path: Path) -> None:
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         if _patch("a.go") in diff:
             return _blocking_on(provider, tier, "./a.go")
         return approve(provider, tier)
@@ -847,3 +838,170 @@ def test_rulings_of_reads_this_pull_request_only(tmp_path: Path) -> None:
             idempotency_key=f"review_ruling:{PR.repository}#{pr}:{finding}:1",
         )
     assert [r.data["finding"] for r in rulings_of(ledger, "red-alpha", PR)] == ["F-7-1"]
+
+
+def _verdict_with(ledger, *, sha, check_run_id, round_, findings, decision="request_changes",
+                  artifact="code", pr=PR, carry=None):
+    verdict = ReviewVerdict(
+        verdict=decision, summary="earlier", findings=findings, mode="deep",
+        providers=("codex",), round=round_, artifact=artifact,
+        carry_forwards=carry,
+    )
+    ledger.attest(
+        "red-alpha", AttestationKind.REVIEW_VERDICT,
+        verdict.as_attestation_data(sha=sha, check_run_id=check_run_id,
+                                    repository=pr.repository, pr=pr.number),
+        issuer="red-rail-reviewer", idempotency_key=f"review_verdict:{sha}:{check_run_id}",
+    )
+
+
+def _open(n=1, status="new", klass="blocker"):
+    return Finding.model_validate({"severity": "blocking", "file": "src/x.py", "line": 1,
+                                   "title": f"bug{n}", "evidence": "e", "id": f"F-7-{n}",
+                                   "class": klass, "status": status})
+
+
+class NoCheckText(FakeGitHub):
+    def check_run_text(self, repository, check_id):  # C5: the context comes from receipts
+        raise AssertionError("the context must not be read from a check run")
+
+
+def _judge_saying(reply_findings=(), previous=(), decision="request_changes", seen=None):
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, notes="",
+                  instructions=""):
+        if seen is not None:
+            seen.append({"diff": diff, "notes": notes, "instructions": instructions})
+        verdict = ReviewVerdict(verdict=decision, summary="s", findings=list(reply_findings),
+                                mode=tier, providers=(provider,), previous=tuple(previous))
+        return JudgeReply(provider=provider, tier=tier, model="m", verdict=verdict,
+                          failure=None, raw="")
+    return run_judge
+
+
+def test_round_two_carries_every_earlier_finding_from_the_receipts(tmp_path) -> None:
+    repo, ledger = _repo(tmp_path)
+    _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=[_open(1)])
+    seen: list[dict] = []
+    outcome = review_pull(
+        PR, github=NoCheckText(), policy=default_policy(), ledger=ledger, project="red-alpha",
+        run_judge=_judge_saying(previous=[PreviousAnswer(id="F-7-1", status="fixed")],
+                                decision="approve", seen=seen),
+    )
+    assert "F-7-1" in seen[0]["notes"] and "verify" in seen[0]["notes"].lower()
+    assert "exhaustive" in seen[0]["instructions"]
+    assert outcome.verdict.round == 2 and outcome.verdict.verdict == "approve"
+    assert [(f.id, f.status) for f in outcome.verdict.findings] == [("F-7-1", "fixed")]
+
+
+def test_an_unanswered_blocker_blocks_even_on_an_approving_reply(tmp_path) -> None:  # C3
+    repo, ledger = _repo(tmp_path)
+    _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=[_open(1)])
+    outcome = review_pull(
+        PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger, project="red-alpha",
+        run_judge=_judge_saying(decision="approve"),
+    )
+    assert outcome.verdict.verdict == "request_changes"
+    assert outcome.verdict.findings[0].status == "still_open"
+
+
+def test_after_round_three_the_loop_awaits_a_ruling_without_a_judge(tmp_path) -> None:
+    repo, ledger = _repo(tmp_path)
+    for n, sha in ((1, "0"), (2, "1"), (3, "2")):
+        _verdict_with(ledger, sha=sha * 40, check_run_id=10 + n, round_=n,
+                      findings=[_open(1, status="new" if n == 1 else "still_open")])
+    calls: list[str] = []
+
+    def run_judge(*args, **kwargs):
+        calls.append("judged")
+        raise AssertionError("no judge while awaiting a ruling")
+
+    outcome = review_pull(PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
+                          project="red-alpha", run_judge=run_judge)
+    assert calls == [] and outcome.attested
+    assert outcome.verdict.round == "awaiting_ruling"
+    assert outcome.verdict.verdict == "request_changes"
+    assert (
+        "rail reviewer rule --repository hawkixs/red-alpha --pr 7 --finding F-7-1"
+        in outcome.verdict.summary
+    )
+
+
+def test_the_closure_check_verifies_the_fix_ruling_only(tmp_path) -> None:
+    repo, ledger = _repo(tmp_path)
+    for n, sha in ((1, "0"), (2, "1"), (3, "2")):
+        _verdict_with(ledger, sha=sha * 40, check_run_id=10 + n, round_=n,
+                      findings=[_open(1, status="new" if n == 1 else "still_open")])
+    ledger.attest(
+        "red-alpha", AttestationKind.REVIEW_RULING,
+        {"repository": PR.repository, "pr": 7, "finding": "F-7-1", "ruling": "fix",
+         "decision": "rename the flag"},
+        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
+    )
+    seen: list[dict] = []
+    new_blocker = Finding(severity="blocking", file="src/y.py", title="new", evidence="e")
+    outcome = review_pull(
+        PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger, project="red-alpha",
+        run_judge=_judge_saying(reply_findings=[new_blocker],
+                                previous=[PreviousAnswer(id="F-7-1", status="fixed")], seen=seen),
+    )
+    assert "rename the flag" in seen[0]["notes"] and "rulings" in seen[0]["instructions"]
+    assert outcome.verdict.round == "closure" and outcome.verdict.verdict == "approve"
+    by_title = {f.title: f for f in outcome.verdict.findings}
+    assert by_title["new"].klass == "note"  # no new blocker in a closure check
+
+
+def test_a_carry_forward_ruling_closes_without_a_judge(tmp_path) -> None:
+    repo, ledger = _repo(tmp_path)
+    for n, sha in ((1, "0"), (2, "1"), (3, "2")):
+        _verdict_with(ledger, sha=sha * 40, check_run_id=10 + n, round_=n,
+                      findings=[_open(1, status="new" if n == 1 else "still_open")])
+    ledger.attest(
+        "red-alpha", AttestationKind.REVIEW_RULING,
+        {"repository": PR.repository, "pr": 7, "finding": "F-7-1", "ruling": "carry_forward",
+         "decision": "later"},
+        issuer="operator", idempotency_key="review_ruling:hawkixs/red-alpha#7:F-7-1:1",
+    )
+
+    def run_judge(*args, **kwargs):
+        raise AssertionError("a carry_forward ruling needs no judge")
+
+    outcome = review_pull(PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
+                          project="red-alpha", run_judge=run_judge)
+    assert outcome.verdict.verdict == "approve" and outcome.verdict.round == "closure"
+    assert [(f.id, f.klass, f.status) for f in outcome.verdict.findings] == [
+        ("F-7-1", "carry_forward", "ruled")
+    ]
+
+
+def test_a_code_pull_request_must_account_for_open_carry_forwards(tmp_path) -> None:  # C7
+    repo, ledger = _repo(tmp_path)
+    spec_pr = replace(PR, number=5)
+    _verdict_with(ledger, sha="9" * 40, check_run_id=5, round_=1, decision="approve",
+                  artifact="spec_plan", pr=spec_pr,
+                  findings=[Finding.model_validate({
+                      "severity": "important", "file": "docs/specs/s.md", "title": "edge",
+                      "evidence": "e", "id": "F-5-1", "class": "carry_forward",
+                  })])
+    outcome = review_pull(PR, github=FakeGitHub(), policy=default_policy(), ledger=ledger,
+                          project="red-alpha", run_judge=_judge_saying(decision="approve"))
+    assert outcome.verdict.verdict == "request_changes"
+    assert any(f.title == "CF-5-1 not accounted for" for f in outcome.verdict.findings)
+
+    body = "## Carry-forwards\n- CF-5-1: addressed\n"
+    seen: list[dict] = []
+    outcome = review_pull(
+        replace(PR, body=body, head_sha="c" * 40), github=FakeGitHub(), policy=default_policy(),
+        ledger=ledger, project="red-alpha",
+        run_judge=_judge_saying(previous=[PreviousAnswer(id="CF-5-1", status="fixed")],
+                                decision="approve", seen=seen),
+    )
+    assert "CF-5-1" in seen[0]["notes"]
+    assert outcome.verdict.verdict == "approve"
+    assert outcome.verdict.carry_forwards.addressed == ("CF-5-1",)
+
+
+def test_a_reviewer_yaml_that_sets_max_passes_is_refused_by_name() -> None:
+    from rail.reviewer.policy import ReviewPolicy
+
+    with pytest.raises(ValueError, match="review-loop-closure"):
+        ReviewPolicy.model_validate({"max_passes_per_pr": 4})
