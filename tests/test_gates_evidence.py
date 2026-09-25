@@ -10,6 +10,7 @@ from rail import gitrepo, monitor
 from rail.gates import Stage
 from rail.gates.evidence import (
     GATES,
+    carry_forward,
     deployed,
     drill,
     fulfilled,
@@ -40,6 +41,7 @@ def _attest(
 def test_registry_covers_stages_5_to_10() -> None:
     assert [(g.stage, g.code) for g in GATES] == [
         (Stage.REVIEW, "verdict"),
+        (Stage.REVIEW, "carry_forward"),
         (Stage.INTEGRATE, "receipt"),
         (Stage.RELEASE, "released"),
         (Stage.DEPLOY, "deployed"),
@@ -654,3 +656,77 @@ def test_verdict_refuses_a_review_that_did_not_see_the_whole_change(tmp_path: Pa
         idempotency_key="v-whole",
     )
     assert verdict(repo).passed, verdict(repo).details
+
+
+def _cf_verdict(ledger, *, pr, minutes, decision, artifact, findings=(), carry=None):
+    from rail.reviewer.verdict import CarryForwards, Finding, ReviewVerdict
+
+    verdict = ReviewVerdict(
+        verdict=decision, summary="s", artifact=artifact, round=1,
+        findings=[Finding.model_validate(f) for f in findings],
+        carry_forwards=CarryForwards(**carry) if carry else None,
+    )
+    ledger.attest("red-alpha", AttestationKind.REVIEW_VERDICT,
+                  verdict.as_attestation_data(sha=f"{minutes:040d}", check_run_id=minutes,
+                                              repository="hawkixs/red-alpha", pr=pr),
+                  issuer="red-rail-reviewer", idempotency_key=f"review_verdict:{minutes}")
+
+
+CF = {"severity": "important", "file": "docs/specs/s.md", "title": "t", "evidence": "e",
+      "id": "F-5-1", "class": "carry_forward"}
+
+
+def test_carry_forward_passes_with_nothing_recorded(tmp_path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    result = carry_forward(repo)
+    assert result.passed and "no carry-forward recorded" in result.details
+
+
+def test_carry_forward_reports_the_open_count(tmp_path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    _cf_verdict(ledger, pr=5, minutes=1, decision="approve", artifact="spec_plan", findings=[CF])
+    result = carry_forward(repo)
+    assert result.passed and "1 open: CF-5-1" in result.details
+
+
+def test_carry_forward_fails_on_an_approval_that_left_one_unaccounted(tmp_path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    _cf_verdict(ledger, pr=5, minutes=1, decision="approve", artifact="spec_plan", findings=[CF])
+    _cf_verdict(ledger, pr=8, minutes=2, decision="approve", artifact="code", carry={})
+    result = carry_forward(repo)
+    assert not result.passed and "CF-5-1" in result.details and "#8" in result.details
+
+
+def test_carry_forward_passes_once_addressed(tmp_path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    _cf_verdict(ledger, pr=5, minutes=1, decision="approve", artifact="spec_plan", findings=[CF])
+    _cf_verdict(ledger, pr=8, minutes=2, decision="approve", artifact="code",
+                carry={"addressed": ("CF-5-1",)})
+    result = carry_forward(repo)
+    assert result.passed and "0 open" in result.details
+
+
+def test_carry_forward_reports_a_malformed_receipt_as_a_failure_not_a_crash(tmp_path) -> None:
+    """A findings list item that fails `Finding` validation (rounds._findings) must FAIL with a
+    readable detail — the gate never raises, even on a receipt written some other way."""
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    ledger.attest(
+        "red-alpha",
+        AttestationKind.REVIEW_VERDICT,
+        {
+            "sha": "0" * 40,
+            "verdict": "approve",
+            "artifact": "spec_plan",
+            "repository": "hawkixs/red-alpha",
+            "pr": 5,
+            "findings": [{"class": "carry_forward"}],
+        },
+        issuer="red-rail-reviewer",
+        idempotency_key="review_verdict:1",
+    )
+    result = carry_forward(repo)
+    assert not result.passed and "malformed receipt" in result.details
