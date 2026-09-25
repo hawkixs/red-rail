@@ -177,6 +177,15 @@ def previous_verdicts(ledger: Ledger, project: str, pr: PullRequest) -> list[Rec
     ]
 
 
+def rulings_of(ledger: Ledger, project: str, pr: PullRequest) -> list[Record]:
+    """This pull request's operator rulings, oldest first (spec 2026-09-25, D9)."""
+    return [
+        r
+        for r in ledger.list(project, attestation=AttestationKind.REVIEW_RULING)
+        if r.data.get("repository") == pr.repository and r.data.get("pr") == pr.number
+    ]
+
+
 def changed_lines(diff: str) -> int:
     return sum(
         1

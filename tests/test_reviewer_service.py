@@ -831,3 +831,19 @@ def test_the_list_of_other_files_is_bounded() -> None:
     notes = _part_notes("", 1, [_patch("a.go"), many])
     assert len(notes.encode("utf-8")) <= PROMPT_MARGIN - 200
     assert "more" in notes and "module_000.go" in notes
+
+
+def test_rulings_of_reads_this_pull_request_only(tmp_path: Path) -> None:
+    from rail.reviewer.service import rulings_of
+
+    repo, ledger = _repo(tmp_path)
+    for pr, finding in ((7, "F-7-1"), (8, "F-8-1")):
+        ledger.attest(
+            "red-alpha",
+            AttestationKind.REVIEW_RULING,
+            {"repository": PR.repository, "pr": pr, "finding": finding, "ruling": "fix",
+             "decision": "d"},
+            issuer="operator",
+            idempotency_key=f"review_ruling:{PR.repository}#{pr}:{finding}:1",
+        )
+    assert [r.data["finding"] for r in rulings_of(ledger, "red-alpha", PR)] == ["F-7-1"]
