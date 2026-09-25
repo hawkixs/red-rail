@@ -26,7 +26,7 @@ def _config(path: Path | None):
 
 
 def _once(config, *, only: str | None, pr: int | None) -> int:
-    from rail.ledger import LedgerError, open_ledger
+    from rail.ledger import LedgerError
     from rail.model import load_rail_config
     from rail.reviewer.github import GitHubApp, GitHubError
     from rail.reviewer.service import pending_reviews, review_pull

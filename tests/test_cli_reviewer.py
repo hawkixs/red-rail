@@ -69,9 +69,9 @@ def test_once_refuses_a_repository_the_config_does_not_watch(tmp_path: Path, mon
         assert "reviewed 0" not in out.output
 
 
-def _awaiting_repo(tmp_path: Path) -> tuple[Path, Path]:
-    repo = conforming_tree(tmp_path, "red-alpha", "dev")
-    ledger = FileLedger(repo / RECEIPTS_DIR)
+def _seed_three_verdicts(ledger) -> None:
+    """Three judged rounds of the same open blocker: PR #7 lands on round 3, awaiting a
+    ruling on F-7-1."""
     blocker = Finding.model_validate({"severity": "blocking", "file": "a.py", "title": "t",
                                       "evidence": "e", "id": "F-7-1", "class": "blocker",
                                       "status": "still_open"})
@@ -81,6 +81,12 @@ def _awaiting_repo(tmp_path: Path) -> tuple[Path, Path]:
             sha=str(n) * 40, check_run_id=n, repository="hawkixs/red-alpha", pr=7)
         ledger.attest("red-alpha", AttestationKind.REVIEW_VERDICT, data,
                       issuer="red-rail-reviewer", idempotency_key=f"review_verdict:{n}")
+
+
+def _awaiting_repo(tmp_path: Path) -> tuple[Path, Path]:
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    _seed_three_verdicts(ledger)
     key = tmp_path / "app.pem"
     key.write_text("-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n")
     key.chmod(0o600)
@@ -173,15 +179,7 @@ def test_rule_writes_a_review_ruling_in_brain_mode(tmp_path: Path, monkeypatch) 
         issuer="op",
         idempotency_key="c0",
     )
-    blocker = Finding.model_validate({"severity": "blocking", "file": "a.py", "title": "t",
-                                      "evidence": "e", "id": "F-7-1", "class": "blocker",
-                                      "status": "still_open"})
-    for n in (1, 2, 3):
-        data = ReviewVerdict(verdict="request_changes", summary="s", findings=[blocker],
-                             round=n, artifact="code").as_attestation_data(
-            sha=str(n) * 40, check_run_id=n, repository="hawkixs/red-alpha", pr=7)
-        ledger.attest("red-alpha", AttestationKind.REVIEW_VERDICT, data,
-                      issuer="red-rail-reviewer", idempotency_key=f"review_verdict:{n}")
+    _seed_three_verdicts(ledger)
 
     key = tmp_path / "app.pem"
     key.write_text("-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n")
