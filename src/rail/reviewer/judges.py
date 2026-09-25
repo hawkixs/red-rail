@@ -76,12 +76,24 @@ _SPEC_PLAN_CLASSES = (
 
 
 def round_instructions(
-    step: Literal["round", "closure"], round_: int | None, artifact: Literal["spec_plan", "code"]
+    step: Literal["round", "closure"],
+    round_: int | None,
+    artifact: Literal["spec_plan", "code"],
+    *,
+    head_moved: bool = False,
 ) -> str:
-    """D8: one paragraph per round, and the class definitions per artifact."""
+    """D8: one paragraph per round, and the class definitions per artifact. `head_moved`: a
+    closure on a head the last judged verdict did not see judges that delta too (Ruling 29)."""
     parts: list[str] = []
     parts.append(_SPEC_PLAN_CLASSES if artifact == "spec_plan" else _CODE_CLASSES)
-    if step == "closure":
+    if step == "closure" and head_moved:
+        parts.append(
+            "Closure check: verify the rulings below first. For each ruled finding answer "
+            '"fixed" or "still_open" in "previous", judged against the operator\'s decision '
+            "text. Code changed since the last review, so judge that delta too: a defect inside "
+            "it is still a finding."
+        )
+    elif step == "closure":
         parts.append(
             "Closure check: verify only the rulings below. For each ruled finding answer "
             '"fixed" or "still_open" in "previous", judged against the operator\'s decision '

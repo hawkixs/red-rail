@@ -533,9 +533,9 @@ def _finish(
     """Number, classify and status the findings; apply round 3's demotion and the closure
     check's limits; recompute the carry-forward blockers; decide by D3.
 
-    `delta_bound`: a closure with no `fix` ruling, judged only because the head moved since
-    the last judged verdict (Ruling 29). A new finding inside the delta keeps its class, as in
-    round 3; anywhere else it is demoted.
+    `delta_bound`: a closure on a head that moved since the last judged verdict, with or
+    without `fix` rulings (Ruling 29, Q82). A new finding inside the delta keeps its class, as
+    in round 3; anywhere else it is demoted. On the judged head, D10: every new one is a note.
 
     Mechanical carry-forward findings are recomputed from the pull request's body every round
     (`carry.reconcile`), never judged: `judged_state` leaves them out of `known`/`assign` so a
@@ -798,7 +798,12 @@ def _review_started(
     producer = producer_provider(github.commit_messages(pr.repository, pr.number))
     chain = policy.chain_for(producer=producer)
     criteria = _criteria(ledger, project, pr)
-    instructions = round_instructions("closure" if step == "closure" else "round", round_, artifact)
+    instructions = round_instructions(
+        "closure" if step == "closure" else "round",
+        round_,
+        artifact,
+        head_moved=step == "closure" and not same_head,
+    )
     common = dict(
         criteria=criteria,
         run_judge=run_judge,
@@ -886,7 +891,7 @@ def _review_started(
             delta=delta,
             cf_open=cf_open,
             section=section,
-            delta_bound=step == "closure" and not fix_rulings,
+            delta_bound=step == "closure" and not same_head,
         )
         title = verdict.verdict
     return _publish(

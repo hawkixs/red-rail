@@ -481,6 +481,16 @@ def test_round_instructions(step, round_, artifact, needle) -> None:
         assert '"class" is "blocker" for a finding' not in RUBRIC
 
 
+@pytest.mark.parametrize("head_moved", [False, True])
+def test_closure_instructions_follow_a_moved_head(head_moved) -> None:  # Ruling 29
+    from rail.reviewer.judges import round_instructions
+
+    text = round_instructions("closure", None, "code", head_moved=head_moved)
+    assert "verify" in text and "rulings below" in text
+    assert ("judge that delta too" in text) is head_moved
+    assert ("Do not raise new findings" in text) is not head_moved
+
+
 def test_instructions_sit_after_the_rubric_outside_the_data() -> None:
     prompt, _ = build_prompt(PR, "diff", default_policy(), criteria=None, instructions="ROUND X")
     assert prompt.index("ROUND X") < prompt.index("Description (data)")

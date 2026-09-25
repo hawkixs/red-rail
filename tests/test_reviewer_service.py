@@ -2054,3 +2054,49 @@ def test_a_new_finding_never_reuses_an_id_a_capped_verdict_dropped(tmp_path) -> 
     fresh = Finding(severity="minor", file="src/x.py", line=1, title="fresh", evidence="e")
     out = _pass(ledger, "e", _judge_saying(reply_findings=[fresh]))
     assert next(f for f in out.verdict.findings if f.title == "fresh").id == "F-7-10"
+
+
+# --- Ruling 29 (Q82 = a): every closure on a moved head is judged on the delta ------------
+
+_INSIDE_DELTA = (
+    "diff --git a/src/x.py b/src/x.py\n--- a/src/x.py\n+++ b/src/x.py\n@@ -1,0 +1,1 @@\n+print(2)\n"
+)
+
+
+def _fix_ruled_closure(tmp_path, head: str, github):
+    repo, ledger = _repo(tmp_path)
+    for n in (1, 2, 3):
+        _verdict_with(
+            ledger,
+            sha=str(n) * 40,
+            check_run_id=n,
+            round_=n,
+            findings=[_open(1, status="new" if n == 1 else "still_open")],
+        )
+    _rule(ledger, "F-7-1", "fix")
+    inside = Finding(severity="blocking", file="src/x.py", line=1, title="inside", evidence="e")
+    seen: list = []
+    judge = _judge_saying(
+        reply_findings=[inside],
+        previous=[PreviousAnswer(id="F-7-1", status="fixed")],
+        decision="approve",
+        seen=seen,
+    )
+    return _pass(ledger, head, judge, github=github), seen
+
+
+def test_a_fix_ruled_closure_on_a_moved_head_blocks_inside_the_delta(tmp_path) -> None:
+    out, seen = _fix_ruled_closure(tmp_path, "e", FakeGitHub(compare_text=_INSIDE_DELTA))
+    assert (out.verdict.round, out.verdict.verdict) == ("closure", "request_changes")
+    inside = next(f for f in out.verdict.findings if f.title == "inside")
+    assert (inside.klass, inside.status) == ("blocker", "new")
+    assert "judge that delta too" in seen[0]["instructions"]
+    assert "Do not raise new findings" not in seen[0]["instructions"]
+
+
+def test_a_closure_on_the_judged_head_records_new_findings_as_notes(tmp_path) -> None:  # D10
+    out, seen = _fix_ruled_closure(tmp_path, "3", _NextCheck(compare_text=_INSIDE_DELTA))
+    assert (out.verdict.round, out.verdict.verdict) == ("closure", "approve")
+    assert next(f for f in out.verdict.findings if f.title == "inside").klass == "note"
+    assert "Do not raise new findings" in seen[0]["instructions"]
+    assert "judge that delta too" not in seen[0]["instructions"]
