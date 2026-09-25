@@ -52,6 +52,7 @@ class RecordKind(StrEnum):
 class AttestationKind(StrEnum):
     GATE_PASSED = "gate_passed"
     REVIEW_VERDICT = "review_verdict"
+    REVIEW_RULING = "review_ruling"
     INTEGRATED = "integrated"
     RELEASED = "released"
     DEPLOYED = "deployed"

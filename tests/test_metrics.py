@@ -118,7 +118,9 @@ def test_metrics_from_the_history(tmp_path: Path) -> None:
     assert m.lead_time_contract_to_deploy_hours == 60.0
     assert m.change_failure_rate == 0.5  # the drill does not count
     assert m.recovery_time_hours == 2.0
-    assert (m.conformance.passed, m.conformance.applicable, m.conformance.exceptions) == (16, 23, 0)
+    # one more applicable and passing gate than before `review.carry_forward` joined the
+    # ledger-scoped evidence gates: this history has no carry-forward recorded.
+    assert (m.conformance.passed, m.conformance.applicable, m.conformance.exceptions) == (17, 24, 0)
 
 
 def test_metrics_window_excludes_old_deployments(tmp_path: Path) -> None:

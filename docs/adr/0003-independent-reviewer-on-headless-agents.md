@@ -60,3 +60,10 @@ delta and triggers a full review again. `max_passes_per_pr` (4) caps the passes 
 request: beyond it the check fails without running a judge — the verdict is attested in mode
 `budget` — until the label `rail-review:rerun` grants one more pass. The ledger is the pass
 counter (no in-memory state); drafts are never reviewed.
+
+## Amendment (2026-09-25)
+
+The pass budget above (`max_passes_per_pr`, mode `budget`) is replaced by the review-loop
+closure rule: three rounds, then an operator ruling on any blocker still open, then one closure
+check — no pass count, no bypass. `load_policy` refuses a `reviewer.yaml` that still sets
+`max_passes_per_pr`. See `docs/specs/2026-09-25-review-loop-closure.md`.

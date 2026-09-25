@@ -75,7 +75,9 @@ def test_audit_project_scores_against_the_declared_tier(tmp_path: Path) -> None:
     )
     assert [s.status for s in alpha.stages] == ["pass", "pass", "pass"] + ["n/a"] * 8
     gamma = audit_project(projects / "red-gamma")
-    assert (gamma.passed, gamma.applicable) == (18, 23)
+    # one more applicable and passing gate than before `review.carry_forward` joined the
+    # ledger-scoped evidence gates: this fixture has no carry-forward recorded.
+    assert (gamma.passed, gamma.applicable) == (19, 24)
     assert gamma.exceptions == ["review.verdict: reviewer arrives in phase 2"]
     assert {s.stage: s.status for s in gamma.stages}["review"] == "exception"
     delta = audit_project(projects / "red-delta")

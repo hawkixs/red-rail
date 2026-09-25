@@ -103,16 +103,19 @@ comments, test names. The conversation with the operator stays in French.
 - `src/rail/reviewer/` — the independent reviewer (ADR-0003): `policy.py` (data: provider chain,
   models per tier, light/deep thresholds, producer read from `Co-Authored-By` trailers),
   `verdict.py` (enum-valued `ReviewVerdict`), `judges.py` (one headless run per judge, isolated
-  seat, `guard.sh` for agy), `github.py` (minimal App client), `service.py` (one review per head
-  SHA, fail-closed, verdict attested; converges — a later head is judged `incremental` on the
-  delta since the last verdict, `max_passes_per_pr` caps the passes and the excess attests
-  `budget` without a judge, a rebase or `rail-review:rerun` forces a full review again),
+  seat, `guard.sh` for agy), `github.py` (minimal App client), `carry.py` (the `## Carry-forwards`
+  section a code pull request writes in its body, one line per id), `rounds.py` (the review
+  loop's state from receipts only: round number, open findings, open carry-forwards),
+  `service.py` (one review per head SHA, fail-closed, verdict attested; converges — a later head
+  is judged `incremental` on the delta since the last verdict, rounds 1 normal, 2 exhaustive,
+  3 closure (`rounds.py`, from the receipts); after round 3 an open blocker awaits
+  `rail reviewer rule`, then one closure check (spec 2026-09-25-review-loop-closure)),
   `config.py` (`~/.config/red-rail/reviewer.yaml`).
 - `src/rail/commands/` — one module per command, auto-discovered by `src/rail/cli.py`:
   `check`, `attest`, `bind` (the PR to the contract, at its opening), `contract`, `ledger`,
-  `audit`, `metrics`, `new`, `upgrade`, `brain` (`ping`), `reviewer` (`once`, `run`), `release`
-  (stage 7), `deploy` (`--rollback`, `--plan`), `drill` (stage 9), `accept` (stage 10, as the
-  requester); `new` takes `--ledger`/`--ticket`. Exit code is the verdict; `--json` is the
+  `audit`, `metrics`, `new`, `upgrade`, `brain` (`ping`), `reviewer` (`once`, `run`, `rule`),
+  `release` (stage 7), `deploy` (`--rollback`, `--plan`), `drill` (stage 9), `accept` (stage 10,
+  as the requester); `new` takes `--ledger`/`--ticket`. Exit code is the verdict; `--json` is the
   contract for machines.
 - `src/rail/audit.py` (repository × stage matrix, golden-tested), `src/rail/metrics.py` (four
   DORA metrics + conformance from the ledger), `src/rail/scaffold.py` (copier: `copier.yml` at

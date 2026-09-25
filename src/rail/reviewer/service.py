@@ -22,11 +22,12 @@ from rail.ledger import (
     idempotency_key_for,
 )
 from rail.ledger.file import receipt_filename
+from rail.reviewer import carry, rounds
 from rail.reviewer.github import GitHubError, PullRequest
-from rail.reviewer.judges import JudgeReply, diff_budget, judge
+from rail.reviewer.judges import JudgeReply, diff_budget, judge, round_instructions
 from rail.reviewer.policy import ReviewPolicy, producer_provider
 from rail.reviewer.split import oversized, split_diff
-from rail.reviewer.verdict import Finding, ReviewVerdict
+from rail.reviewer.verdict import CarryForwards, Finding, PreviousAnswer, ReviewVerdict
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
 _DIFF_HEADER = re.compile(r"^diff --git a/(?P<path>\S+) b/", re.MULTILINE)
@@ -177,6 +178,15 @@ def previous_verdicts(ledger: Ledger, project: str, pr: PullRequest) -> list[Rec
     ]
 
 
+def rulings_of(ledger: Ledger, project: str, pr: PullRequest) -> list[Record]:
+    """This pull request's operator rulings, oldest first (spec 2026-09-25, D9)."""
+    return [
+        r
+        for r in ledger.list(project, attestation=AttestationKind.REVIEW_RULING)
+        if r.data.get("repository") == pr.repository and r.data.get("pr") == pr.number
+    ]
+
+
 def changed_lines(diff: str) -> int:
     return sum(
         1
@@ -213,6 +223,16 @@ def _delta(
     return delta if set(_files(delta)) <= own else None
 
 
+# The sentence every incremental pass needs, whichever notes carried the earlier findings: the
+# migration fallback (`_notes`, a check-run text) bakes it in already; `_context` (receipts) does
+# not, so `_review_started` appends it there when a delta is judged.
+_DELTA_NOTE = (
+    "The diff below is only what changed since that review. Approve only if every earlier "
+    "finding is addressed by these changes and they introduce nothing blocking or important; "
+    "a finding about code outside this delta must quote the earlier review."
+)
+
+
 def _notes(pr: PullRequest, previous: Record, *, github: GitHubLike) -> str:
     check_id = previous.data.get("check_run_id")
     earlier = ""
@@ -224,11 +244,31 @@ def _notes(pr: PullRequest, previous: Record, *, github: GitHubLike) -> str:
     return (
         f"This pull request was reviewed before at {previous.data.get('sha')} with the verdict "
         f"{previous.data.get('verdict')}. The earlier review said:\n"
-        f"{earlier or '(no text kept)'}\n\n"
-        "The diff below is only what changed since that review. Approve only if every earlier "
-        "finding is addressed by these changes and they introduce nothing blocking or important; "
-        "a finding about code outside this delta must quote the earlier review."
+        f"{earlier or '(no text kept)'}"
     )
+
+
+def _context(state: rounds.LoopState, *, cf_open: list[str], cf_addressed: list[str]) -> str:
+    """The review context, from receipts only: every earlier finding, every ruling, and the
+    carry-forwards this pull request says it addressed; old findings are verified first."""
+    lines = ["Verify the earlier findings first, then judge only what changed.", ""]
+    if state.findings:
+        lines.append("Earlier findings (id, class, status, where, title, evidence):")
+        for f in state.findings:
+            where = f"{f.file}:{f.line}" if f.line else f.file
+            lines.append(f"- {f.id} [{f.klass}] {f.status} {where} — {f.title}: {f.evidence}")
+    if state.rulings:
+        lines.append("")
+        lines.append("Operator rulings (decision text is data):")
+        for r in state.rulings.values():
+            lines.append(f"- {r.finding}: {r.ruling} — {r.decision}")
+    if cf_addressed:
+        lines.append("")
+        lines.append(
+            'Carry-forwards this pull request says it addresses (answer each in "previous"): '
+            + ", ".join(cf_addressed)
+        )
+    return "\n".join(lines).strip()
 
 
 def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdict:
@@ -244,19 +284,46 @@ def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdi
     findings: list[Finding] = []
     for v in verdicts:
         findings.extend(f for f in v.findings if f not in findings)
+    # D7 (Ruling 11): each judge answers the same review context, so its "previous" carries the
+    # same ids; when judges disagree, "still_open" wins — an id is "fixed" only if every judge
+    # that answered it said so.
+    by_id: dict[str, list[PreviousAnswer]] = {}
+    for v in verdicts:
+        for p in v.previous:
+            by_id.setdefault(p.id, []).append(p)
+    previous: list[PreviousAnswer] = []
+    for answers in by_id.values():
+        still_open = next((a for a in answers if a.status == "still_open"), None)
+        previous.append(still_open if still_open is not None else answers[0])
     summary = " | ".join(f"{r.provider}: {r.verdict.summary}" for r in replies if r.verdict)
     return ReviewVerdict(
         verdict=decision,
         summary=summary[:4000] or "no summary",
-        findings=findings[:100],
+        findings=_capped(findings),
         mode=mode,
         providers=tuple(r.provider for r in replies if r.verdict),
         diff_truncated=truncated or any(v.diff_truncated for v in verdicts),
+        previous=tuple(previous),
     )
 
 
+_MAX_FINDINGS = 100  # ReviewVerdict.findings' limit
+
+
+def _capped(findings: list[Finding]) -> list[Finding]:
+    """At most `_MAX_FINDINGS`, in order (M4): every open finding stays, then the newest closed
+    ones. More open findings than that fail validation, closed. A dropped id is never reused:
+    new ids are numbered above `LoopState.highest_id`."""
+    closed = [i for i, f in enumerate(findings) if f.status not in ("new", "still_open")]
+    dropped = set(closed[: max(0, len(findings) - _MAX_FINDINGS)])
+    return [f for i, f in enumerate(findings) if i not in dropped]
+
+
 def _render(verdict: ReviewVerdict) -> str:
-    lines = [
+    lines = []
+    if verdict.round is not None:
+        lines.append(f"Round: {verdict.round} ({verdict.artifact})")
+    lines += [
         f"**{verdict.verdict}** ({verdict.mode}, judges: {', '.join(verdict.providers) or 'none'})",
         "",
         verdict.summary,
@@ -264,7 +331,8 @@ def _render(verdict: ReviewVerdict) -> str:
     ]
     for f in verdict.findings:
         where = f"{f.file}:{f.line}" if f.line else f.file
-        lines.append(f"- [{f.severity}] {where} — {f.title}: {f.evidence}")
+        tag = f.klass or f.severity
+        lines.append(f"- {f.id or ''} [{tag}/{f.status}] {where} — {f.title}: {f.evidence}")
     if verdict.diff_truncated:
         lines.append(
             "\n_The diff was truncated by the reviewer; the verdict covers the first part only._"
@@ -285,6 +353,7 @@ def _judge_chain(
     failures,
     wanted: int,
     notes: str = "",
+    instructions: str = "",
 ) -> list[JudgeReply]:
     """Walk the chain until `wanted` verdicts are in hand; a failure is logged, never fatal."""
     replies: list[JudgeReply] = []
@@ -298,6 +367,7 @@ def _judge_chain(
             criteria=criteria,
             root=root,
             **({"notes": notes} if notes else {}),
+            **({"instructions": instructions} if instructions else {}),
         )
         if reply.verdict is None:
             failures.append(f"{provider}/{tier}: {reply.failure}")
@@ -424,6 +494,186 @@ def _publish(
     return outcome
 
 
+def _awaiting(pr: PullRequest, state: rounds.LoopState, artifact) -> ReviewVerdict:
+    """D5: after round 3, an open blocker with no ruling stops the loop; no fourth round."""
+    waiting = rounds.unruled(state)
+    commands = "\n".join(
+        f"rail reviewer rule --repository {pr.repository} --pr {pr.number} --finding {f.id} "
+        '--as fix|carry-forward --decision "…"'
+        for f in waiting
+    )
+    return ReviewVerdict(
+        verdict="request_changes",
+        summary=(
+            f"awaiting the operator's ruling after round 3: {len(waiting)} blocker(s) still open "
+            f"({', '.join(f.id or '?' for f in waiting)}). No fourth round: rule on each with\n"
+            f"{commands}"
+        )[:4000],
+        findings=_capped(list(state.findings)),
+        mode="awaiting_ruling",
+        providers=(),
+        round="awaiting_ruling",
+        artifact=artifact,
+    )
+
+
+def _finish(
+    merged: ReviewVerdict,
+    *,
+    pr: PullRequest,
+    state: rounds.LoopState,
+    step: str,
+    round_: int | None,
+    artifact,
+    delta: str | None,
+    whole: str,
+    cf_open: list[str],
+    section: dict,
+    delta_bound: bool = False,
+) -> ReviewVerdict:
+    """Number, classify and status the findings; apply round 3's demotion and the closure
+    check's limits; recompute the carry-forward blockers; decide by D3.
+
+    `delta_bound`: a closure on a head that moved since the last judged verdict, with or
+    without `fix` rulings (Ruling 29, Q82). A new finding inside the delta keeps its class, as
+    in round 3; anywhere else it is demoted. On the judged head, D10: every new one is a note.
+    `whole`: the pull request's own diff, base...head — used as the delta for demotion (round 3
+    and `delta_bound`) whenever `delta` is None: a rebase, a delta reaching outside the pull
+    request, or the rerun label all mean no delta was computed, and Q84 counts the whole pull
+    request as the delta rather than demoting every new finding for lack of one.
+
+    Mechanical carry-forward findings are recomputed from the pull request's body every round
+    (`carry.reconcile`), never judged: `judged_state` leaves them out of `known`/`assign` so a
+    judge's reply can never claim one by id. The closure check records any new finding as a
+    `note` (D10); `rounds.assign` re-derives class from severity for a genuinely new finding, so
+    that demotion is applied after `assign`, to the items it just gave `status: "new"` — not to
+    the earlier ones, which stay governed by their ruling or their `fixed`/`still_open` answer.
+    """
+    judged_state = replace(
+        state, findings=tuple(f for f in state.findings if not carry.is_mechanical(f))
+    )
+    known = {f.id for f in judged_state.findings if f.id}
+    # I2 (Ruling 31): a judge's finding on the description is judged like any other, so it
+    # must not carry the mechanical location, or `reconcile` would close it the next round
+    new = [
+        rounds.enforce_class(
+            f.model_copy(update={"file": carry.JUDGE_WHERE}) if carry.is_mechanical(f) else f,
+            artifact,
+        )
+        for f in merged.findings
+    ]
+    # C2 (Ruling 12), M4: a new id is numbered above the highest id ANY verdict of this pull
+    # request ever held, mechanical blockers and capped-out findings included, not only
+    # `judged_state`'s — otherwise a fresh finding could reuse an id already on record.
+    findings = rounds.assign(
+        new,
+        merged.previous,
+        judged_state,
+        pr=pr.number,
+        artifact=artifact,
+        floor=state.highest_id,
+    )
+    if round_ == 3 or delta_bound:
+        # after `assign`, which re-derives a new finding's class from its severity: demoted
+        # before, a code finding outside the delta came back a blocker
+        fresh = iter(
+            rounds.demote_outside(
+                [f for f in findings if f.status == "new"],
+                delta if delta is not None else whole,
+                artifact,
+                known=known,
+                skip=not state.has_findings_list,
+            )
+        )
+        findings = [next(fresh) if f.status == "new" else f for f in findings]
+    if step == "closure":
+        if not delta_bound:
+            findings = [
+                f.model_copy(update={"klass": "note"}) if f.status == "new" else f for f in findings
+            ]
+        findings = rounds.apply_rulings(findings, state.rulings)
+    carry_forwards = None
+    strangers: list[str] = []
+    if artifact == "code":
+        answers = {a.id: a.status for a in merged.previous}
+        claimed = carry.addressed(cf_open, section)
+        confirmed = rounds.confirmed_addressed(state, claimed, answers)
+        current = carry.mechanical_blockers(cf_open, section) + [
+            carry.not_addressed(i) for i in claimed if i not in confirmed
+        ]
+        old = [f for f in state.findings if carry.is_mechanical(f)]
+        if step == "closure":
+            # Ruling 22: a ruling on a mechanical blocker (e.g. a "not addressed" one) applies
+            # here too, or `reconcile` would re-derive its status from `current` alone and lose
+            # the operator's carry_forward call the moment this closure also has a fix ruling
+            # on something else.
+            old = rounds.apply_rulings(old, state.rulings)
+        kept, fresh = carry.reconcile(old, current)
+        findings = rounds.append_new(
+            findings + kept, fresh, pr=pr.number, artifact=artifact, floor=state.highest_id
+        )
+        carry_forwards = CarryForwards(
+            addressed=tuple(confirmed), deferred=_deferred(cf_open, section, findings)
+        )
+        strangers = carry.strangers(cf_open, section)
+    findings = _capped(findings)
+    decision = "approve" if rounds.approves(findings) else "request_changes"
+    summary = merged.summary
+    if strangers:
+        summary = (summary + " | ids not open: " + ", ".join(strangers))[:4000]
+    return merged.model_copy(
+        update={
+            "verdict": decision,
+            "summary": summary,
+            "findings": findings,
+            "round": "closure" if step == "closure" else round_,
+            "artifact": artifact,
+            "carry_forwards": carry_forwards,
+            "mode": "closure" if step == "closure" else merged.mode,
+        }
+    )
+
+
+def _deferred(cf_open: list[str], section: dict, findings: list[Finding]) -> tuple[str, ...]:
+    """The body's reasoned deferrals, plus every open carry-forward whose "not addressed" gap
+    the operator ruled carry_forward: the ruling's decision is the reason (Ruling 28)."""
+    ruled = [i for i in carry.ruled_deferred(findings) if i in cf_open]
+    return tuple(dict.fromkeys(carry.deferred(cf_open, section) + ruled))
+
+
+def _mechanical_recomputed(
+    findings: list[Finding],
+    *,
+    pr: PullRequest,
+    artifact,
+    state: rounds.LoopState,
+    cf_open: list[str],
+    section: dict,
+) -> list[Finding]:
+    """A code pull request's mechanical carry-forward blockers, recomputed from its current
+    body (D11): the operator may have updated it since the last pass, with no judge involved
+    (Ruling 14, Ruling 16).
+
+    A body claim of "addressed" is not enough on its own (Ruling 18): with no judge running
+    here, the only confirmation on record is an earlier judged verdict's
+    `carry_forwards.addressed` (Ruling 30) — an id the body claims but no such record confirmed
+    keeps its "not addressed" blocker open, the same shape `_finish` builds when a judge is the
+    one checking."""
+    if artifact != "code":
+        return list(findings)
+    claimed = carry.addressed(cf_open, section)
+    confirmed = rounds.confirmed_addressed(state, claimed, {})
+    current = carry.mechanical_blockers(cf_open, section) + [
+        carry.not_addressed(i) for i in claimed if i not in confirmed
+    ]
+    old = [f for f in findings if carry.is_mechanical(f)]
+    non_mechanical = [f for f in findings if not carry.is_mechanical(f)]
+    kept, fresh = carry.reconcile(old, current)
+    return rounds.append_new(
+        non_mechanical + kept, fresh, pr=pr.number, artifact=artifact, floor=state.highest_id
+    )
+
+
 def _review_started(
     pr: PullRequest,
     check: Any,
@@ -437,25 +687,34 @@ def _review_started(
     root: Path | None,
 ) -> ReviewOutcome:
     history = previous_verdicts(ledger, project, pr)
-    forced = policy.rerun_label in pr.labels
-    if len(history) >= policy.max_passes_per_pr and not forced:
-        verdict = ReviewVerdict(
-            verdict="request_changes",
-            summary=(
-                f"review budget exhausted: {len(history)} passes on this pull request "
-                f"(max {policy.max_passes_per_pr}); squash the fix-ups, then add the label "
-                f"{policy.rerun_label} for one more review"
-            ),
-            findings=[],
-            mode="budget",
-            providers=(),
-            diff_truncated=False,
+    rulings = rulings_of(ledger, project, pr)
+    state = rounds.loop_state(history, rulings)
+    step, round_ = rounds.next_step(state)
+    whole = github.diff(pr.repository, pr.number)
+    artifact = rounds.artifact_of(_files(whole), policy.records_globs)
+    cf_open: list[str] = []
+    section: dict = {}
+    if artifact == "code":
+        every = ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
+        every_rulings = ledger.list(project, attestation=AttestationKind.REVIEW_RULING)
+        cf_open = rounds.open_carry_forwards(
+            every, every_rulings, repository=pr.repository, excluding_pr=pr.number
         )
+        section = carry.parse_section(pr.body)
+    recomputed = dict(pr=pr, artifact=artifact, state=state, cf_open=cf_open, section=section)
+    if step == "awaiting_ruling":
+        # M8 (Ruling 16): a mechanical blocker never needs a ruling; the body may already have
+        # resolved it, so it is recomputed before telling the operator what is still unruled.
+        state = replace(
+            state,
+            findings=tuple(_mechanical_recomputed(list(state.findings), **recomputed)),
+        )
+        verdict = _awaiting(pr, state, artifact)
         return _publish(
             pr,
             check,
             verdict,
-            "review budget exhausted",
+            "awaiting ruling",
             github=github,
             policy=policy,
             ledger=ledger,
@@ -463,21 +722,101 @@ def _review_started(
             repo_path=repo_path,
             failures=[],
         )
+    fix_rulings = {k: r for k, r in state.rulings.items() if r.ruling == "fix"}
+    same_head = state.last_judged is not None and pr.head_sha == state.last_judged.data.get("sha")
+    if step == "closure" and not fix_rulings and same_head:
+        # every open blocker was ruled carry_forward and no judge has anything new to read: the
+        # loop closes without a judge (D9). A moved head is judged instead (Ruling 29). A
+        # mechanical blocker still gets one last recompute from the body (Ruling 16); the last
+        # judged verdict's `addressed` survives (Ruling 14), the deferrals are the body's own
+        # plus the ruled ones (M1, Ruling 28).
+        findings = rounds.apply_rulings(list(state.findings), state.rulings)
+        findings = _mechanical_recomputed(findings, **recomputed)
+        carry_forwards = None
+        if artifact == "code":
+            # A2 (residual minor): recomputed from the CURRENT body, the same rule as
+            # `_mechanical_recomputed` — an id the body now defers is not also addressed, so
+            # `deferred` and `addressed` never share an id.
+            addressed = rounds.confirmed_addressed(state, carry.addressed(cf_open, section), {})
+            carry_forwards = CarryForwards(
+                addressed=tuple(addressed), deferred=_deferred(cf_open, section, findings)
+            )
+        verdict = ReviewVerdict(
+            verdict="approve" if rounds.approves(findings) else "request_changes",
+            summary="closure: every open blocker ruled carry_forward by the operator",
+            findings=_capped(findings),
+            mode="closure",
+            providers=(),
+            round="closure",
+            artifact=artifact,
+            carry_forwards=carry_forwards,
+        )
+        return _publish(
+            pr,
+            check,
+            verdict,
+            verdict.verdict,
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            failures=[],
+        )
+
     failures: list[str] = []
-    previous = history[-1] if history else None
-    whole = github.diff(pr.repository, pr.number)
-    delta = _delta(pr, previous, whole, github=github, policy=policy)
+    cf_addressed = carry.addressed(cf_open, section)
+
+    # I3: the context is built from the judged state, mechanical findings removed — they are
+    # never the judge's to answer. M11 (D10): a closure check verifies the fix-ruled findings
+    # only, with their ruling's decision text, not every earlier finding.
+    judged_state = replace(
+        state, findings=tuple(f for f in state.findings if not carry.is_mechanical(f))
+    )
+    if step == "closure":
+        context_state = replace(
+            judged_state,
+            findings=tuple(f for f in judged_state.findings if f.id in fix_rulings),
+            rulings=fix_rulings,
+        )
+    else:
+        context_state = judged_state
+
+    delta = _delta(pr, state.last_judged, whole, github=github, policy=policy)
+    if context_state.findings or context_state.rulings or cf_addressed:
+        notes = _context(context_state, cf_open=cf_open, cf_addressed=cf_addressed)
+    elif not state.has_findings_list and state.last_judged is not None:
+        # M7: a verdict recorded before this change carries no findings list — the check-run
+        # fallback of D6 covers only that migration case, never an explicit empty list.
+        notes = _notes(pr, state.last_judged, github=github)
+    else:
+        notes = ""
+    if delta is not None and _DELTA_NOTE not in notes:
+        notes = f"{notes}\n\n{_DELTA_NOTE}".strip()
     if delta is not None:
-        assert previous is not None
-        diff, notes = delta, _notes(pr, previous, github=github)
+        diff = delta
         light = changed_lines(delta) <= policy.light_max_changed_lines
     else:
-        diff, notes = whole, ""
+        diff = whole
         light = policy.mode_for(pr, docs_only=docs_only(diff, policy)) == "light"
     producer = producer_provider(github.commit_messages(pr.repository, pr.number))
     chain = policy.chain_for(producer=producer)
     criteria = _criteria(ledger, project, pr)
-    common = dict(criteria=criteria, run_judge=run_judge, root=root, failures=failures, notes=notes)
+    instructions = round_instructions(
+        "closure" if step == "closure" else "round",
+        round_,
+        artifact,
+        head_moved=step == "closure" and not same_head,
+        delta=delta is not None,
+    )
+    common = dict(
+        criteria=criteria,
+        run_judge=run_judge,
+        root=root,
+        failures=failures,
+        notes=notes,
+        instructions=instructions,
+    )
     # One depth for the whole review, computed once from the change. The chunked path below
     # used to hardcode `deep` and never read `light`, so a docs-only pull request big enough
     # to be split woke the deep models on every piece — the cost the light tier exists to
@@ -489,7 +828,9 @@ def _review_started(
     # files. The old behaviour handed over `diff[:budget]` and recorded that it had: measured
     # on the first external pull request, 21% of the change, ruled `approve`. Only a file too
     # large to bound on its own still counts as truncated.
-    budget = diff_budget(pr, policy, chain, criteria=criteria, notes=notes)
+    budget = diff_budget(
+        pr, policy, chain, criteria=criteria, notes=notes, instructions=instructions
+    )
     chunks = split_diff(diff, budget=budget)
     unbounded = oversized(chunks, budget=budget)
     truncated = bool(unbounded)
@@ -509,53 +850,55 @@ def _review_started(
                     **{**common, "notes": part},
                 )
             )
-        verdict = (
-            _merge(replies, mode, truncated)
-            if any(r.verdict for r in replies)
-            else ReviewVerdict(
-                verdict="request_changes",
-                summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
-                findings=[],
-                mode=mode,
-                providers=(),
-                diff_truncated=truncated,
-            )
-        )
-        return _publish(
-            pr,
-            check,
-            verdict,
-            verdict.verdict,
-            github=github,
-            policy=policy,
-            ledger=ledger,
-            project=project,
-            repo_path=repo_path,
-            failures=failures,
-        )
-    if light:
-        replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=1, **common)
+        merged = _merge(replies, mode, truncated) if any(r.verdict for r in replies) else None
     else:
-        replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=2, **common)
-        decisions = {r.verdict.verdict for r in replies if r.verdict}
-        escalate = len(decisions) > 1 or any(r.verdict.important for r in replies if r.verdict)
-        if escalate:
-            used = {r.provider for r in replies}
-            deep_chain = tuple(p for p in chain if p not in used) or chain
-            deep = _judge_chain(pr, diff, policy, deep_chain, tier="deep", wanted=1, **common)
-            replies = deep or replies  # the deep judge's verdict wins
-    if not any(r.verdict for r in replies):
+        if light:
+            replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=1, **common)
+        else:
+            replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=2, **common)
+            decisions = {r.verdict.verdict for r in replies if r.verdict}
+            escalate = len(decisions) > 1 or any(r.verdict.important for r in replies if r.verdict)
+            if escalate:
+                used = {r.provider for r in replies}
+                deep_chain = tuple(p for p in chain if p not in used) or chain
+                deep = _judge_chain(pr, diff, policy, deep_chain, tier="deep", wanted=1, **common)
+                replies = deep or replies  # the deep judge's verdict wins
+        merged = _merge(replies, mode, truncated) if any(r.verdict for r in replies) else None
+
+    if merged is None:
+        # No verdict at all: fail closed. An outage is not a judged round (Ruling 32): it is
+        # recorded as "no_verdict", which moves neither the round counter nor `last_judged`, so
+        # an outage never burns a round and never ages the rulings of a closure check out of
+        # `state.rulings`. The open findings stay open until a real judge answers them.
+        findings = [
+            f.model_copy(update={"status": "still_open"}) if f.open_blocker else f
+            for f in state.findings
+        ]
         verdict = ReviewVerdict(
             verdict="request_changes",
             summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
-            findings=[],
+            findings=_capped(findings),
             mode=mode,
             providers=(),
             diff_truncated=truncated,
+            round="no_verdict",
+            artifact=artifact,
         )
         title = "no verdict"
     else:
-        verdict = _merge(replies, mode, truncated)
+        verdict = _finish(
+            merged,
+            pr=pr,
+            state=state,
+            step=step,
+            round_=round_,
+            artifact=artifact,
+            delta=delta,
+            whole=whole,
+            cf_open=cf_open,
+            section=section,
+            delta_bound=step == "closure" and not same_head,
+        )
         title = verdict.verdict
     return _publish(
         pr,

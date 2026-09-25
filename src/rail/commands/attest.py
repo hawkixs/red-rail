@@ -97,6 +97,13 @@ def command(
 ) -> None:
     """Record an attestation (released, deployed, rolled_back, …) in the project's ledger."""
     attestation = AttestationKind(kind)
+    if kind == AttestationKind.REVIEW_RULING.value and replay is None:
+        # a ruling is the operator's decision on one open blocker (spec 2026-09-25, D9): only
+        # `rail reviewer rule` checks that the finding awaits one; a replay of its mirror is fine
+        raise click.UsageError(
+            "a review_ruling is written by `rail reviewer rule`, which checks the finding "
+            "awaits a ruling; `rail attest review_ruling --from <receipt>` only replays one"
+        )
     try:
         ledger = open_ledger(repo)
         project = load_rail_config(repo).project

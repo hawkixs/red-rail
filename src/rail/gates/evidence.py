@@ -375,8 +375,87 @@ def fulfilled(repo: Path) -> GateResult:
     return GateResult(Stage.LEARN, "fulfilled", True, f"fulfilled {done.digest[:19]}")
 
 
+def carry_forward(repo: Path) -> GateResult:
+    """Every approving code verdict accounted for each carry-forward open before it (spec
+    2026-09-25-review-loop-closure, D12). The reviewer enforces this at review time; the gate
+    catches a receipt written some other way and a reviewer regression — never raises, even on
+    a malformed `carry_forwards` or `findings` field."""
+    from pydantic import ValidationError
+
+    from rail.reviewer import rounds
+
+    verdicts = _attestations(repo, AttestationKind.REVIEW_VERDICT)
+    if isinstance(verdicts, str):
+        return GateResult(Stage.REVIEW, "carry_forward", False, verdicts)
+    if isinstance(verdicts, Need):
+        return verdicts.result(Stage.REVIEW, "carry_forward")
+    rulings = _attestations(repo, AttestationKind.REVIEW_RULING)
+    rulings = rulings if isinstance(rulings, list) else []
+    # validated up front, so a malformed `carry_forwards` is reported against the receipt
+    # that carries it, not against whichever `rounds` call happens to touch it first
+    for v in verdicts:
+        try:
+            rounds.carry_forwards_of(v)
+        except (ValidationError, ValueError, TypeError) as exc:
+            return GateResult(
+                Stage.REVIEW,
+                "carry_forward",
+                False,
+                f"malformed carry-forward receipt on {v.data.get('repository')}#"
+                f"{v.data.get('pr')}: {exc}",
+            )
+    try:
+        for index, v in enumerate(verdicts):
+            data = v.data
+            if data.get("artifact") != "code" or data.get("verdict") != "approve":
+                continue
+            before = [r for r in rulings if r.recorded_at < v.recorded_at]
+            open_ = rounds.open_carry_forwards(
+                verdicts[:index],
+                before,
+                repository=str(data.get("repository")),
+                excluding_pr=data.get("pr"),
+            )
+            carry = rounds.carry_forwards_of(v)
+            accounted = set(carry.addressed) | set(carry.deferred)
+            missing = [i for i in open_ if i not in accounted]
+            if missing:
+                return GateResult(
+                    Stage.REVIEW,
+                    "carry_forward",
+                    False,
+                    f"approving verdict on {data.get('repository')}#{data.get('pr')} left "
+                    f"{', '.join(missing)} unaccounted",
+                )
+        if not verdicts:
+            return GateResult(Stage.REVIEW, "carry_forward", True, "no carry-forward recorded")
+        repositories = sorted({str(v.data.get("repository")) for v in verdicts})
+        open_all = [
+            i
+            for repo_slug in repositories
+            for i in rounds.open_carry_forwards(verdicts, rulings, repository=repo_slug)
+        ]
+    except (ValidationError, ValueError, TypeError) as exc:
+        return GateResult(Stage.REVIEW, "carry_forward", False, f"malformed receipt: {exc}")
+    if not open_all and not any(
+        isinstance(v.data.get("findings"), list)
+        and any(f.get("class") == "carry_forward" for f in v.data["findings"])
+        for v in verdicts
+    ):
+        return GateResult(Stage.REVIEW, "carry_forward", True, "no carry-forward recorded")
+    more = f" and {len(open_all) - 10} more" if len(open_all) > 10 else ""
+    shown = ", ".join(open_all[:10]) + more
+    return GateResult(
+        Stage.REVIEW,
+        "carry_forward",
+        True,
+        f"{len(open_all)} open" + (f": {shown}" if open_all else ""),
+    )
+
+
 GATES = [
     GateSpec(Stage.REVIEW, "verdict", verdict, scope="ledger"),
+    GateSpec(Stage.REVIEW, "carry_forward", carry_forward, scope="ledger"),
     GateSpec(Stage.INTEGRATE, "receipt", integrated, scope="ledger"),
     GateSpec(Stage.RELEASE, "released", released, scope="ledger"),
     GateSpec(Stage.DEPLOY, "deployed", deployed, scope="ledger"),

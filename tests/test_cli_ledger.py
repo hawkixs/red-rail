@@ -630,3 +630,13 @@ def test_contract_set_shows_the_contract_and_asks_before_writing(tmp_path: Path)
     # `--yes` is the same path without the question, for a script
     assert CliRunner().invoke(main, [*args, "--yes", "--key", "c2"]).exit_code == 0
     assert len(list((repo / RECEIPTS_DIR).glob("*.json"))) == 2
+
+
+def test_attest_refuses_a_new_review_ruling_and_names_the_command(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    out = CliRunner().invoke(
+        main,
+        ["attest", "review_ruling", "--repo", str(repo), "--data", "pr=7"],
+    )
+    assert out.exit_code == 2
+    assert "rail reviewer rule" in out.output

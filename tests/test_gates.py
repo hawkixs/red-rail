@@ -71,6 +71,7 @@ def test_run_gates_returns_one_result_per_gate_and_never_raises(
         "build.secrets",
         "build.commits",
         "review.verdict",
+        "review.carry_forward",
         "integrate.receipt",
         "release.released",
         "deploy.deployed",
@@ -79,10 +80,16 @@ def test_run_gates_returns_one_result_per_gate_and_never_raises(
         "learn.fulfilled",
     ]
     by_id = {r.gate_id: r for r in results}
-    # vacuous pass on an empty tree: no receipts to check, no roster in scope, and
+    # vacuous pass on an empty tree: no receipts to check, no roster in scope,
     # hygiene.mirrors defaults to the file ledger with no manifest to declare otherwise
-    # (spec 2026-09-23: absent-manifest defaults apply, `docs/receipts` is the ledger).
-    vacuous = ("hygiene.receipts", "hygiene.roster_entry", "hygiene.mirrors")
+    # (spec 2026-09-23: absent-manifest defaults apply, `docs/receipts` is the ledger), and
+    # review.carry_forward has nothing recorded to account for.
+    vacuous = (
+        "hygiene.receipts",
+        "hygiene.roster_entry",
+        "hygiene.mirrors",
+        "review.carry_forward",
+    )
     assert all(by_id[gate_id].passed for gate_id in vacuous)
     assert all(not r.passed for r in results if r.gate_id not in vacuous)
 

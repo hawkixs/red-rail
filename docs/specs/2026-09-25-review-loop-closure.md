@@ -302,3 +302,15 @@ only the rulings below". The artifact type selects the class definitions of deci
   round 2 should see everything.
 - **The pool doctrine** ("stop at the 3rd request_changes") should say, once this lands: after
   round 3 the reviewer asks for your ruling itself, with the command to run.
+
+## Amendments (2026-09-25)
+
+- The moved-head closure is judged on the delta, and a new blocker inside it blocks (Q82,
+  amends D9/D10).
+- No delta means the whole pull request diff counts as the delta (Q84, amends D5/D10).
+- A pass where every judge failed is recorded as round `no_verdict`, which moves neither the
+  round counter nor the rulings' cutoff (amends D5).
+- Body-derived carry-forward blockers ("not accounted for", "deferred without a reason") never
+  need a ruling; the author clears them by editing the body (resolves D9/D11).
+- A carry_forward ruling on a "CF-x not addressed" blocker defers CF-x; a carry_forward ruling
+  opens a carry-forward only once its pull request is approved (amends D11).
