@@ -30,7 +30,7 @@ rail — dogfooding — and `rail.yaml` declares tier `dev`.
 | Invariant | Why |
 |---|---|
 | **A gate is a pure function `fn(repo: Path) -> GateResult` and never raises** | The same function runs locally, in CI and behind a skill, so policy exists exactly once. A gate that raises, reads the network, or depends on ambient state breaks all three at once. |
-| **brain never learns a new gate; red-rail stores no durable fact outside the ledger** | The two boundary rules with brain-v42. Both are testable — keep them that way. |
+| **brain never learns a new gate; red-rail stores no durable fact outside the ledger** | The two boundary rules with brain-v42. Both are testable — keep them that way. The spool (`$RAIL_SPOOL_DIR/<project>`) holds only attestations brain has not recorded yet. |
 | **No `# rail: ignore`** | The only bypass is a `gates:` override in `rail.yaml` with a mandatory reason, reported by `rail check` and `rail audit`. Never hidden. |
 | **Secrets live in `~/.config/red-rail/` as 0600 files** | Never in the tree, never in an environment variable holding the value, never on a command line. The brain bearer is read from `RAIL_BRAIN_TOKEN_FILE` only. |
 | **Attestations come only from the server host** | The runner VM never reaches brain or the VPS. |
@@ -63,6 +63,10 @@ parsing.
 
 - Brainstorm → spec → plan → implement. Specs in `docs/specs/`, plans in `docs/plans/`, ADRs
   numbered in `docs/adr/`, all dated `YYYY-MM-DD-<slug>.md`.
+- A change to the rail names what pulls it: the product delivery it unblocks (a ticket), or
+  the process-induced operator load it lowers, with the expected effect. A spec states which
+  in a one-line `Motivation:` under its title. The full rule is in CLAUDE.md, § "How we
+  work".
 - TDD: write the failing test first, watch it fail, implement the minimum. The audit matrix
   is golden-tested (`tests/golden/audit-matrix.json`) — update the golden deliberately, never
   to make a test pass.
@@ -72,6 +76,8 @@ parsing.
   exit code.
 - `docs/receipts/` is the file ledger, written by `rail attest` / `rail contract`. **Never
   edit a receipt by hand** — it is append-only, digest-checked, and fails closed on tampering.
+  Under `ledger: brain` the rail writes nothing there: a pending attestation waits in the
+  host's spool until `rail ledger replay`.
 
 ## Brain MCP
 

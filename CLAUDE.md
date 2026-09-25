@@ -52,8 +52,9 @@ comments, test names. The conversation with the operator stays in French.
   container). Three scopes: `repo`; `workstation` (`hygiene.remotes`,
   `hygiene.roster_entry`, `observe.visible`, skipped under `--ci`); `ledger` (`intent.contract`,
   `hygiene.mirrors`, every evidence gate but `observe.visible` — skipped under `--ci` when `ledger: brain`, because CI
-  never holds a ledger credential). `hygiene.mirrors` reports a receipt whose digest is absent
-  from the shared ledger (drift). `review.verdict` accepts only an independent, approving
+  never holds a ledger credential). `hygiene.mirrors` fails while the spool holds an
+  attestation, and reports a committed receipt whose digest is absent from the shared ledger
+  (drift). `review.verdict` accepts only an independent, approving
   verdict issued by `review.reviewer_identity` (default `red-rail-reviewer`).
 - `src/rail/http.py` — one bounded GET, timeout and size-capped, the only way the rail reaches
   a network URL that is not brain or GitHub.
@@ -86,8 +87,10 @@ comments, test names. The conversation with the operator stays in French.
   builds its remote scripts before its first side effect, so a refusal records nothing).
 - `src/rail/ledger/` — the `Ledger` protocol, `FileLedger` (`docs/receipts/*.json`, append-only,
   digest + idempotency key, fails closed on a tampered receipt) and `BrainLedger`
-  (`ledger/brain.py`: brain-v42 is the authority, the receipts are mirrors written BEFORE the
-  call; a refusal raises `Unattested` and `rail attest` exits 2 with the replay command;
+  (`ledger/brain.py`: brain-v42 is the authority, an attestation waits BEFORE the call in the
+  host's spool (`ledger/spool.py`, `$RAIL_SPOOL_DIR/<project>`, never in a repository) and
+  leaves it once brain has recorded it; a refusal raises `Unattested`, `rail attest` exits 2,
+  and `rail attest --from` or `rail ledger replay` sends it again;
   `integrated`/`fulfilled` are brain milestones read from the ticket; the contract is set as the
   requester `red`, attestations as the project). `ledger:` in `rail.yaml` selects the
   authority (`file` default, `brain` needs `ticket:`) — ADR-0002. `idempotency_key_for`
@@ -112,7 +115,8 @@ comments, test names. The conversation with the operator stays in French.
   `rail reviewer rule`, then one closure check (spec 2026-09-25-review-loop-closure)),
   `config.py` (`~/.config/red-rail/reviewer.yaml`).
 - `src/rail/commands/` — one module per command, auto-discovered by `src/rail/cli.py`:
-  `check`, `attest`, `bind` (the PR to the contract, at its opening), `contract`, `ledger`,
+  `check`, `attest`, `bind` (the PR to the contract, at its opening), `contract`,
+  `ledger` (`list`, `replay`),
   `audit`, `metrics`, `new`, `upgrade`, `brain` (`ping`), `reviewer` (`once`, `run`, `rule`),
   `release` (stage 7), `deploy` (`--rollback`, `--plan`), `drill` (stage 9), `accept` (stage 10,
   as the requester); `new` takes `--ledger`/`--ticket`. Exit code is the verdict; `--json` is the
@@ -125,7 +129,8 @@ comments, test names. The conversation with the operator stays in French.
   launched by the `rail-review` skill from the producing session: a pre-review, never the gate.
 
 Boundary rules with brain-v42, both testable: brain never learns a new gate; red-rail stores
-no durable fact outside the ledger.
+no durable fact outside the ledger — its spool holds only attestations brain has not recorded
+yet.
 
 ## Stack
 
@@ -165,7 +170,7 @@ red-rail/
 ├── docs/specs/            # design specs (dated)
 ├── docs/plans/            # implementation plans (dated)
 ├── docs/adr/              # architecture decision records (numbered)
-├── docs/receipts/         # the file ledger: written by `rail attest` / `rail contract`, never by hand
+├── docs/receipts/         # the file ledger: written by `rail attest` / `rail contract`, never by hand (under `ledger: brain`: history only)
 ├── template/project/      # copier template (CLAUDE.md, rail.yaml, Makefile, CI, docs, skeletons)
 ├── .github/workflows/     # continuous-integration.yml + rail-ci.yml (reusable, called by projects)
 ├── workflows/             # pre-review.js (tiered pre-review, passes the tiering gate)
@@ -214,6 +219,13 @@ What this repository adds:
   the tiering gate.
 - The invariants a change here must not break, the public-repository rules included, are in
   `AGENTS.md`.
+- A change to the rail names what pulls it, with the effect it expects: the product delivery it
+  unblocks (a ticket), or the operator load it lowers among the classes the process induces
+  (ticket `c5231125`: method choice, review loop, rail or reviewer defect, paperwork,
+  permission for a gesture whose gates are all green, plan approval). A red-rail spec says
+  which in a one-line `Motivation:` under its title.
+- No gate checks that rule. Once `rail metrics` measures the induced load, a change that raised
+  it is revisited: the harness grows only when that pays back in autonomy.
 
 ## Brain MCP — proactive use
 
