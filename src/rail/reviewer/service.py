@@ -472,7 +472,8 @@ def _publish(
         return outcome
     outcome.attested = True
     if repo_path is not None:
-        outcome.receipt = repo_path / RECEIPTS_DIR / receipt_filename(record)
+        kept = repo_path / RECEIPTS_DIR / receipt_filename(record)
+        outcome.receipt = kept if kept.is_file() else None
     conclusion = "success" if verdict.verdict == "approve" else "failure"
     github.complete_check(
         pr.repository,

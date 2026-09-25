@@ -2227,3 +2227,56 @@ def test_a_no_judge_closure_recomputes_addressed_from_the_current_body(tmp_path)
     assert (out.verdict.round, out.verdict.verdict) == ("closure", "approve")
     assert out.verdict.carry_forwards.addressed == ()
     assert out.verdict.carry_forwards.deferred == ("CF-5-1",)
+
+
+# --- A5: under ledger brain, no caller writes or promises a receipt in the repository ------
+
+
+def test_a_verdict_on_the_brain_ledger_leaves_no_file_in_the_checkout(tmp_path: Path) -> None:
+    from rail.brain.client import BrainClient
+    from rail.ledger.brain import BrainLedger
+    from rail.ledger.spool import spool_directory
+    from tests.fake_brain import FakeBrain
+
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    brain = FakeBrain(agent="red-rail-reviewer")
+    ticket = brain.add_ticket("red", "red-alpha")
+    brain.register_repository("red-alpha", 4242, "hawkixs/red-alpha")
+    ledger = BrainLedger(
+        BrainClient.in_memory(brain, agent="red-rail-reviewer"),
+        ticket=ticket,
+        project="red-alpha",
+        spool_dir=spool_directory("red-alpha"),
+        repository_id=lambda slug: 4242,
+    )
+    ledger.contract_set(
+        "red-alpha",
+        Contract(
+            objective="x",
+            deliverables=[
+                Deliverable(
+                    key="main",
+                    repository="hawkixs/red-alpha",
+                    repository_id=4242,
+                    no_checks_reason="fixture: no check declared",
+                )
+            ],
+        ),
+        reason="bootstrap",
+        issuer="red",
+        idempotency_key="c1",
+    )
+    outcome = review_pull(
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, **_: approve(
+            provider, tier
+        ),
+        root=tmp_path,
+    )
+    assert outcome.attested and outcome.receipt is None
+    assert not list((repo / RECEIPTS_DIR).glob("*review_verdict*")) and ledger.pending() == []

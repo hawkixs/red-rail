@@ -1,6 +1,6 @@
 """`rail release --version X.Y.Z`: stage 7 from the host. `--plan` prints the steps and
-touches nothing; the receipt lands in docs/receipts/ and travels in a dedicated receipts
-PR (decision c8b0ea45)."""
+touches nothing; under `ledger: file` the receipt lands in docs/receipts/ and travels in a
+dedicated receipts PR (decision c8b0ea45)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from pydantic import ValidationError
 
 from rail.commands._options import json_option, repo_option
 from rail.commands.attest import echo_record
-from rail.ledger import LedgerError, Unattested, open_ledger
+from rail.ledger import RECEIPTS_DIR, LedgerError, Unattested, open_ledger
+from rail.ledger.file import receipt_filename
 from rail.release import ReleaseError, attest, build_and_push, login, preflight, tag_and_push
 
 RUN = subprocess.run  # module-level so a test can inject a fake host
@@ -72,5 +73,5 @@ def command(repo: Path, version: str, issuer: str, dry_run: bool, yes: bool, as_
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc
     echo_record(record, repo, as_json)
-    if not as_json:
+    if not as_json and (repo / RECEIPTS_DIR / receipt_filename(record)).is_file():
         click.echo("commit the receipt in a dedicated receipts PR (decision c8b0ea45)")
