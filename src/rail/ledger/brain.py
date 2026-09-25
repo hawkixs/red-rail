@@ -231,24 +231,9 @@ class BrainLedger:
             )
         except BrainToolError as exc:
             if exc.code == "idempotency_key_reused":
-                # The spool drains on success (decision 1): a retry after the receipt is
-                # already gone gets a fresh `emitted_at`, which brain's own replay equality
-                # (contract `delivery-attestations-v1.0`) never matches. Brain itself is then
-                # the only place left holding the original event, so it settles the replay.
-                receipt.unlink(missing_ok=True)
-                existing = next(
-                    (
-                        r
-                        for r in self._attestation_records(None)
-                        if r.idempotency_key == idempotency_key
-                    ),
-                    None,
-                )
-                if existing is not None and existing.attestation is kind and existing.data == data:
-                    return existing
-                raise IdempotencyConflict(
-                    f"idempotency key {idempotency_key!r} already used"
-                ) from exc
+                row = self._lookup(receipt, kind, idempotency_key)
+                if row is not None:
+                    return self._settle(record, receipt, row)
             raise Unattested(receipt, exc.code) from exc
         except BrainUnreachable as exc:
             raise Unattested(receipt, "unreachable") from exc
@@ -328,6 +313,50 @@ class BrainLedger:
             raise LedgerError(f"{name}: {exc}") from exc
         except BrainUnreachable as exc:
             raise LedgerError(f"brain unreachable: {exc}") from exc
+
+    def _lookup(self, receipt: Path, kind: AttestationKind, key: str) -> dict[str, Any] | None:
+        """Brain's row for a key; a brain that cannot answer leaves the receipt waiting."""
+        try:
+            return self._row_by_key(kind, key)
+        except BrainToolError as exc:
+            raise Unattested(receipt, exc.code) from exc
+        except BrainUnreachable as exc:
+            raise Unattested(receipt, "unreachable") from exc
+
+    def _row_by_key(self, kind: AttestationKind, key: str) -> dict[str, Any] | None:
+        cursor: str | None = None
+        while True:
+            arguments: dict[str, Any] = {
+                "actor_project": self.project,
+                "ticket_id": str(self.ticket),
+                "kind": kind.value,
+                "limit": PAGE,
+                "cursor": cursor,
+            }
+            page = self._call("brain_delivery_attestation_list", arguments)
+            for row in page.get("items", []):
+                if row.get("idempotency_key") == key and row.get("issuer_project") == self.project:
+                    return row
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return None
+
+    def _settle(self, record: Record, receipt: Path, row: dict[str, Any]) -> Record:
+        """Brain holds this key already (spec decision 2, step 5). Its replay equality also
+        compares the instant, the issuer label and the contract revision, so only the payload
+        digest decides: the same payload is recorded; another can never be. Either way the
+        receipt leaves the spool, so it never holds `hygiene.mirrors` red forever."""
+        receipt.unlink(missing_ok=True)
+        ours = brain_digest(record.data)
+        if str(row["digest"]) != ours:
+            raise IdempotencyConflict(
+                f"brain holds {record.idempotency_key!r} with payload digest {row['digest']}; "
+                f"this attestation's is {ours}: it cannot be recorded and left the spool"
+            )
+        settled = record_from_row(self.project, row)
+        if settled is None:
+            raise LedgerError(f"brain row {row.get('id')}: unknown kind {row.get('kind')!r}")
+        return settled
 
     def _view(self, *, required: bool) -> dict[str, Any] | None:
         try:

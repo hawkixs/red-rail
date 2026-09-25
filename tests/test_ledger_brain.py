@@ -13,6 +13,7 @@ from rail.ledger import (
     AttestationKind,
     Contract,
     Deliverable,
+    IdempotencyConflict,
     Ledger,
     LedgerError,
     Record,
@@ -41,6 +42,7 @@ CONTRACT = Contract(
         )
     ],
 )
+RELEASE = {"version": "1.0.0", "digest": "sha256:" + "a" * 64}
 
 
 def _clock(start: datetime = T0):
@@ -229,6 +231,58 @@ def test_a_refusal_leaves_the_receipt_in_the_spool_and_a_replay_drains_it(tmp_pa
     )
     assert again == waiting and len(brain.attestations) == 1
     assert not exc.value.receipt.exists()
+
+
+def test_a_key_brain_holds_with_the_same_payload_is_already_recorded(tmp_path: Path) -> None:
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    first = ledger.attest(
+        "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+    )
+    later = ledger.attest(
+        "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+    )
+    assert later == first, "brain's row, although the clock gave the retry a new instant"
+    assert len(brain.attestations) == 1 and not list(ledger.spool.root.glob("*.json"))
+
+
+def test_a_key_brain_holds_with_another_payload_is_a_conflict_that_leaves_the_spool(
+    tmp_path: Path,
+) -> None:
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    ledger.attest("red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1")
+    other = {**RELEASE, "digest": "sha256:" + "b" * 64}
+    with pytest.raises(IdempotencyConflict) as exc:
+        ledger.attest(
+            "red-probe", AttestationKind.RELEASED, other, issuer="op", idempotency_key="r1"
+        )
+    assert brain_digest(RELEASE) in str(exc.value) and brain_digest(other) in str(exc.value)
+    assert not list(ledger.spool.root.glob("*.json"))
+
+
+def test_an_unanswerable_reuse_leaves_the_receipt_waiting(tmp_path: Path) -> None:
+    """`_row_by_key` returning nothing on a reused key is not proof brain never recorded it —
+    only that the lookup could not confirm it. `Unattested` keeps the receipt, never a
+    conflict, so nothing is discarded on a guess."""
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    ledger.attest(
+        "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+    )
+    ledger._row_by_key = lambda kind, key: None  # type: ignore[method-assign]
+    with pytest.raises(Unattested) as exc:
+        ledger.attest(
+            "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+        )
+    assert exc.value.cause == "idempotency_key_reused"
+    assert exc.value.receipt.is_file()
 
 
 def test_the_spool_belongs_to_the_project_not_to_a_checkout() -> None:
