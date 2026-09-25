@@ -220,6 +220,7 @@ def test_old_verdicts_have_no_findings_list() -> None:
         (["docs/plans/p.md", "docs/receipts/r.json"], "spec_plan"),
         (["docs/specs/s.md", "src/rail/x.py"], "code"),
         (["README.md"], "code"),
+        (["docs/receipts/r.json"], "records"),
         ([], "code"),
     ],
 )

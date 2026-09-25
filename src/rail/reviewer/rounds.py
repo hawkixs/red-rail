@@ -56,8 +56,12 @@ def f_id(cf: str) -> str:
 
 
 def artifact_of(paths: Iterable[str], records_globs: Sequence[str]) -> Artifact:
-    """D1: spec/plan when every file is under docs/specs/ or docs/plans/, records ignored."""
+    """D1: spec/plan when every file is under docs/specs/ or docs/plans/, records ignored.
+    records when every file is a record (spec 2026-09-25-spool-replaces-committed-mirrors, D5)."""
+    paths = list(paths)
     own = [p for p in paths if not any(fnmatch.fnmatch(p, g) for g in records_globs)]
+    if paths and not own:
+        return "records"
     if own and all(p.startswith(SPEC_PLAN_DIRS) for p in own):
         return "spec_plan"
     return "code"
