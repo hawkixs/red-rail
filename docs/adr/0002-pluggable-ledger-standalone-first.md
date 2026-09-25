@@ -106,5 +106,6 @@ Spec `docs/specs/2026-09-25-spool-replaces-committed-mirrors.md`, ticket `53e7a7
   their protection is brain's backup. Receipts committed before stay, and `hygiene.mirrors` still
   matches them against brain. "Same files, only the authority changes" no longer holds in brain
   mode.
-- **The file ledger is unchanged**: receipts are committed, and a pull request that only adds
-  receipts gets a mechanical verdict instead of a judge.
+- **The file ledger is unchanged**: receipts are committed. A pull request that only adds
+  receipts will get a mechanical verdict instead of a judge (spec decision 5, delivered by the
+  next pull request).

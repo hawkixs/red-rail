@@ -315,6 +315,8 @@ def test_an_unattested_verdict_is_reported_not_fatal(tmp_path: Path) -> None:
         root=tmp_path,
     )
     assert not outcome.attested and "delivery_disabled" in outcome.failures[-1]
+    # I2: the replay hint names both paths — the receipt itself and every waiting one
+    assert "rail ledger replay" in outcome.failures[-1]
     # found by the independent reviewer (PR #3, third pass): never an approval GitHub shows
     # that the ledger does not hold — the check fails and no APPROVE is posted
     assert ("complete", 99, "failure", "verdict not attested") in github.calls
