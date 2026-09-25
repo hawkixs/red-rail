@@ -20,7 +20,7 @@ from rail.reviewer.verdict import Artifact, Finding, PreviousAnswer
 Step = Literal["round", "awaiting_ruling", "closure"]
 JUDGED_ROUNDS = (1, 2, 3, None)  # None: a verdict recorded before this change
 SPEC_PLAN_DIRS = ("docs/specs/", "docs/plans/")
-_DIFF_FILE = re.compile(r"^diff --git a/(?P<path>\S+) b/", re.MULTILINE)
+_PLUS_FILE = re.compile(r"^\+\+\+ (?P<path>\S+)", re.MULTILINE)
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@", re.MULTILINE)
 
 
@@ -77,8 +77,9 @@ def loop_state(verdicts: Sequence[Record], rulings: Sequence[Record]) -> LoopSta
     judging = [v for v in verdicts if _judged(v) or v.data.get("round") == "closure"]
     last_judged = judging[-1] if judging else None
     latest = verdicts[-1] if verdicts else None
-    findings = (_findings(latest) if latest is not None else None) or ()
-    has_list = latest is not None and _findings(latest) is not None
+    latest_findings = _findings(latest) if latest is not None else None
+    findings = latest_findings or ()
+    has_list = latest_findings is not None
     after = last_judged.recorded_at if last_judged is not None else None
     ruled: dict[str, Ruling] = {}
     for r in rulings:
@@ -120,13 +121,16 @@ def next_step(state: LoopState) -> tuple[Step, int | None]:
 
 
 def changed_lines(delta: str) -> dict[str, set[int]]:
-    """New-side line numbers each hunk covers, per file."""
+    """New-side line numbers each hunk covers, per file — keyed by the `+++ b/<path>` line
+    (a rename's findings cite the new path, not the `diff --git a/` header); `+++ /dev/null`
+    (a deletion) is skipped."""
     lines: dict[str, set[int]] = {}
     for block in re.split(r"(?=^diff --git )", delta, flags=re.MULTILINE):
-        match = _DIFF_FILE.search(block)
-        if not match:
+        match = _PLUS_FILE.search(block)
+        if not match or match["path"] == "/dev/null":
             continue
-        covered = lines.setdefault(match["path"], set())
+        path = match["path"].removeprefix("b/")
+        covered = lines.setdefault(path, set())
         for hunk in _HUNK.finditer(block):
             start = int(hunk["start"])
             count = int(hunk["count"]) if hunk["count"] is not None else 1
@@ -139,16 +143,19 @@ def _demoted(artifact: Artifact) -> str:
 
 
 def enforce_class(f: Finding, artifact: Artifact) -> Finding:
-    """D2: the judge proposes, the table decides."""
+    """D2: the judge proposes, the table decides.
+
+    On `code`, severity alone decides — a judge's "note" no longer downgrades a blocking
+    finding. On `spec_plan`, a proposed "blocker" or "carry_forward" is kept; anything else
+    (None or "note") falls back on severity: blocking -> "blocker", otherwise ->
+    "carry_forward"."""
     if artifact == "code":
         klass = "blocker" if f.severity == "blocking" else "note"
-        if f.klass == "note":
-            klass = "note"
     else:
         if f.klass in ("blocker", "carry_forward"):
             klass = f.klass
         else:
-            klass = "blocker" if (f.klass is None and f.severity == "blocking") else "carry_forward"
+            klass = "blocker" if f.severity == "blocking" else "carry_forward"
     return f if f.klass == klass else f.model_copy(update={"klass": klass})
 
 
@@ -158,13 +165,23 @@ def demote_outside(
     artifact: Artifact,
     *,
     known: Collection[str] = (),
+    skip: bool = False,
 ) -> list[Finding]:
     """D5 round 3: a NEW finding survives only on a line the delta changed; with no delta
-    (a rebase, a lost base) every new finding is demoted. A finding whose id is in `known`
-    is an earlier one and is untouched; an id the judge invented is new (Review Focus 4)."""
+    (a rebase, a lost base) every new finding is demoted. Every finding is classified with
+    `enforce_class` before the skip test, so an unclassified (klass None) blocking finding
+    is demoted too. A finding whose id is in `known` is an earlier one and is untouched; an
+    id the judge invented is new (Review Focus 4).
+
+    `skip`: True when the caller has no findings list to compare against (rollout: a PR's
+    round-3 verdict recorded before this change). Demotion needs that history; without it,
+    every finding is classified and returned unchanged rather than wrongly demoted."""
+    if skip:
+        return [enforce_class(f, artifact) for f in findings]
     covered = changed_lines(delta) if delta else {}
     out: list[Finding] = []
     for f in findings:
+        f = enforce_class(f, artifact)
         if (f.id is not None and f.id in known) or f.klass != "blocker":
             out.append(f)
             continue
@@ -193,8 +210,11 @@ def assign(
     repeated = {f.id for f in new if f.id in known}
     out: list[Finding] = []
     for fid, f in known.items():
-        if f.status in ("fixed", "ruled"):
+        if f.status == "ruled":
             out.append(f)
+        elif f.status == "fixed":
+            # sticky, unless the judge reports it again: a regression (Review Focus 3)
+            out.append(f if fid not in repeated else f.model_copy(update={"status": "still_open"}))
         elif answers.get(fid) == "fixed" and fid not in repeated:
             out.append(f.model_copy(update={"status": "fixed"}))
         else:
@@ -257,7 +277,7 @@ def open_carry_forwards(
         if v.data.get("verdict") != "approve":
             continue
         for f in _findings(v) or ():
-            if f.klass == "carry_forward" and f.id:
+            if f.klass == "carry_forward" and f.id and f.status != "fixed":
                 opened.setdefault(cf_id(f.id), None)
         carry = v.data.get("carry_forwards") or {}
         addressed.update(carry.get("addressed", []))

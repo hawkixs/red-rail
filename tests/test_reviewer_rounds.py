@@ -130,6 +130,8 @@ def _f(**over) -> Finding:
         ("spec_plan", None, "important", "carry_forward"),
         ("spec_plan", "note", "minor", "carry_forward"),
         ("spec_plan", "carry_forward", "blocking", "carry_forward"),
+        ("code", "note", "blocking", "blocker"),
+        ("spec_plan", "note", "blocking", "blocker"),
     ],
 )
 def test_enforce_class(artifact, klass, severity, expected) -> None:
@@ -184,6 +186,14 @@ def test_a_fixed_finding_stays_fixed() -> None:
     assert out[0].status == "fixed" and rounds.approves(out)
 
 
+def test_a_fixed_finding_regresses_when_the_judge_repeats_it() -> None:
+    state = rounds.loop_state([verdict(1, 1, [_finding(1, status="fixed")])], [])
+    new = [_f(id="F-7-1", title="again")]
+    out = rounds.assign(new, [], state, pr=7, artifact="code")
+    assert out[0].id == "F-7-1" and out[0].status == "still_open"
+    assert not rounds.approves(out)
+
+
 # --- C2: round 3 does not hunt -------------------------------------------------------------
 
 DELTA = (
@@ -192,8 +202,18 @@ DELTA = (
 )
 
 
+RENAME_DELTA = (
+    "diff --git a/src/old.py b/src/new.py\n--- a/src/old.py\n+++ b/src/new.py\n"
+    "@@ -1,2 +1,3 @@\n ctx\n+new line\n ctx\n"
+)
+
+
 def test_changed_lines_reads_new_side_hunks() -> None:
     assert rounds.changed_lines(DELTA) == {"src/x.py": {10, 11, 12}}
+
+
+def test_changed_lines_uses_the_new_side_path_on_a_rename() -> None:
+    assert "src/new.py" in rounds.changed_lines(RENAME_DELTA)
 
 
 def test_demote_outside_keeps_findings_in_the_delta_only() -> None:
@@ -217,6 +237,18 @@ def test_demote_outside_without_a_delta_demotes_every_new_finding() -> None:  # 
     assert out[0].klass == "note"
 
 
+def test_demote_outside_classifies_before_skipping() -> None:
+    unclassified = _f(line=40)  # klass None, severity blocking: enforce_class makes it "blocker"
+    out = rounds.demote_outside([unclassified], DELTA, "code")
+    assert out[0].klass == "note"  # then demoted: line 40 is outside the delta
+
+
+def test_demote_outside_skip_classifies_without_demoting() -> None:
+    unclassified = _f(line=40)  # outside the delta, but skip=True bypasses demotion entirely
+    out = rounds.demote_outside([unclassified], DELTA, "code", skip=True)
+    assert out[0].klass == "blocker"
+
+
 # --- D11: open carry-forwards --------------------------------------------------------------
 
 def test_open_carry_forwards_across_pull_requests() -> None:
@@ -229,10 +261,13 @@ def test_open_carry_forwards_across_pull_requests() -> None:
                       carry={"addressed": ["CF-5-1"], "deferred": ["CF-5-2"]})
     ruled = ruling(4, "F-9-3", as_="carry_forward", pr=9)
     approved_9 = verdict(5, "closure", [], decision="approve", pr=9)
+    fixed_cf = verdict(6, 1, [_finding(1, klass="carry_forward", pr=10, status="fixed")],
+                       decision="approve", pr=10, artifact="spec_plan")
     open_ = rounds.open_carry_forwards(
-        [spec_pr, unapproved, code_pr, approved_9], [ruled], repository=REPO
+        [spec_pr, unapproved, code_pr, approved_9, fixed_cf], [ruled], repository=REPO
     )
-    assert open_ == ["CF-5-2", "CF-9-3"]
+    assert open_ == ["CF-5-2", "CF-9-3"]  # the fixed CF-10-1 contributes nothing
     assert rounds.open_carry_forwards(
-        [spec_pr, unapproved, code_pr, approved_9], [ruled], repository=REPO, excluding_pr=9
+        [spec_pr, unapproved, code_pr, approved_9, fixed_cf], [ruled],
+        repository=REPO, excluding_pr=9
     ) == ["CF-5-2"]
