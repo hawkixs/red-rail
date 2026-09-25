@@ -83,5 +83,5 @@ def test_release_and_deploy_skills_defer_to_the_rail_and_name_the_exit_codes() -
 
 def test_the_reviewer_skill_names_the_convergence_policy() -> None:
     reviewer = _skills()["rail-reviewer"].lower()
-    for text in ("incremental", "budget", "max_passes_per_pr"):
+    for text in ("incremental", "awaiting ruling", "closure check", "rail reviewer rule"):
         assert text in reviewer, text
