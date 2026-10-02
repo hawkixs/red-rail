@@ -27,7 +27,7 @@ def _config(path: Path | None):
 
 def _once(config, *, only: str | None, pr: int | None) -> int:
     from rail.ledger import LedgerError
-    from rail.model import load_rail_config
+    from rail.model import MANIFEST_NAME, load_rail_config
     from rail.reviewer.github import GitHubApp, GitHubError
     from rail.reviewer.service import pending_reviews, review_pull
 
@@ -41,6 +41,17 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
         for repository in config.repositories:
             if only and repository.slug != only:
                 continue
+            # The manifest chooses the project and the ledger the verdict is attested in, so it
+            # is read from the checkout declared here, never from a pull request's head. The
+            # onboarding pull request adds it: name the procedure (ticket 98d8f8a8).
+            if not (repository.path / MANIFEST_NAME).is_file():
+                raise FileNotFoundError(
+                    f"{repository.slug}: no {MANIFEST_NAME} in {repository.path}, the checkout "
+                    "reviewer.yaml declares. For the onboarding pull request that adds it, "
+                    "point this repository's `path` in reviewer.yaml at the branch's worktree "
+                    "for the length of the pull request, then back to a checkout of main once "
+                    "it is merged."
+                )
             cfg = load_rail_config(repository.path)
             ledger = open_ledger(repository.path)
             pulls = (
