@@ -43,6 +43,7 @@ class FakeGitHub:
     compare_text: str = "diff --git a/src/x.py b/src/x.py\n+print(2)\n"
     compare_error: bool = False
     check_texts: dict[int, str] = field(default_factory=dict)
+    check_summaries: dict[int, str] = field(default_factory=dict)
 
     def diff(self, repository, number):
         return self.diff_text
@@ -59,6 +60,7 @@ class FakeGitHub:
 
     def complete_check(self, repository, check_id, *, conclusion, title, summary, text=""):
         self.calls.append(("complete", check_id, conclusion, title))
+        self.check_summaries[check_id] = summary
         return CheckRun(id=check_id, status="completed", conclusion=conclusion)
 
     def review(self, repository, number, *, commit_id, event, body):
@@ -324,7 +326,15 @@ def test_an_unattested_verdict_is_reported_not_fatal(tmp_path: Path) -> None:
     assert "rail ledger replay" in outcome.failures[-1]
     # found by the independent reviewer (PR #3, third pass): never an approval GitHub shows
     # that the ledger does not hold — the check fails and no APPROVE is posted
-    assert ("complete", 99, "failure", "verdict not attested") in github.calls
+    # ticket 43267468: the check stays a failure (GitHub counts `neutral` as passing for a
+    # required check), but its title says what the judges ruled and why it is not attested
+    judges = ", ".join(outcome.verdict.providers)
+    assert judges
+    title = f"approve by {judges}, not attested: delivery_disabled"
+    assert ("complete", 99, "failure", title) in github.calls
+    summary = github.check_summaries[99]
+    assert judges in summary and "delivery_disabled" in summary
+    assert "rail attest review_verdict --from" in summary and "rail ledger replay" in summary
     assert ("review", 7, "REQUEST_CHANGES") in github.calls
     assert ("review", 7, "APPROVE") not in github.calls
 
@@ -2315,6 +2325,39 @@ def test_a_records_only_pull_request_is_judged_mechanically(tmp_path: Path) -> N
     record = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)[-1]
     assert record.issuer == "red-rail-reviewer" and record.data["independent"] is True
     assert (record.data["mode"], record.data["round"]) == ("mechanical", "mechanical")
+
+
+def test_an_unattested_mechanical_verdict_names_its_mode_not_a_judge(tmp_path: Path) -> None:
+    """Ticket 43267468: a verdict no judge gave says how it was reached, never "by " nobody."""
+    from rail.ledger import Unattested
+
+    repo, ledger = _repo(tmp_path)
+    other = FileLedger(tmp_path / "made")
+    made = other.attest(
+        "red-alpha", AttestationKind.DEPLOYED, {"sha": "e" * 40}, issuer="op", idempotency_key="d9"
+    )
+    github = FakeGitHub(diff_text=added_receipt_diff(other.path_of(made)))
+
+    class RefusingLedger:
+        def list(self, project, **kwargs):
+            return ledger.list(project, **kwargs)
+
+        def attest(self, project, kind, data, *, issuer, idempotency_key, emitted_at=None):
+            raise Unattested(tmp_path / "x-review_verdict-y.json", "unreachable")
+
+    review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=RefusingLedger(),
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=_no_judge,
+        root=tmp_path,
+    )
+    title = "approve (mechanical), not attested: unreachable"
+    assert ("complete", 99, "failure", title) in github.calls
+    assert github.check_summaries[99].startswith("Ruled approve (mechanical), but")
 
 
 def test_a_tampered_receipt_gets_request_changes_and_still_no_judge(tmp_path: Path) -> None:
