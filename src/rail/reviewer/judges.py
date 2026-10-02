@@ -140,6 +140,24 @@ class JudgeReply:
 _HUNK = re.compile(r"(?=^diff --git )", re.MULTILINE)
 
 
+def _ignored(hunk: str, policy: ReviewPolicy) -> bool:
+    # both sides generated, or the hunk stays: a lockfile renamed into code is code, and a
+    # header we cannot read is never dropped (ticket b1df8461)
+    import fnmatch
+
+    match = HEADER.match(hunk)
+    return bool(match) and all(
+        any(fnmatch.fnmatch(match[side], g) for g in policy.ignored_globs) for side in "ab"
+    )
+
+
+def drop_ignored(diff: str, policy: ReviewPolicy) -> str:
+    """`diff` without the hunks of `policy.ignored_globs`, everything else kept in order. The
+    reviewer splits and measures THIS, so a generated file no judge reads neither marks the
+    verdict truncated nor costs a judge call on an empty piece (ticket f0aa9c29)."""
+    return "".join(h for h in _HUNK.split(diff) if not _ignored(h, policy))
+
+
 def prioritise_diff(diff: str, policy: ReviewPolicy) -> str:
     """The same hunks, code first (`policy.diff_priority` order), docs last, generated
     lockfiles dropped — so a truncation cuts what matters least."""
@@ -159,15 +177,7 @@ def prioritise_diff(diff: str, policy: ReviewPolicy) -> str:
             return (2, 0)
         return (1, 0)
 
-    def ignored(hunk: str) -> bool:
-        # both sides generated, or the hunk stays: a lockfile renamed into code is code, and a
-        # header we cannot read is never dropped (ticket b1df8461)
-        match = HEADER.match(hunk)
-        return bool(match) and all(
-            any(fnmatch.fnmatch(match[side], g) for g in policy.ignored_globs) for side in "ab"
-        )
-
-    kept = [h for h in hunks if not ignored(h)]
+    kept = [h for h in hunks if not _ignored(h, policy)]
     return "".join(sorted(kept, key=rank))
 
 
