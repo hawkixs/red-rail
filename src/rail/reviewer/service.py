@@ -462,16 +462,24 @@ def _publish(
         )
         failures.append(f"unattested ({exc.cause}): replay with {replay}")
         outcome.receipt = exc.receipt
+        # The conclusion stays `failure`: GitHub counts `neutral` as passing for a required
+        # check (a3846910). The title says what was ruled and why it is not attested, so a red
+        # check is never read as a rejection (ticket 43267468).
+        ruling = (
+            f"{verdict.verdict} by {', '.join(verdict.providers)}"
+            if verdict.providers
+            else f"{verdict.verdict} ({verdict.mode})"
+        )
         note = (
-            f"The judges said {verdict.verdict}, but the verdict could not be attested in the "
-            f"ledger ({exc.cause}). Replay it with {replay}, then re-run the review "
+            f"Ruled {ruling}, but the verdict could not be attested in the ledger "
+            f"({exc.cause}). Replay it with {replay}, then re-run the review "
             f"(label {policy.rerun_label})."
         )
         github.complete_check(
             pr.repository,
             check.id,
             conclusion="failure",
-            title="verdict not attested",
+            title=f"{ruling}, not attested: {exc.cause}",
             summary=note,
             text=_render(verdict),
         )
