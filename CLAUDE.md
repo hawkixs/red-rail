@@ -113,7 +113,11 @@ comments, test names. The conversation with the operator stays in French.
   is judged `incremental` on the delta since the last verdict, rounds 1 normal, 2 exhaustive,
   3 closure (`rounds.py`, from the receipts); after round 3 an open blocker awaits
   `rail reviewer rule`, then one closure check (spec 2026-09-25-review-loop-closure)),
-  `config.py` (`~/.config/red-rail/reviewer.yaml`).
+  `config.py` (`~/.config/red-rail/reviewer.yaml`). A repository adds the generated files no
+  judge reads with the declared exception `gates: review.ignored_globs` (a list, appended to
+  the reviewer's own; each glob starts with a literal directory other than `src/` and
+  `.github/`), read from the `rail.yaml` committed on the checkout's `origin/main`: never from
+  the pull request's head, never from an uncommitted working tree.
 - `src/rail/commands/` — one module per command, auto-discovered by `src/rail/cli.py`:
   `check`, `attest`, `bind` (the PR to the contract, at its opening), `contract`,
   `ledger` (`list`, `replay`),

@@ -50,6 +50,118 @@ def test_once_reports_the_error_of_an_unreadable_checkout(tmp_path: Path, monkey
     assert out.exit_code != 0 and "rail.yaml" in out.output
 
 
+GLOBS = (
+    "gates:\n  review.ignored_globs:\n    value: ['internal/web/static/*']\n"
+    "    reason: committed bundle, proven equal to its build by CI\n"
+)
+
+
+def _policy_seen(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    merged: str = "",
+    working: str = "",
+    fetched: bool = True,
+    decoy: str = "",
+) -> tuple[object, str]:
+    """The policy `rail reviewer once` hands to `review_pull` for red-alpha's open PR, and its
+    output. `merged` is appended to the rail.yaml committed on origin/main; `decoy` to one
+    committed on a LOCAL branch named `origin/main`; `working` is then appended to the working
+    tree only, never committed."""
+    from tests.helpers import commit_all, git
+
+    class OnePullGitHub:
+        def __init__(self, **kwargs):
+            pass
+
+        def pull(self, repository, number):
+            return number
+
+        def close(self):
+            pass
+
+    seen = {}
+
+    def review_pull(pull, *, policy, **kwargs):
+        seen["policy"] = policy
+        raise SystemExit(0)
+
+    monkeypatch.setattr("rail.reviewer.github.GitHubApp", OnePullGitHub)
+    monkeypatch.setattr("rail.reviewer.service.review_pull", review_pull)
+    repo = conforming_tree(tmp_path, "red-alpha", "dev")
+    manifest = repo / "rail.yaml"
+    manifest.write_text(manifest.read_text() + merged)
+    commit_all(repo, "chore: the reviewed state")
+    if fetched:
+        git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    if decoy:
+        git(repo, "checkout", "-q", "-b", "origin/main")
+        manifest.write_text(manifest.read_text() + decoy)
+        commit_all(repo, "chore: never reviewed")
+        git(repo, "checkout", "-q", "main")
+    manifest.write_text(manifest.read_text() + working)
+    config = _config(tmp_path)
+    config.write_text(config.read_text().replace(str(tmp_path / "red-alpha"), str(repo)))
+    out = CliRunner().invoke(
+        main,
+        ["reviewer", "once", "--config", str(config), "--repository", "hawkixs/red-alpha"]
+        + ["--pr", "7"],
+    )
+    return seen["policy"], out.output
+
+
+def test_a_repository_adds_its_declared_ignored_globs_to_the_defaults(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Ticket f0aa9c29: the repository declares, in its own rail.yaml and with a reason, the
+    generated files no judge reads. Its globs are ADDED to the reviewer's defaults, never
+    replace them."""
+    from rail.reviewer.policy import ReviewPolicy
+
+    policy, _ = _policy_seen(tmp_path, monkeypatch, merged=GLOBS)
+    assert policy.ignored_globs == (*ReviewPolicy().ignored_globs, "internal/web/static/*")
+
+
+def test_without_a_declaration_the_reviewer_keeps_its_own_policy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from rail.reviewer.policy import ReviewPolicy
+
+    policy, output = _policy_seen(tmp_path, monkeypatch)
+    assert policy.ignored_globs == ReviewPolicy().ignored_globs
+    assert "ignored_globs" not in output
+
+
+def test_an_uncommitted_ignored_glob_hides_nothing(tmp_path: Path, monkeypatch) -> None:
+    """Found by the adversarial review: the checkout is a working tree. A glob edited there and
+    never merged was never judged, yet it would hide code from every judge. Only the rail.yaml
+    committed on origin/main counts; the difference is reported, never applied."""
+    from rail.reviewer.policy import ReviewPolicy
+
+    policy, output = _policy_seen(tmp_path, monkeypatch, working=GLOBS)
+    assert policy.ignored_globs == ReviewPolicy().ignored_globs
+    assert "review.ignored_globs" in output and "origin/main" in output
+
+
+def test_a_local_branch_named_origin_main_hides_nothing(tmp_path: Path, monkeypatch) -> None:
+    """Found by the adversarial review: git resolves a bare `origin/main` to a local branch of
+    that name before the remote-tracking ref, and only warns on stderr. The globs are read at
+    `refs/remotes/origin/main`, what was fetched from GitHub."""
+    from rail.reviewer.policy import ReviewPolicy
+
+    policy, _ = _policy_seen(tmp_path, monkeypatch, decoy=GLOBS)
+    assert policy.ignored_globs == ReviewPolicy().ignored_globs
+
+
+def test_without_origin_main_no_declared_glob_applies(tmp_path: Path, monkeypatch) -> None:
+    from rail.reviewer.policy import ReviewPolicy
+
+    policy, output = _policy_seen(tmp_path, monkeypatch, merged=GLOBS, fetched=False)
+    assert policy.ignored_globs == ReviewPolicy().ignored_globs
+    assert "review.ignored_globs" in output and "origin/main" in output
+
+
 def test_a_checkout_without_a_manifest_names_the_onboarding_procedure(
     tmp_path: Path, monkeypatch
 ) -> None:

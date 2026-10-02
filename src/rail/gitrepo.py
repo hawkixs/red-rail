@@ -31,6 +31,11 @@ def head_sha(repo: Path) -> str | None:
     return _git(repo, "rev-parse", "HEAD")
 
 
+def file_at(repo: Path, ref: str, path: str) -> str | None:
+    """`path` as committed at `ref`; None when the ref or the file is missing."""
+    return _git(repo, "show", f"{ref}:{path}")
+
+
 def is_ancestor(repo: Path, sha: str, of: str = "HEAD") -> bool:
     return _git(repo, "merge-base", "--is-ancestor", sha, of) is not None
 

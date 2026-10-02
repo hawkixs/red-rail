@@ -339,6 +339,19 @@ def test_rail_config_rejects_unknown_gate_keys(tmp_path: Path) -> None:
     assert not result.passed and "hygiene.recipts" in result.details
 
 
+def test_rail_config_knows_the_reviewers_ignored_globs(tmp_path: Path) -> None:
+    """Ticket f0aa9c29: `review.ignored_globs` is a declared exception the gate accepts."""
+    from rail.gates.hygiene import rail_config
+
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    (repo / "rail.yaml").write_text(
+        (repo / "rail.yaml").read_text()
+        + "gates:\n  review.ignored_globs:\n    value: ['internal/web/static/*']\n"
+        "    reason: committed bundle, proven equal to its build by CI\n"
+    )
+    assert rail_config(repo).passed
+
+
 def test_claude_md_reads_the_target_after_make_flags(tmp_path: Path) -> None:
     """Review finding: `make -j4 ci` and `make -C . ci` name the target `ci`."""
     repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")

@@ -195,6 +195,48 @@ def test_behind_a_site_the_token_alone_as_the_host_is_accepted(healthcheck: str)
     assert cfg.deploy is not None and cfg.deploy.healthcheck == healthcheck
 
 
+# -- review.ignored_globs: files the reviewer never sends to a judge (ticket f0aa9c29) ----
+
+
+def _ignoring(value: object) -> dict:
+    gates = {"review.ignored_globs": {"value": value, "reason": "committed build output"}}
+    return {**MINIMAL, "gates": gates}
+
+
+def test_ignored_globs_under_a_literal_directory_are_valid() -> None:
+    cfg = RailConfig.model_validate(_ignoring(["internal/web/static/*", "web/dist/**"]))
+    assert cfg.gates["review.ignored_globs"].value == ["internal/web/static/*", "web/dist/**"]
+
+
+@pytest.mark.parametrize(
+    "glob",
+    [
+        "*",  # everything
+        "**",
+        "*.min.js",  # no literal directory: it reaches src/ and the root
+        "*/static/*",
+        "?rc/x.py",
+        "[s]rc/*",
+        "src/*",  # the code
+        "src/static/*",
+        ".github/workflows/*",  # the CI
+        ".github/*",
+        "rail.yaml",  # the manifest itself
+        "static",  # a file at the root, not a directory
+        "",
+    ],
+)
+def test_an_ignored_glob_that_could_hide_code_ci_or_the_manifest_is_refused(glob: str) -> None:
+    with pytest.raises(ValidationError, match=r"review\.ignored_globs"):
+        RailConfig.model_validate(_ignoring(["web/dist/*", glob]))
+
+
+@pytest.mark.parametrize("value", ["web/dist/*", [], [1], None])
+def test_ignored_globs_must_be_a_non_empty_list_of_strings(value: object) -> None:
+    with pytest.raises(ValidationError, match=r"review\.ignored_globs"):
+        RailConfig.model_validate(_ignoring(value))
+
+
 def test_a_site_and_a_declared_bind_address_are_refused_together() -> None:
     gates = {"deploy.bind_address": {"value": "192.0.2.10", "reason": "declared in the manifest"}}
     with pytest.raises(ValidationError, match="two sources for one address"):
