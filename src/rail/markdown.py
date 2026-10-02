@@ -80,12 +80,17 @@ def command_lines(block: str) -> list[str]:
     return lines
 
 
-def latest_doc(directory: Path) -> Path | None:
-    """The newest `<date>-<topic>.md` in a directory (name order = date order)."""
+def latest_docs(directory: Path) -> list[Path]:
+    """Every `<date>-<topic>.md` of the newest date in a directory, in name order. Docs of one
+    day tie on the date, and their names say nothing of which came last: each of them is the
+    latest (ticket 2037c311)."""
     if not directory.is_dir():
-        return None
+        return []
     dated = sorted(p for p in directory.glob("*.md") if _DATED.match(p.name))
-    return dated[-1] if dated else None
+    if not dated:
+        return []
+    newest = dated[-1].name[:10]
+    return [p for p in dated if p.name[:10] == newest]
 
 
 def spec_references(text: str) -> list[str]:

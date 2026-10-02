@@ -67,13 +67,21 @@ def test_command_lines_drop_comments_blank_lines_and_prompts() -> None:
     assert markdown.command_lines(block) == ["make ci", "uv run pytest -q", "make nope"]
 
 
-def test_latest_doc_picks_the_newest_dated_file(tmp_path: Path) -> None:
-    assert markdown.latest_doc(tmp_path) is None
+def test_latest_docs_are_every_file_of_the_newest_date(tmp_path: Path) -> None:
+    """Ticket 2037c311: two docs of one day tie on the date, and the newest is not the
+    alphabetically last — so every doc of that day is the latest."""
+    assert markdown.latest_docs(tmp_path / "absent") == []
+    assert markdown.latest_docs(tmp_path) == []
     (tmp_path / "README.md").write_text("x")
     (tmp_path / "2026-09-01-old.md").write_text("x")
     (tmp_path / "2026-09-14-new.md").write_text("x")
     (tmp_path / "notes.md").write_text("x")
-    assert markdown.latest_doc(tmp_path) == tmp_path / "2026-09-14-new.md"
+    assert markdown.latest_docs(tmp_path) == [tmp_path / "2026-09-14-new.md"]
+    (tmp_path / "2026-09-14-another.md").write_text("x")
+    assert markdown.latest_docs(tmp_path) == [
+        tmp_path / "2026-09-14-another.md",
+        tmp_path / "2026-09-14-new.md",
+    ]
 
 
 def test_spec_references_are_repository_relative_paths() -> None:
