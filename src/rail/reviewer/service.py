@@ -23,7 +23,13 @@ from rail.ledger import (
 from rail.ledger.file import receipt_filename
 from rail.reviewer import carry, headers, records, rounds
 from rail.reviewer.github import GitHubError, PullRequest
-from rail.reviewer.judges import JudgeReply, diff_budget, judge, round_instructions
+from rail.reviewer.judges import (
+    JudgeReply,
+    diff_budget,
+    drop_ignored,
+    judge,
+    round_instructions,
+)
 from rail.reviewer.policy import ReviewPolicy, producer_provider
 from rail.reviewer.split import oversized, split_diff
 from rail.reviewer.verdict import CarryForwards, Finding, PreviousAnswer, ReviewVerdict
@@ -868,10 +874,12 @@ def _review_started(
     # A change larger than one judge can hold is read in bounded pieces, cut only between
     # files. The old behaviour handed over `diff[:budget]` and recorded that it had: measured
     # on the first external pull request, 21% of the change, ruled `approve`. Only a file too
-    # large to bound on its own still counts as truncated.
+    # large to bound on its own still counts as truncated. Split and measure what the judge
+    # reads: an ignored generated file is neither a cut file nor an empty piece (f0aa9c29).
     budget = diff_budget(
         pr, policy, chain, criteria=criteria, notes=notes, instructions=instructions
     )
+    diff = drop_ignored(diff, policy)
     chunks = split_diff(diff, budget=budget)
     unbounded = oversized(chunks, budget=budget)
     truncated = bool(unbounded)

@@ -695,6 +695,44 @@ def test_the_split_uses_the_budget_the_judge_will_actually_enforce(tmp_path: Pat
     assert outcome.verdict.diff_truncated is False
 
 
+def test_an_ignored_file_is_dropped_before_the_split(tmp_path: Path) -> None:
+    """Ticket f0aa9c29, measured on red-monitor#8: a committed minified bundle (one ~80 KB
+    line), ignored by `policy.ignored_globs`, was still split and measured. It made the
+    verdict `diff_truncated` though no judge was meant to read it, and each piece left empty
+    once the bundle was dropped from its prompt still cost a judge call. The split and the
+    truncation must work on what the judge reads."""
+    repo, ledger = _repo(tmp_path)
+    code = "diff --git a/src/x.py b/src/x.py\n+print(1)\n"
+    bundle = "diff --git a/web/static/app.js b/web/static/app.js\n+" + "x" * 300_000 + "\n"
+    github = FakeGitHub(diff_text=code + bundle, messages=["chore: plain"])
+    policy = default_policy().model_copy(
+        update={"ignored_globs": (*default_policy().ignored_globs, "web/static/*")}
+    )
+    seen: list[str] = []
+
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
+        seen.append(diff)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+
+    assert seen == [code], "one judge, on the code alone: no piece for the ignored bundle"
+    assert outcome.verdict.diff_truncated is False, "an ignored file is not a cut file"
+    records = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+    assert records[-1].data["diff_truncated"] is False
+
+
 # -- the contract a pull request is judged against (ticket 155d3d67) ---------------------
 
 
