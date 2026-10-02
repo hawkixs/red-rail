@@ -275,6 +275,33 @@ def test_no_verdict_at_all_fails_closed(tmp_path: Path) -> None:
     )
 
 
+def test_the_check_says_why_each_judge_dropped_out(tmp_path: Path) -> None:
+    """Ticket 0b950eea, measured on PR #33: "agy/light: provider_fallback" hid a quota reset
+    13 h away. The classified reason follows the failure, in the verdict and the check."""
+    repo, ledger = _repo(tmp_path)
+    github = FakeGitHub(messages=["chore: plain"])
+
+    def quota(pr, diff, policy, *, provider, tier, criteria, **_):
+        return replace(
+            fail(provider, tier),
+            failure="provider_fallback",
+            reason="quota exhausted, resets in 2h",
+        )
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=quota,
+        root=tmp_path,
+    )
+    assert "provider_fallback (quota exhausted, resets in 2h)" in outcome.failures[0]
+    assert "(quota exhausted, resets in 2h)" in outcome.verdict.summary
+
+
 def test_the_rerun_label_is_removed_after_the_review(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
     relabelled = replace(PR, labels=("rail-review:rerun",))
