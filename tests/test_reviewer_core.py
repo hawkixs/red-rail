@@ -275,6 +275,17 @@ def test_the_diff_is_judged_code_first_and_generated_files_are_dropped() -> None
     assert policy.max_diff_chars == 200_000
 
 
+def test_a_lockfile_renamed_into_code_reaches_the_judge() -> None:
+    """Ticket b1df8461: a hunk is dropped only when both sides of its header are generated
+    files, and a header we cannot read is never dropped."""
+    from rail.reviewer.judges import prioritise_diff
+
+    renamed = "diff --git a/uv.lock b/src/evil.py\nrename from uv.lock\n+evil\n"
+    spaced = "diff --git a/x.lock b/src/e.py b/x.lock b/src/e.py\n+hidden\n"
+    ordered = prioritise_diff(renamed + spaced, default_policy())
+    assert "+evil" in ordered and "+hidden" in ordered
+
+
 def test_the_prompt_fits_the_provider_argv_limit(tmp_path: Path) -> None:
     """Measured on PR #3 (2026-09-19): agy takes its prompt in argv and headless-agents refuses
     more than 120000 bytes (`prompt too long for argv`); the judge shrinks the diff for it."""
