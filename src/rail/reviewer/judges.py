@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -135,6 +136,67 @@ class JudgeReply:
     verdict: ReviewVerdict | None
     failure: Failure | None
     raw: str
+    reason: str | None = None  # why it dropped out, classified (`failure_reason`)
+
+
+# Why a judge dropped out (ticket 0b950eea). The check runs are public and a seat's logs can
+# hold home paths, accounts or addresses, so the cause is CLASSIFIED into a fixed vocabulary;
+# only the reset delay or date is copied, and nothing else of the text is ever published.
+UNCLASSIFIED = "unclassified: see the seat's logs on the host"
+_QUOTA = re.compile(r"RESOURCE_EXHAUSTED|quota (?:reached|exceeded)|usage limit|\b429\b", re.I)
+_AUTH = re.compile(
+    r"token_revoked|refresh_token_invalidated|session has ended|\b401\b|unauthorized", re.I
+)
+_RESETS_IN = re.compile(r"resets in ((?:\d+[hms]){1,3})", re.I)
+_TRY_AGAIN = re.compile(
+    r"try again at ([A-Z][a-z]{2,8} \d{1,2}(?:st|nd|rd|th)?, \d{4},? \d{1,2}:\d{2} ?[AP]M)"
+)
+_ERROR_EVENTS = {"error", "turn.failed"}
+_LOG_TAIL = 64 * 1024
+
+
+def _error_messages(events: str) -> str:
+    """The messages of the error events only: the rest of the stream is the model's own output,
+    which may quote anything (a pull request about this very code does)."""
+    messages = []
+    for line in events.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") not in _ERROR_EVENTS:
+            continue
+        error = event.get("error")
+        message = event.get("message") or (
+            error.get("message") if isinstance(error, dict) else None
+        )
+        if isinstance(message, str):
+            messages.append(message)
+    return "\n".join(messages)
+
+
+def failure_reason(stderr: str, events: str) -> str:
+    """A dropped judge's cause, from its stderr and the error events of its stream."""
+    text = f"{stderr}\n{_error_messages(events)}"
+    if _QUOTA.search(text):
+        if resets := _RESETS_IN.search(text):
+            return f"quota exhausted, resets in {resets.group(1)}"
+        if again := _TRY_AGAIN.search(text):
+            return f"quota exhausted, try again at {again.group(1)}"
+        return "quota exhausted"
+    if _AUTH.search(text):
+        return "auth expired: re-login on the host"
+    return UNCLASSIFIED
+
+
+def _tail(path: Path | None, *, since: float) -> str:
+    """The end of a seat's log, if THIS run wrote it: a seat is reused by a re-run on the same
+    head, and a runner that dies before writing leaves the previous run's log in place."""
+    if path is None or not path.is_file() or path.stat().st_mtime < since:
+        return ""
+    with path.open("rb") as stream:
+        stream.seek(max(0, path.stat().st_size - _LOG_TAIL))
+        return stream.read().decode("utf-8", errors="replace")
 
 
 _HUNK = re.compile(r"(?=^diff --git )", re.MULTILINE)
@@ -424,6 +486,7 @@ def judge(
             )
     base = root or ephemeral_root(os.environ) or Path(tempfile.gettempdir())
     spec = build_spec(pr, prompt, policy, provider=provider, tier=tier, root=base)
+    started = time.time() - 1.0  # a second of slack for a filesystem's coarse mtime
     try:
         exit_code, text = runner(provider, spec)
     except Exception as exc:  # one failed judge, never a crashed pass (the chain walks on)
@@ -444,8 +507,20 @@ def judge(
             verdict = discount_records(verdict, policy).model_copy(
                 update={"mode": tier, "providers": (provider,), "diff_truncated": truncated}
             )
+    # a timeout is its own cause; a provider that dropped out or failed says why in its logs
+    reason = (
+        failure_reason(_tail(spec.stderr_log, since=started), _tail(spec.events_log, since=started))
+        if failure in ("provider_fallback", "failed")
+        else None
+    )
     return JudgeReply(
-        provider=provider, tier=tier, model=spec.model, verdict=verdict, failure=failure, raw=text
+        provider=provider,
+        tier=tier,
+        model=spec.model,
+        verdict=verdict,
+        failure=failure,
+        raw=text,
+        reason=reason,
     )
 
 

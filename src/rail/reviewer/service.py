@@ -386,7 +386,8 @@ def _judge_chain(
             **({"instructions": instructions} if instructions else {}),
         )
         if reply.verdict is None:
-            failures.append(f"{provider}/{tier}: {reply.failure}")
+            why = f" ({reply.reason})" if reply.reason else ""  # classified, ticket 0b950eea
+            failures.append(f"{provider}/{tier}: {reply.failure}{why}")
             continue
         replies.append(reply)
         if len(replies) == wanted:

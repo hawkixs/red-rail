@@ -169,6 +169,99 @@ def test_judge_fails_closed_on_exit_code_timeout_or_garbage(tmp_path: Path) -> N
     )
 
 
+# -- why a judge dropped out (ticket 0b950eea): classified, never the raw text -----------
+# The shapes measured on 2026-09-22 in the seats' logs (agy stderr, codex stderr/events).
+AGY_QUOTA = (
+    "Error: RESOURCE_EXHAUSTED (code 429): Individual quota reached for this model. "
+    "Resets in 13h26m18s.\n"
+)
+CODEX_LIMIT = json.dumps(
+    {
+        "type": "error",
+        "message": "You've hit your usage limit. Upgrade to Pro or try again at "
+        "Sep 26th, 2026 11:27 AM.",
+    }
+)
+CODEX_REVOKED = "ERROR: unexpected status 401 Unauthorized: token_revoked\n"
+CODEX_SESSION = json.dumps(
+    {
+        "type": "turn.failed",
+        "error": {"message": "refresh_token_invalidated: Your session has ended."},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "events", "reason"),
+    [
+        (AGY_QUOTA, "", "quota exhausted, resets in 13h26m18s"),
+        ("", CODEX_LIMIT, "quota exhausted, try again at Sep 26th, 2026 11:27 AM"),
+        (CODEX_REVOKED, "", "auth expired: re-login on the host"),
+        ("", CODEX_SESSION, "auth expired: re-login on the host"),
+    ],
+)
+def test_a_known_failure_is_classified(stderr: str, events: str, reason: str) -> None:
+    from rail.reviewer.judges import failure_reason
+
+    assert failure_reason(stderr, events) == reason
+
+
+def test_an_unknown_failure_publishes_nothing_of_its_text() -> None:
+    """The check is public: a home path, an account or an address in stderr never reaches it."""
+    from rail.reviewer.judges import UNCLASSIFIED, failure_reason
+
+    leaky = "crash in /home/operator/.codex/auth.json while calling 192.0.2.7 as op@example\n"
+    assert failure_reason(leaky, "") == UNCLASSIFIED
+    assert not any(word in UNCLASSIFIED for word in ("/home", "192.0.2.7", "example"))
+
+
+def test_the_prompt_echoed_in_the_events_is_never_read_as_a_cause() -> None:
+    """Only error events count: the model's own output may quote RESOURCE_EXHAUSTED or a
+    usage limit (a pull request about this very code does)."""
+    from rail.reviewer.judges import UNCLASSIFIED, failure_reason
+
+    echo = json.dumps(
+        {"type": "item.completed", "item": {"text": "RESOURCE_EXHAUSTED usage limit 401"}}
+    )
+    assert failure_reason("", echo + "\nnot json\n") == UNCLASSIFIED
+
+
+def test_a_dropped_judge_carries_the_classified_reason(tmp_path: Path) -> None:
+    def quota(provider, spec):
+        spec.stderr_log.write_text(AGY_QUOTA)
+        return 3, ""
+
+    policy = default_policy()
+    reply = judge(PR, DIFF, policy, provider="agy", tier="light", runner=quota, root=tmp_path)
+    assert reply.failure == "provider_fallback"
+    assert reply.reason == "quota exhausted, resets in 13h26m18s"
+    timed_out = judge(
+        PR, DIFF, policy, provider="agy", tier="light", runner=lambda p, s: (124, ""), root=tmp_path
+    )
+    assert timed_out.failure == "timeout" and timed_out.reason is None
+
+
+def test_a_log_left_by_an_earlier_run_of_the_same_seat_is_not_its_cause(tmp_path: Path) -> None:
+    """A seat is named after the PR, the head and the provider: a re-run reuses it. When the
+    runner dies before writing, the previous run's quota error must not be reported."""
+    import os
+
+    policy = default_policy()
+
+    def quota(provider, spec):
+        spec.stderr_log.write_text(AGY_QUOTA)
+        os.utime(spec.stderr_log, (0, 0))  # written long before the next run starts
+        return 3, ""
+
+    def exploding(provider, spec):
+        raise RuntimeError("no seat")
+
+    judge(PR, DIFF, policy, provider="agy", tier="light", runner=quota, root=tmp_path)
+    rerun = judge(PR, DIFF, policy, provider="agy", tier="light", runner=exploding, root=tmp_path)
+    assert rerun.failure == "failed"
+    assert rerun.reason == "unclassified: see the seat's logs on the host"
+
+
 # the receipt red-alerts#3 was blocked on, twice (2026-09-22)
 RECEIPT = "docs/receipts/20260922T203705Z-binding-163bf3e62c10.json"
 
