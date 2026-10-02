@@ -145,6 +145,12 @@ class DeployConfig(BaseModel):
         return self
 
 
+# The generated files a repository declares the reviewer never sends to a judge, ADDED to the
+# reviewer's own list (`policy.ignored_globs`), and the directories no such glob may reach.
+IGNORED_GLOBS = "review.ignored_globs"
+JUDGED_DIRECTORIES = ("src", ".github")
+
+
 class GateOverride(BaseModel):
     """A declared exception. `reason` is mandatory so the audit can show it instead of hiding it."""
 
@@ -188,6 +194,30 @@ class RailConfig(BaseModel):
                 raise ValueError(
                     "deploy.site and a gates override of deploy.bind_address are two sources "
                     "for one address: the site's comes from the host, drop the override"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _ignored_globs_stay_out_of_the_code(self) -> RailConfig:
+        """`review.ignored_globs` hides files from every judge (ticket f0aa9c29). Each glob
+        must start with a literal directory other than src/ and .github/: a glob anchored
+        there can never reach the code under src/, the CI workflows or rail.yaml itself."""
+        override = self.gates.get(IGNORED_GLOBS)
+        if override is None:
+            return self
+        globs = override.value
+        if not isinstance(globs, list) or not globs or not all(isinstance(g, str) for g in globs):
+            raise ValueError(f"{IGNORED_GLOBS}: the value is a non-empty list of globs")
+        for glob in globs:
+            head, slash, _ = glob.partition("/")
+            if not slash or not head or any(c in head for c in "*?["):
+                raise ValueError(
+                    f"{IGNORED_GLOBS}: {glob!r} must start with a literal directory, such as "
+                    "'web/dist/*': without one it can reach the code at the root and under src/"
+                )
+            if head in JUDGED_DIRECTORIES:
+                raise ValueError(
+                    f"{IGNORED_GLOBS}: {glob!r} would hide {head}/, which a judge always reads"
                 )
         return self
 

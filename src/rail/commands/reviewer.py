@@ -25,9 +25,47 @@ def _config(path: Path | None):
     return load_reviewer_config(path or DEFAULT_CONFIG)
 
 
+def _merged_ignored_globs(repo: Path, working: tuple[str, ...]) -> tuple[str, ...]:
+    """The `review.ignored_globs` of the rail.yaml committed on origin/main (ticket f0aa9c29).
+
+    The checkout is a working tree: an uncommitted rail.yaml, or another branch, was never
+    judged, yet a glob hides code from every judge. Only what was merged counts; nothing
+    applies when origin/main cannot be read. A working tree that declares something else is
+    reported, never applied (found by the adversarial review)."""
+    import yaml
+    from pydantic import ValidationError
+
+    from rail.gitrepo import file_at
+    from rail.model import IGNORED_GLOBS, MANIFEST_NAME, RailConfig
+
+    merged: tuple[str, ...] = ()
+    # fully qualified: a bare `origin/main` resolves to a local branch of that name first, and
+    # git only warns on stderr (found by the adversarial review). The ref is what the last
+    # fetch brought from GitHub; a stale one lags, it never adds a glob no judge saw.
+    text = file_at(repo, "refs/remotes/origin/main", MANIFEST_NAME)
+    problem = None if text is not None else f"no {MANIFEST_NAME} readable on origin/main"
+    if text is not None:
+        try:
+            declared = RailConfig.model_validate(yaml.safe_load(text) or {}).gates.get(
+                IGNORED_GLOBS
+            )
+            merged = tuple(declared.value) if declared is not None else ()
+        except (yaml.YAMLError, ValidationError) as exc:
+            problem = f"the {MANIFEST_NAME} on origin/main is invalid ({type(exc).__name__})"
+    if working != merged:
+        click.echo(
+            f"  ! {repo}: {IGNORED_GLOBS} {list(working)} in the working tree, "
+            f"{list(merged)} applied from origin/main"
+            + (f" ({problem})" if problem else "")
+            + ": only a merged rail.yaml hides files from the judges (fetch, or merge first)",
+            err=True,
+        )
+    return merged
+
+
 def _once(config, *, only: str | None, pr: int | None) -> int:
     from rail.ledger import LedgerError
-    from rail.model import MANIFEST_NAME, load_rail_config
+    from rail.model import IGNORED_GLOBS, MANIFEST_NAME, load_rail_config
     from rail.reviewer.github import GitHubApp, GitHubError
     from rail.reviewer.service import pending_reviews, review_pull
 
@@ -54,16 +92,27 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
                 )
             cfg = load_rail_config(repository.path)
             ledger = open_ledger(repository.path)
+            # the generated files this repository declares no judge reads, ADDED to the host's
+            # list (ticket f0aa9c29), as merged on origin/main, never as the working tree says
+            policy = config.policy
+            declared = cfg.gates.get(IGNORED_GLOBS)
+            merged = _merged_ignored_globs(
+                repository.path, tuple(declared.value) if declared is not None else ()
+            )
+            if merged:
+                policy = policy.model_copy(
+                    update={"ignored_globs": (*policy.ignored_globs, *merged)}
+                )
             pulls = (
                 [github.pull(repository.slug, pr)]
                 if pr
-                else pending_reviews(github, repository.slug, config.policy)
+                else pending_reviews(github, repository.slug, policy)
             )
             for pull in pulls:
                 outcome = review_pull(
                     pull,
                     github=github,
-                    policy=config.policy,
+                    policy=policy,
                     ledger=ledger,
                     project=cfg.project,
                     repo_path=repository.path,

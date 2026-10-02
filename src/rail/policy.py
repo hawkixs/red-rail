@@ -58,6 +58,9 @@ GATE_DEFAULTS: dict[str, Any] = {
     "hygiene.mirror_host": None,
     # the App identity the verdict gate trusts (issuer of the review_verdict attestation)
     "review.reviewer_identity": "red-rail-reviewer",
+    # generated files the reviewer never sends to a judge, added to its own list; validated by
+    # the manifest (model.IGNORED_GLOBS) and read by `rail reviewer` from the trusted checkout
+    "review.ignored_globs": (),
     "build.commit_window": 20,
     "build.conventional_types": (
         "feat",
