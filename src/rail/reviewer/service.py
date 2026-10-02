@@ -5,7 +5,6 @@ one review. Fail-closed: no verdict → failure + REQUEST_CHANGES, never neutral
 from __future__ import annotations
 
 import fnmatch
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -22,7 +21,7 @@ from rail.ledger import (
     idempotency_key_for,
 )
 from rail.ledger.file import receipt_filename
-from rail.reviewer import carry, records, rounds
+from rail.reviewer import carry, headers, records, rounds
 from rail.reviewer.github import GitHubError, PullRequest
 from rail.reviewer.judges import JudgeReply, diff_budget, judge, round_instructions
 from rail.reviewer.policy import ReviewPolicy, producer_provider
@@ -30,16 +29,13 @@ from rail.reviewer.split import oversized, split_diff
 from rail.reviewer.verdict import CarryForwards, Finding, PreviousAnswer, ReviewVerdict
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
-_DIFF_HEADER = re.compile(r"^diff --git a/(?P<path>\S+) b/", re.MULTILINE)
-_ANY_HEADER = re.compile(r"^diff --git ", re.MULTILINE)
 RunJudge = Callable[..., JudgeReply]
 
 
 def _headers_parsed(diff: str) -> bool:
-    """Every `diff --git` line names its path the way `_DIFF_HEADER` reads it. A path with
-    a space, or a path git quotes, does not; such a diff is judged, never classified on the
-    paths we could read (spec 2026-09-25-spool-replaces-committed-mirrors, D5: fail closed)."""
-    return len(_ANY_HEADER.findall(diff)) == len(_DIFF_HEADER.findall(diff))
+    """A diff with a header we cannot read is judged, never classified on the paths we could
+    read (spec 2026-09-25-spool-replaces-committed-mirrors, D5: fail closed)."""
+    return headers.parsed(diff)
 
 
 class GitHubLike(Protocol):
@@ -98,7 +94,7 @@ def pending_reviews(github: Any, repository: str, policy: ReviewPolicy) -> list[
 
 
 def docs_only(diff: str, policy: ReviewPolicy) -> bool:
-    paths = _DIFF_HEADER.findall(diff)
+    paths = _files(diff)
     return (
         _headers_parsed(diff)
         and bool(paths)
@@ -120,7 +116,7 @@ def _criteria(ledger: Ledger, project: str, pr: PullRequest) -> list[str] | None
 
 
 def _files(diff: str) -> list[str]:
-    return _DIFF_HEADER.findall(diff)
+    return headers.paths(diff)
 
 
 # Bytes of other parts' file names a part's notes may list: with the fixed sentence around
@@ -155,12 +151,14 @@ def _path(name: str) -> str:
     return name
 
 
-def _within_part(reply: JudgeReply, files: list[str]) -> JudgeReply:
+def _within_part(reply: JudgeReply, chunk: str) -> JudgeReply:
     """A judge that read one part cannot block on a file it did not read (measured on #46: three
     "missing" findings about code that sat in other parts). Such a finding stays, as important;
-    a reply left with no blocking finding approves."""
-    if reply.verdict is None:
+    a reply left with no blocking finding approves. A part with a header we cannot read keeps
+    every finding: its unread file is one the judge did read (ticket b1df8461)."""
+    if reply.verdict is None or not _headers_parsed(chunk):
         return reply
+    files = _files(chunk)
     moved = False
     findings: list[Finding] = []
     for f in reply.verdict.findings:
@@ -874,7 +872,7 @@ def _review_started(
         for index, chunk in enumerate(chunks, start=1):
             part = _part_notes(notes, index, chunks)
             replies.extend(
-                _within_part(reply, _files(chunk))
+                _within_part(reply, chunk)
                 for reply in _judge_chain(
                     pr,
                     chunk,

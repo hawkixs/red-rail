@@ -20,6 +20,7 @@ from headless_agents.spec import RunSpec
 from pydantic import ValidationError
 
 from rail.reviewer.github import PullRequest
+from rail.reviewer.headers import HEADER
 from rail.reviewer.policy import Provider, ReviewPolicy, Tier
 from rail.reviewer.verdict import FINDING_ID, PreviousAnswer, ReviewVerdict
 
@@ -137,7 +138,6 @@ class JudgeReply:
 
 
 _HUNK = re.compile(r"(?=^diff --git )", re.MULTILINE)
-_HUNK_PATH = re.compile(r"^diff --git a/(?P<path>\S+) b/")
 
 
 def prioritise_diff(diff: str, policy: ReviewPolicy) -> str:
@@ -150,8 +150,8 @@ def prioritise_diff(diff: str, policy: ReviewPolicy) -> str:
         return diff
 
     def rank(hunk: str) -> tuple[int, int]:
-        match = _HUNK_PATH.match(hunk)
-        path = match["path"] if match else ""
+        match = HEADER.match(hunk)
+        path = match["b"] if match else ""
         for index, prefix in enumerate(policy.diff_priority):
             if path.startswith(prefix):
                 return (0, index)
@@ -160,9 +160,12 @@ def prioritise_diff(diff: str, policy: ReviewPolicy) -> str:
         return (1, 0)
 
     def ignored(hunk: str) -> bool:
-        match = _HUNK_PATH.match(hunk)
-        path = match["path"] if match else ""
-        return any(fnmatch.fnmatch(path, g) for g in policy.ignored_globs)
+        # both sides generated, or the hunk stays: a lockfile renamed into code is code, and a
+        # header we cannot read is never dropped (ticket b1df8461)
+        match = HEADER.match(hunk)
+        return bool(match) and all(
+            any(fnmatch.fnmatch(match[side], g) for g in policy.ignored_globs) for side in "ab"
+        )
 
     kept = [h for h in hunks if not ignored(h)]
     return "".join(sorted(kept, key=rank))

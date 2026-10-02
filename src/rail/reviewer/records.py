@@ -11,15 +11,14 @@ from pathlib import PurePosixPath
 
 from rail.ledger import Record
 from rail.ledger.file import receipt_filename
+from rail.reviewer.headers import HEADER, parsed
 from rail.reviewer.verdict import Finding, ReviewVerdict
 
-_FILE = re.compile(r"^diff --git a/(?P<a>\S+) b/(?P<b>\S+)$", re.MULTILINE)
-_ANY_HEADER = re.compile(r"^diff --git ", re.MULTILINE)
 _MAX_FINDINGS = 100  # ReviewVerdict.findings' own bound
 
 
 def _starts(diff: str) -> list[re.Match[str]]:
-    return list(_FILE.finditer(diff))
+    return list(HEADER.finditer(diff))
 
 
 def _patches(diff: str) -> list[tuple[str, str, str]]:
@@ -61,8 +60,8 @@ def mechanical_verdict(diff: str, *, project: str) -> ReviewVerdict:
             "no receipt in the diff",
             "a records-only pull request adds at least one receipt",
         )
-    elif len(_ANY_HEADER.findall(diff)) != len(starts) or diff[: starts[0].start()].strip():
-        # C1, fail closed: a path a space or a git quote defeats `_FILE` hides a whole file
+    elif not parsed(diff) or diff[: starts[0].start()].strip():
+        # C1, fail closed: a path a space or a git quote defeats `HEADER` hides a whole file
         # from every check below it — never classify on the paths we could read.
         refuse(
             "(diff)",

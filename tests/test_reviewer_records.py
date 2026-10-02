@@ -103,3 +103,15 @@ def test_an_empty_diff_is_refused() -> None:
     verdict = mechanical_verdict("", project="red-alpha")
     assert verdict.verdict == "request_changes"
     assert [f.title for f in verdict.findings] == ["no receipt in the diff"]
+
+
+def test_an_added_receipt_whose_path_changes_is_refused(tmp_path: Path) -> None:
+    """Defence in depth: git never writes a new file with two paths, but a diff can."""
+    diff = added_receipt_diff(_receipt(tmp_path))
+    header, rest = diff.split("\n", 1)
+    moved = header.rsplit(" b/", 1)[0] + " b/docs/receipts/other.json\n" + rest
+    verdict = mechanical_verdict(moved, project="red-alpha")
+    assert verdict.verdict == "request_changes"
+    assert [(f.file, f.title) for f in verdict.findings] == [
+        ("docs/receipts/other.json", "receipt path changes")
+    ]

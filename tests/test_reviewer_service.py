@@ -2369,3 +2369,56 @@ def test_a_path_the_header_pattern_cannot_read_is_always_judged(tmp_path: Path) 
     )
     assert calls  # the judge was called: a hidden file never gets a mechanical approve
     assert outcome.verdict.mode != "mechanical"
+
+
+# Ticket b1df8461: a header is read whole, on both of its sides, or the change is judged as code.
+RENAME_TO_CODE = (
+    "diff --git a/docs/specs/x.md b/src/evil.py\nsimilarity index 60%\n"
+    "rename from docs/specs/x.md\nrename to src/evil.py\n"
+    "--- a/docs/specs/x.md\n+++ b/src/evil.py\n@@ -1 +1 @@\n-spec\n+import os\n"
+)
+# a file named `docs/x.md b/src/evil.py`: only an unanchored pattern reads `docs/x.md` in it
+SPACED = "diff --git a/docs/x.md b/src/evil.py b/docs/x.md b/src/evil.py\n+evil\n"
+
+
+def test_docs_only_reads_both_sides_of_a_whole_header() -> None:
+    assert not docs_only(RENAME_TO_CODE, default_policy())
+    assert not docs_only("diff --git a/docs/y.md b/docs/y.md\n" + SPACED, default_policy())
+
+
+def test_a_spec_renamed_into_code_is_judged_as_code(tmp_path: Path) -> None:
+    repo, ledger = _repo(tmp_path)
+    github = FakeGitHub(diff_text=RENAME_TO_CODE)
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert outcome.verdict.artifact == "code"
+
+
+def test_a_part_with_an_unread_header_keeps_its_blocking_findings() -> None:
+    """A judge that read a part whose header we cannot read may block on that file: the
+    finding is on a file of its part, which `_files` cannot name (fail closed)."""
+    from rail.reviewer.service import _within_part
+
+    reply = _blocking_on("codex", "deep", "docs/x.md b/src/evil.py")
+    kept = _within_part(reply, SPACED)
+    assert kept.verdict is not None and kept.verdict.verdict == "request_changes"
+    assert [f.severity for f in kept.verdict.findings] == ["blocking"]
+
+
+def test_a_judge_may_block_on_the_new_side_of_a_rename() -> None:
+    from rail.reviewer.service import _within_part
+
+    kept = _within_part(_blocking_on("codex", "deep", "src/evil.py"), RENAME_TO_CODE)
+    assert kept.verdict is not None and kept.verdict.verdict == "request_changes"
