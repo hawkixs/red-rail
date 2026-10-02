@@ -1,4 +1,4 @@
-"""Stage 3 — plan: the latest dated plan references an existing spec and every task
+"""Stage 3 — plan: every plan of the latest date references an existing spec and every task
 carries a verification (an expectation, an assertion, an exit code).
 
 A plan of the graph method — `gitnexus-plan` writes `<date>-gitnexus-plan-<slug>.md` and
@@ -14,7 +14,7 @@ from pathlib import Path
 import yaml
 
 from rail import gitrepo, markdown
-from rail.gates import GateResult, GateSpec, Stage
+from rail.gates import GateResult, GateSpec, Stage, first_failure
 
 PLANS_DIR = "docs/plans"
 
@@ -25,11 +25,15 @@ _FULL_SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 
 def plan(repo: Path) -> GateResult:
-    latest = markdown.latest_doc(repo / PLANS_DIR)
-    if latest is None:
+    latest = markdown.latest_docs(repo / PLANS_DIR)
+    if not latest:
         return GateResult(
             Stage.PLAN, "plan", False, f"no dated plan in {PLANS_DIR} (expected <date>-<topic>.md)"
         )
+    return first_failure(_plan(repo, doc) for doc in latest)
+
+
+def _plan(repo: Path, latest: Path) -> GateResult:
     text = latest.read_text()
     if _GITNEXUS_PLAN.match(latest.name):
         return _gitnexus_plan(repo, latest.name, text)

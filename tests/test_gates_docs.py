@@ -96,6 +96,21 @@ def test_design_passes_on_a_conforming_spec(tmp_path: Path) -> None:
     assert result.passed and "2026-09-15-red-alpha-design.md" in result.details
 
 
+def test_design_reads_every_spec_of_the_newest_date(tmp_path: Path) -> None:
+    """Ticket 2037c311, measured in red-monitor: a new spec sorting before the day's merged one
+    was never read, and the gate passed on the merged one."""
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    specs = repo / "docs" / "specs"
+    merged = specs / "2026-09-15-red-alpha-design.md"
+    (specs / "2026-09-15-claude-usage-design.md").write_text("# x\n\n## Problem\n")
+    result = spec(repo)
+    assert not result.passed and "2026-09-15-claude-usage-design.md" in result.details
+    (specs / "2026-09-15-claude-usage-design.md").write_text(merged.read_text())
+    result = spec(repo)
+    assert result.passed
+    assert "2026-09-15-claude-usage-design.md" in result.details and merged.name in result.details
+
+
 def test_plan_wants_a_dated_plan(tmp_path: Path) -> None:
     result = plan(tmp_path)
     assert result.stage is Stage.PLAN and not result.passed
@@ -126,6 +141,21 @@ def test_plan_requires_a_verification_per_task(tmp_path: Path) -> None:
 def test_plan_passes_on_a_conforming_plan(tmp_path: Path) -> None:
     result = plan(conforming_tree(tmp_path, "red-beta", "dev"))
     assert result.passed and "1 task(s)" in result.details
+
+
+def test_plan_reads_every_plan_of_the_newest_date(tmp_path: Path) -> None:  # ticket 2037c311
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    plans = repo / "docs" / "plans"
+    merged = plans / "2026-09-15-red-beta-plan.md"
+    (plans / "2026-09-15-a-new-plan.md").write_text(
+        "# plan\n\ndocs/specs/2026-09-15-red-beta-design.md\n\n### Task 1: x\n- write code\n"
+    )
+    result = plan(repo)
+    assert not result.passed and "2026-09-15-a-new-plan.md" in result.details
+    (plans / "2026-09-15-a-new-plan.md").write_text(merged.read_text())
+    result = plan(repo)
+    assert result.passed and "2026-09-15-a-new-plan.md" in result.details
+    assert merged.name in result.details
 
 
 # The graph method's plan, in the two forms `gitnexus-plan` writes (its plan-template.md):

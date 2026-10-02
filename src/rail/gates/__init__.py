@@ -11,7 +11,7 @@ scope rule, and turns an unexpected crash into a failed result — visibly, neve
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
@@ -53,6 +53,17 @@ class GateResult:
         data = asdict(self)
         data["stage"] = self.stage.value
         return data
+
+
+def first_failure(results: Iterable[GateResult]) -> GateResult:
+    """One verdict over several documents: the first that fails, or a pass that names each of
+    them (ticket 2037c311: every doc of the latest date is read)."""
+    passed: list[GateResult] = []
+    for result in results:
+        if not result.passed:
+            return result
+        passed.append(result)
+    return replace(passed[0], details="; ".join(r.details for r in passed))
 
 
 @dataclass(frozen=True, slots=True)
