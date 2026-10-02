@@ -50,6 +50,30 @@ def test_once_reports_the_error_of_an_unreadable_checkout(tmp_path: Path, monkey
     assert out.exit_code != 0 and "rail.yaml" in out.output
 
 
+def test_a_checkout_without_a_manifest_names_the_onboarding_procedure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Ticket 98d8f8a8: the onboarding pull request is the one that ADDS rail.yaml, so the
+    checkout reviewer.yaml declares has none yet. The manifest stays read from that trusted
+    checkout, never from the pull request's head (it chooses where the verdict is attested):
+    the refusal names the procedure instead of a bare "missing"."""
+
+    class NoGitHub:
+        def __init__(self, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("rail.reviewer.github.GitHubApp", NoGitHub)
+    (tmp_path / "red-alpha").mkdir()
+    out = CliRunner().invoke(main, ["reviewer", "once", "--config", str(_config(tmp_path))])
+    assert out.exit_code == 1
+    assert "hawkixs/red-alpha" in out.output and str(tmp_path / "red-alpha") in out.output
+    assert "onboarding" in out.output and "worktree" in out.output
+    assert "reviewer.yaml" in out.output
+
+
 def test_once_refuses_a_repository_the_config_does_not_watch(tmp_path: Path, monkeypatch) -> None:
     """Reported by red-arena (c964c791): a slug missing from reviewer.yaml used to review
     nothing and exit 0, which reads as "nothing to review" rather than "not watched"."""
