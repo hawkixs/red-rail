@@ -11,7 +11,6 @@ _HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
 _NUMBERING = re.compile(r"^(?:\d+(?:\.\d+)*[.)]?|[IVXLC]+\.)\s+")
 _FENCE = re.compile(r"^(`{3,})([\w+-]*)[^\n]*\n(.*?)^\1`*[ \t]*$", re.MULTILINE | re.DOTALL)
 _DATED = re.compile(r"^\d{4}-\d{2}-\d{2}-.+\.md$")
-_SPEC_REF = re.compile(r"docs/specs/[\w.\-/]+\.md")
 _TASK = re.compile(r"^###\s+Task\b.*$", re.MULTILINE)
 _LIST_ITEM = re.compile(r"^(?:\d+[.)]|[-*+])[ \t]+\S", re.MULTILINE)
 _VERIFICATION = re.compile(
@@ -93,10 +92,11 @@ def latest_docs(directory: Path) -> list[Path]:
     return [p for p in dated if p.name[:10] == newest]
 
 
-def spec_references(text: str) -> list[str]:
-    """`docs/specs/…md` paths cited outside fenced code, first occurrence first."""
+def spec_references(text: str, specs_dir: str = "docs/specs") -> list[str]:
+    """`<specs_dir>/…md` paths cited outside fenced code, first occurrence first."""
+    pattern = re.compile(rf"{re.escape(specs_dir)}/[\w.\-/]+\.md")
     seen: list[str] = []
-    for ref in _SPEC_REF.findall(_mask_fences(text)):
+    for ref in pattern.findall(_mask_fences(text)):
         if ref not in seen:
             seen.append(ref)
     return seen
