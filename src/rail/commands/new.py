@@ -9,12 +9,12 @@ import click
 
 from rail.gates.hygiene import DOMAIN_PLACEHOLDER, roster_row
 from rail.ledger import LedgerError
-from rail.model import DeployTarget, LedgerBackend, Stack, Tier
+from rail.model import PROJECT_PATTERN, DeployTarget, LedgerBackend, Stack, Tier
 from rail.policy import stages_for
 from rail.remotes import RemoteError
 from rail.scaffold import TEMPLATE_SOURCE, NewProject, ScaffoldError, new_project
 
-SLUG = re.compile(r"^red-[a-z0-9]+(-[a-z0-9]+)*$")
+SLUG = re.compile(PROJECT_PATTERN)  # a new project is always red-<slug>, never admitted
 # Every key of the root roster fits, `auto_discord` included. It is rendered into
 # `brain_session_start("<key>", …)` and checked there by one regex (decision 8).
 BRAIN_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]*$")

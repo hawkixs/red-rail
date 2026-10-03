@@ -14,7 +14,14 @@ from typing import Any, Literal
 from uuid import UUID
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 MANIFEST_NAME = "rail.yaml"
 
@@ -150,6 +157,15 @@ class DeployConfig(BaseModel):
 IGNORED_GLOBS = "review.ignored_globs"
 JUDGED_DIRECTORIES = ("src", ".github")
 
+# A project is named `red-<slug>`, the name `rail new` gives. A repository that predates ReD's
+# naming keeps its public name by being listed here (ticket 7daf7462).
+PROJECT_PATTERN = r"^red-[a-z0-9]+(-[a-z0-9]+)*$"
+ADMITTED_PROJECTS = frozenset({"brain-v42"})
+
+# Where the design, plan and docs layout gates read `specs/`, `plans/` and `adr/`. A project
+# whose docs live in a private clone declares that root (ticket 7daf7462).
+DOCS_ROOT = "docs.root"
+
 
 class GateOverride(BaseModel):
     """A declared exception. `reason` is mandatory so the audit can show it instead of hiding it."""
@@ -164,7 +180,7 @@ class RailConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rail: Literal[1]
-    project: str = Field(pattern=r"^red-[a-z0-9]+(-[a-z0-9]+)*$")
+    project: str
     brain_key: str = Field(min_length=1, max_length=50)
     tier: Tier
     stack: Stack
@@ -172,6 +188,15 @@ class RailConfig(BaseModel):
     ticket: UUID | None = None  # the delivery ticket (`red → <project>`), brain ledger only
     deploy: DeployConfig | None = None
     gates: dict[str, GateOverride] = Field(default_factory=dict)
+
+    @field_validator("project")
+    @classmethod
+    def _project_name(cls, value: str) -> str:
+        if value in ADMITTED_PROJECTS or re.fullmatch(PROJECT_PATTERN, value):
+            return value
+        raise ValueError(
+            f"must match {PROJECT_PATTERN} or be one of {', '.join(sorted(ADMITTED_PROJECTS))}"
+        )
 
     @model_validator(mode="after")
     def _prod_requires_deploy(self) -> RailConfig:
@@ -195,6 +220,28 @@ class RailConfig(BaseModel):
                     "deploy.site and a gates override of deploy.bind_address are two sources "
                     "for one address: the site's comes from the host, drop the override"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _docs_root_stays_in_the_repository(self) -> RailConfig:
+        override = self.gates.get(DOCS_ROOT)
+        if override is None:
+            return self
+        root = override.value
+        if (
+            not isinstance(root, str)
+            or not root
+            or "\\" in root
+            or Path(root).is_absolute()
+            or ".." in Path(root).parts
+        ):
+            raise ValueError(
+                f"{DOCS_ROOT}: {root!r} must be a relative path inside the repository, "
+                "such as 'internal/docs'"
+            )
+        if Path(root) == Path("docs"):
+            # declared, an absent root is skipped; the default's absence must stay a failure
+            raise ValueError(f"{DOCS_ROOT}: 'docs' is the default, drop the override")
         return self
 
     @model_validator(mode="after")

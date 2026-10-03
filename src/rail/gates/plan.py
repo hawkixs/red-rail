@@ -15,8 +15,7 @@ import yaml
 
 from rail import gitrepo, markdown
 from rail.gates import GateResult, GateSpec, Stage, first_failure
-
-PLANS_DIR = "docs/plans"
+from rail.policy import PRIVATE_DOCS_ROOT, docs_root
 
 _GITNEXUS_PLAN = re.compile(r"^\d{4}-\d{2}-\d{2}-gitnexus-plan-.+\.md$")
 # a full object name, SHA-1 or SHA-256: a ref such as `HEAD` resolves to whatever is checked
@@ -25,25 +24,29 @@ _FULL_SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 
 def plan(repo: Path) -> GateResult:
-    latest = markdown.latest_docs(repo / PLANS_DIR)
+    root, absent = docs_root(repo)
+    if absent:
+        return GateResult(Stage.PLAN, "plan", True, absent, skipped=PRIVATE_DOCS_ROOT)
+    plans_dir = f"{root}/plans"
+    latest = markdown.latest_docs(repo / plans_dir)
     if not latest:
         return GateResult(
-            Stage.PLAN, "plan", False, f"no dated plan in {PLANS_DIR} (expected <date>-<topic>.md)"
+            Stage.PLAN, "plan", False, f"no dated plan in {plans_dir} (expected <date>-<topic>.md)"
         )
-    return first_failure(_plan(repo, doc) for doc in latest)
+    return first_failure(_plan(repo, doc, f"{root}/specs") for doc in latest)
 
 
-def _plan(repo: Path, latest: Path) -> GateResult:
+def _plan(repo: Path, latest: Path, specs_dir: str) -> GateResult:
     text = latest.read_text()
     if _GITNEXUS_PLAN.match(latest.name):
         return _gitnexus_plan(repo, latest.name, text)
-    refs = markdown.spec_references(text)
+    refs = markdown.spec_references(text, specs_dir)
     if not refs:
         return GateResult(
             Stage.PLAN,
             "plan",
             False,
-            f"{latest.name}: references no spec (docs/specs/<date>-<topic>.md)",
+            f"{latest.name}: references no spec ({specs_dir}/<date>-<topic>.md)",
         )
     missing = [ref for ref in refs if not (repo / ref).is_file()]
     if missing:

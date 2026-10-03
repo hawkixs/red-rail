@@ -30,9 +30,9 @@ from rail.model import (
     manifest_problem,
     try_load_rail_config,
 )
-from rail.policy import effective
+from rail.policy import PRIVATE_DOCS_ROOT, docs_root, effective
 
-DOCS_DIRS = ("docs/specs", "docs/plans", "docs/adr")
+DOCS_SUBDIRS = ("specs", "plans", "adr")  # under the docs root, `docs` unless declared
 # The ReD root's identity table is recognised by its whole header: a bare `| Project |` prefix
 # also opens every "Related projects" table (spec 2026-09-24-template-alignment, decision 2).
 ROSTER_HEADER = ("Project", "Domain", "What it is", "Brain key")
@@ -221,10 +221,15 @@ def known_gate_keys() -> set[str]:
 
 
 def docs_layout(repo: Path) -> GateResult:
-    missing = [d for d in DOCS_DIRS if not (repo / d).is_dir()]
+    root, absent = docs_root(repo)
+    if absent:
+        return GateResult(Stage.HYGIENE, "docs_layout", True, absent, skipped=PRIVATE_DOCS_ROOT)
+    missing = [f"{root}/{d}" for d in DOCS_SUBDIRS if not (repo / root / d).is_dir()]
     if missing:
         return GateResult(Stage.HYGIENE, "docs_layout", False, "missing: " + ", ".join(missing))
-    return GateResult(Stage.HYGIENE, "docs_layout", True, "docs/{specs,plans,adr} present")
+    return GateResult(
+        Stage.HYGIENE, "docs_layout", True, f"{root}/{{{','.join(DOCS_SUBDIRS)}}} present"
+    )
 
 
 def claude_md(repo: Path) -> GateResult:

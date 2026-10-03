@@ -6,19 +6,21 @@ from pathlib import Path
 
 from rail import markdown
 from rail.gates import GateResult, GateSpec, Stage, first_failure
-from rail.policy import REQUIRED_SPEC_SECTIONS
-
-SPECS_DIR = "docs/specs"
+from rail.policy import PRIVATE_DOCS_ROOT, REQUIRED_SPEC_SECTIONS, docs_root
 
 
 def spec(repo: Path) -> GateResult:
-    latest = markdown.latest_docs(repo / SPECS_DIR)
+    root, absent = docs_root(repo)
+    if absent:
+        return GateResult(Stage.DESIGN, "spec", True, absent, skipped=PRIVATE_DOCS_ROOT)
+    specs_dir = f"{root}/specs"
+    latest = markdown.latest_docs(repo / specs_dir)
     if not latest:
         return GateResult(
             Stage.DESIGN,
             "spec",
             False,
-            f"no dated spec in {SPECS_DIR} (expected <date>-<topic>.md)",
+            f"no dated spec in {specs_dir} (expected <date>-<topic>.md)",
         )
     return first_failure(_spec(doc) for doc in latest)
 

@@ -42,7 +42,8 @@ class GateResult:
     passed: bool
     details: str
     exception: str | None = None  # reason of a declared exception (`gates:` in rail.yaml)
-    skipped: str | None = None  # why the gate was not evaluated (workstation-only under --ci)
+    skipped: str | None = None  # why the gate was not evaluated (workstation-only under --ci,
+    # or a declared private docs root absent from this checkout)
     needs: str | None = None  # the manifest key the verdict depends on — always fail-closed
 
     @property

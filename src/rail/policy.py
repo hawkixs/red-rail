@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from rail.gates import Stage
-from rail.model import Tier, try_load_rail_config
+from rail.model import DOCS_ROOT, Tier, try_load_rail_config
 
 TIER_STAGES: dict[Tier, tuple[Stage, ...]] = {
     Tier.BOOTSTRAP: (Stage.HYGIENE, Stage.INTENT, Stage.DESIGN),
@@ -61,6 +61,9 @@ GATE_DEFAULTS: dict[str, Any] = {
     # generated files the reviewer never sends to a judge, added to its own list; validated by
     # the manifest (model.IGNORED_GLOBS) and read by `rail reviewer` from the trusted checkout
     "review.ignored_globs": (),
+    # the root of specs/, plans/ and adr/; a project whose docs live in a private clone
+    # declares it, and its absence (a public checkout, CI) is a visible skip (ticket 7daf7462)
+    DOCS_ROOT: "docs",
     "build.commit_window": 20,
     "build.conventional_types": (
         "feat",
@@ -126,6 +129,20 @@ def effective(repo: Path, key: str) -> tuple[Any, str | None]:
     if override is None:
         return default, None
     return override.value, override.reason
+
+
+PRIVATE_DOCS_ROOT = "private_docs_root"  # the `skipped` value of a gate whose root is absent
+
+
+def docs_root(repo: Path) -> tuple[str, str | None]:
+    """(root, absence): the root the design, plan and docs layout gates read, and the details
+    of their skip when a DECLARED root is absent — a private clone that a public checkout and
+    CI never hold. The default root is never skipped: its absence stays a failure."""
+    value, reason = effective(repo, DOCS_ROOT)
+    root = str(value).rstrip("/")
+    if reason is not None and not (repo / root).is_dir():
+        return root, f"not evaluated: private docs root {root} absent ({reason})"
+    return root, None
 
 
 def parameter(repo: Path, key: str, *, project: str | None = None) -> Any:

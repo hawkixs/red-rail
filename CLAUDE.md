@@ -46,7 +46,10 @@ comments, test names. The conversation with the operator stays in French.
   behind a Claude Code skill, so policy exists once.
 - `src/rail/policy.py` — tier defaults (`TIER_STAGES`, `GATE_DEFAULTS`, spec section aliases)
   and `effective(repo, key)`: a `gates:` override in `rail.yaml` is a declared exception,
-  reported by `rail check` and `rail audit`, never hidden.
+  reported by `rail check` and `rail audit`, never hidden. `docs.root` (default `docs`) is
+  where the design, plan and docs layout gates read `specs/`, `plans/` and `adr/`; a declared
+  root absent from the checkout (a private clone, CI) makes them skip by name, never pass.
+  A project is named `red-<slug>`; `model.ADMITTED_PROJECTS` lists the names that predate it.
 - `src/rail/gates/` — `hygiene`, `intent`, `design`, `plan`, `build`, `evidence` (stages 5–10
   read the ledger, and gain `observe.visible` in phase 3: red-monitor sees the deployed
   container). Three scopes: `repo`; `workstation` (`hygiene.remotes`,
