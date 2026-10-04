@@ -1892,7 +1892,13 @@ def test_upgrade_switches_docs_to_typescript(template_dir: Path, tmp_path: Path)
 
     dest = project.dest
     assert "stack: typescript" in (dest / ANSWERS_FILE).read_text()
-    assert "stack: typescript" in (dest / "rail.yaml").read_text()
+    import yaml
+
+    manifest = (dest / "rail.yaml").read_text()
+    assert "stack: typescript" in manifest
+    exception = yaml.safe_load(manifest)["gates"]["review.ignored_globs"]
+    assert exception["value"] == ["vendor/claude-code/**"]
+    assert exception["reason"].strip()
     ci = dest / ".github" / "workflows" / "continuous-integration.yml"
     assert "stack: typescript" in ci.read_text()
     assert (dest / ".claude-plugin" / "plugin.json").is_file()
