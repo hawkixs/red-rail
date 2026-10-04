@@ -281,7 +281,7 @@ def record_contract(
         project.slug,
         contract,
         reason="bootstrap",
-        issuer="rail new",
+        issuer="service:rail-new",
         idempotency_key=f"contract:{project.slug}:1",
     )
 
