@@ -17,7 +17,8 @@ import copier
 import yaml
 
 from rail import remotes
-from rail.gates import GateResult, run_gates
+from rail.gates import GateResult, Stage, run_gates
+from rail.gates.build import LOCKFILES, lock_missing
 from rail.ledger import (
     Contract,
     Deliverable,
@@ -320,10 +321,38 @@ def init_git(project: NewProject) -> str:
     return _git(project.dest, "rev-parse", "HEAD")
 
 
+SYNC_TAIL_LINES = 10
+
+
+def sync_locks(project: NewProject, *, run: remotes.Runner = subprocess.run) -> None:
+    """Run the generated tree's own `make sync` where the stack's lint gate requires a lockfile
+    that only the sync writes, so the lock is part of the bootstrap commit. Fail-closed, and
+    before anything is committed or published."""
+    if project.stack not in LOCKFILES:
+        return
+    try:
+        done = run(
+            ["make", "sync"], cwd=str(project.dest), capture_output=True, text=True, check=False
+        )
+    except (FileNotFoundError, OSError) as exc:
+        raise ScaffoldError(f"make is not available on this host: {exc}") from exc
+    if done.returncode != 0:
+        tail = "\n".join((done.stderr or done.stdout or "").strip().splitlines()[-SYNC_TAIL_LINES:])
+        raise ScaffoldError(
+            f"`make sync` failed in {project.dest} (exit {done.returncode}): the stack needs "
+            f"{LOCKFILES[project.stack]} committed and nothing was published\n{tail}"
+        )
+
+
 def verify(project: NewProject) -> list[GateResult]:
-    """The floor a fresh tree can pass (hygiene, intent, design); the declared tier is what
-    `rail check` demands next."""
-    return run_gates(project.dest, stages=stages_for(Tier.BOOTSTRAP), ci=True)
+    """The floor a fresh tree can pass (hygiene, intent, design) and, for a stack whose lint
+    gate requires a lockfile, that the lock is there — what `rail check` will read next at the
+    declared tier."""
+    results = run_gates(project.dest, stages=stages_for(Tier.BOOTSTRAP), ci=True)
+    missing = lock_missing(project.dest, project.stack)
+    if missing is not None:
+        results.append(GateResult(Stage.BUILD, "lint", False, missing))
+    return results
 
 
 def new_project(
@@ -344,6 +373,7 @@ def new_project(
     write_bootstrap_spec(project)
     if project.ledger is LedgerBackend.FILE:
         record_contract(project, clock=clock, client=client)  # part of the bootstrap commit
+    sync_locks(project, run=run)
     init_git(project)
     results = verify(project)
     failing = [r for r in results if not r.passed]

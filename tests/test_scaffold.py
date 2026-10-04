@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -340,6 +341,122 @@ def test_new_project_passes_bootstrap_without_remotes(template_dir: Path, tmp_pa
     assert "A disposable HTTP probe." in spec.read_text()
     out = CliRunner().invoke(main, ["check", "--repo", str(dest), "--ci"])
     assert out.exit_code == 0, out.output
+
+
+def _syncing(calls: list[list[str]], *, writes: str | None, status: int = 0, stderr: str = ""):
+    """A runner standing in for `make sync`: it records the call, and writes `writes` (the lock
+    the real recipe would) into the tree it runs in. Nothing here runs npm or cargo."""
+
+    def run(args, **kwargs):
+        calls.append(list(args))
+        if args == ["make", "sync"]:
+            if writes and status == 0:
+                (Path(kwargs["cwd"]) / writes).write_text("{}\n")
+            return subprocess.CompletedProcess(args, status, stdout="", stderr=stderr)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    return run
+
+
+@pytest.mark.parametrize(
+    ("stack", "lock"),
+    [(Stack.RUST, "Cargo.lock"), (Stack.TYPESCRIPT, "package-lock.json")],
+)
+def test_a_birth_of_a_lock_bearing_stack_commits_the_lock_it_syncs(
+    template_dir: Path, tmp_path: Path, stack: Stack, lock: str
+) -> None:
+    """The stack's lint gate requires the lock committed, and only `make sync` writes it: the
+    birth runs the tree's own `make sync` before the bootstrap commit, so a tier dev birth does
+    not publish a tree on which `rail check` fails build.lint (ticket 3623548f)."""
+    calls: list[list[str]] = []
+    project = _project(template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=stack)
+
+    new_project(project, publish=False, clock=CLOCK, run=_syncing(calls, writes=lock), resolve=_pin)
+
+    assert calls == [["make", "sync"]]
+    tracked = subprocess.run(
+        ["git", "-C", str(project.dest), "ls-files"], capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert lock in tracked
+    assert gitrepo.recent_subjects(project.dest, 5) == [
+        "chore: bootstrap red-throwaway with the ReD rail"
+    ]
+
+
+@pytest.mark.parametrize("stack", [Stack.PYTHON, Stack.GO, Stack.DOCS])
+def test_a_stack_without_a_lock_gate_runs_no_sync(
+    template_dir: Path, tmp_path: Path, stack: Stack
+) -> None:
+    calls: list[list[str]] = []
+    project = _project(template_dir, tmp_path / "red-probe", stack=stack)
+    new_project(project, publish=False, clock=CLOCK, run=_syncing(calls, writes=None), resolve=_pin)
+    assert calls == []
+
+
+def test_a_failing_sync_stops_the_birth_before_anything_is_committed_or_published(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+    project = _project(template_dir, tmp_path / "red-throwaway", slug="red-throwaway")
+    project = replace(project, stack=Stack.RUST)
+    run = _syncing(calls, writes=None, status=101, stderr="a\n" * 40 + "error: no network")
+
+    with pytest.raises(ScaffoldError) as refused:
+        new_project(project, publish=True, clock=CLOCK, run=run, resolve=_pin)
+
+    message = str(refused.value)
+    assert "make sync" in message and "exit 101" in message and "error: no network" in message
+    assert message.count("a\n") < 40, "the stderr is tailed, not dumped"
+    assert calls == [["make", "sync"]], "no gh call, no push"
+    assert not (project.dest / ".git").exists()
+
+
+def test_a_sync_that_leaves_no_lock_fails_the_birth_like_the_gate_would(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+    project = _project(
+        template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.TYPESCRIPT
+    )
+    with pytest.raises(ScaffoldError, match=r"build\.lint: package-lock\.json is missing"):
+        new_project(
+            project, publish=False, clock=CLOCK, run=_syncing(calls, writes=None), resolve=_pin
+        )
+
+
+def test_a_host_without_make_refuses_the_birth_by_name(template_dir: Path, tmp_path: Path) -> None:
+    def no_make(args, **kwargs):
+        raise FileNotFoundError(args[0])
+
+    project = _project(
+        template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.RUST
+    )
+    with pytest.raises(ScaffoldError, match="make"):
+        new_project(project, publish=False, clock=CLOCK, run=no_make, resolve=_pin)
+
+
+def test_the_lock_bearing_stacks_are_the_ones_the_lint_gate_demands_a_lock_of(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """One list, owned by the gate: every stack in it fails build.lint without its lock, and the
+    birth syncs exactly those."""
+    from rail.gates import build
+
+    assert set(build.LOCKFILES) == {Stack.RUST, Stack.TYPESCRIPT}
+    for stack, lock in build.LOCKFILES.items():
+        dest = render(
+            _project(
+                template_dir,
+                tmp_path / f"red-{stack.value}",
+                stack=stack,
+                slug=f"red-{stack.value}",
+            )
+        )
+        assert (
+            build.lock_missing(dest, stack) == f"{lock} is missing: run `make sync`, then commit it"
+        )
+        (dest / lock).write_text("{}\n")
+        assert build.lock_missing(dest, stack) is None
 
 
 def test_new_project_reports_failing_gates(template_dir: Path, tmp_path: Path) -> None:
