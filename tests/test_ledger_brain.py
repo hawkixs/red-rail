@@ -406,6 +406,31 @@ def test_milestones_are_read_from_the_ticket_never_attested(tmp_path: Path) -> N
     assert ledger.get("red-probe", integrated[0].digest) == integrated[0]
 
 
+def test_superseded_receipts_are_listed_once_beside_the_current_one(tmp_path: Path) -> None:
+    """Ticket d096f911: a new integration supersedes the current receipt in brain; the
+    superseded one is still a fact on its own line of history, so the view's history page
+    is read too — each receipt once, whichever way brain reports it."""
+    ledger, brain, ticket = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    brain.integrate(ticket, "a" * 40, issued_at=T0 + timedelta(hours=1))
+    brain.integrate(ticket, "b" * 40, issued_at=T0 + timedelta(hours=2))
+    brain.fulfil(ticket, issued_at=T0 + timedelta(hours=3))
+    integrated = ledger.list("red-probe", attestation=AttestationKind.INTEGRATED)
+    assert [r.data["sha"] for r in integrated] == ["a" * 40, "b" * 40]
+    assert len({r.data["receipt_id"] for r in integrated}) == 2
+    fulfilled = ledger.list("red-probe", attestation=AttestationKind.FULFILLED)
+    assert [r.data["sha"] for r in fulfilled] == ["b" * 40]
+    everything = [r for r in ledger.list("red-probe") if r.issuer == "brain-v42"]
+    assert len(everything) == 3
+
+    view = ledger._view(required=True, history=10)
+    assert view is not None
+    assert len(ledger._milestone_records(view, None)) == 3
+    assert ledger._milestone_records(view, AttestationKind.RELEASED) == []
+
+
 def test_contract_set_uses_cas_and_returns_the_revision(tmp_path: Path) -> None:
     ledger, brain, ticket = _ledger(tmp_path)
     first = ledger.contract_set(

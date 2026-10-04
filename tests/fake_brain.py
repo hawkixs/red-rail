@@ -98,6 +98,7 @@ class Ticket:
     bindings: list[dict[str, Any]] = field(default_factory=list)
     integration_receipt: dict[str, Any] | None = None
     fulfillment_receipt: dict[str, Any] | None = None
+    superseded_receipts: list[dict[str, Any]] = field(default_factory=list)
     status: str = "open"  # brain's raw ticket status; {wontfix, closed, acked} are terminal
 
     def participant(self, project: str) -> bool:
@@ -129,6 +130,8 @@ class FakeBrain:
 
     def integrate(self, ticket_id: str, integration_sha: str, *, issued_at: datetime) -> None:
         ticket = self._ticket(ticket_id)
+        if ticket.integration_receipt is not None:  # brain supersedes, it never deletes
+            ticket.superseded_receipts.append(ticket.integration_receipt)
         ticket.integration_receipt = {
             "id": str(uuid4()),
             "ticket_id": ticket_id,
@@ -176,6 +179,11 @@ class FakeBrain:
             key=lambda a: (a["emitted_at"], a["id"]),
             reverse=True,
         )
+        receipts = [
+            *((r, False) for r in (ticket.integration_receipt, ticket.fulfillment_receipt) if r),
+            *((r, True) for r in ticket.superseded_receipts),
+        ]
+        receipts.sort(key=lambda pair: pair[0]["issued_at"], reverse=True)
         return {
             "contract": ticket.revisions[-1],
             "assessment": {
@@ -199,7 +207,14 @@ class FakeBrain:
             "contexts": [],
             "integration_receipt": ticket.integration_receipt,
             "fulfillment_receipt": ticket.fulfillment_receipt,
-            "history": None,
+            "history": {  # brain's page, newest first: the current receipts and the superseded
+                "items": [
+                    {"kind": "receipt", "receipt": r, "superseded": superseded}
+                    for r, superseded in receipts[:history_limit]
+                ],
+                "next_cursor": None,
+                "omitted_count": max(0, len(receipts) - history_limit),
+            },
             "attestations": {
                 "items": rows[:history_limit],
                 "next_cursor": None,

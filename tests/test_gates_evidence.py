@@ -235,6 +235,47 @@ def test_integrated_is_the_newest_receipt_on_history(tmp_path: Path) -> None:
     assert result.passed and f"for {head[:12]}" in result.details, result
 
 
+def test_a_superseded_integration_receipt_still_places_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ticket d096f911: under `ledger: brain`, binding or integrating another pull request makes
+    brain supersede the current integration receipt. Main's receipt is then a superseded one,
+    and the gate still finds it on HEAD's history."""
+    from rail.brain.client import BrainClient
+    from rail.gates import evidence
+    from rail.ledger import Contract, Deliverable
+    from rail.ledger.brain import BrainLedger
+    from tests.fake_brain import FakeBrain
+
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    head = gitrepo.head_sha(repo)
+    brain = FakeBrain(agent="op")
+    ticket = brain.add_ticket("red", "red-beta")
+    brain.register_repository("red-beta", 4243, "hawkixs/red-beta")
+    ledger = BrainLedger(
+        BrainClient.in_memory(brain, agent="op"),
+        ticket=ticket,
+        project="red-beta",
+        spool_dir=tmp_path / "spool",
+        repository_id=lambda slug: 4243,
+    )
+    contract = Contract(
+        objective="o",
+        deliverables=[
+            Deliverable(
+                key="main", repository="hawkixs/red-beta", no_checks_reason="fixture: no check"
+            )
+        ],
+    )
+    ledger.contract_set("red-beta", contract, reason="r", issuer="op", idempotency_key="c1")
+    monkeypatch.setattr(evidence, "open_ledger", lambda repo: ledger)
+    brain.integrate(ticket, head, issued_at=T0)
+    assert integrated(repo).passed
+    brain.integrate(ticket, _commit_on_another_line(repo), issued_at=T0 + timedelta(minutes=5))
+    result = integrated(repo)
+    assert result.passed and f"for {head[:12]} at distance 0" in result.details, result
+
+
 def test_a_record_without_sha_fails_closed_even_over_an_older_one_on_history(
     tmp_path: Path,
 ) -> None:
