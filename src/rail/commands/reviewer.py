@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 
+from rail.commands._actor import resolve_or_exit
 from rail.ledger import open_ledger
 from rail.private import PrivateFileError
 
@@ -183,10 +183,6 @@ def run(config_path: Path | None) -> None:
         time.sleep(config.poll_seconds)
 
 
-def _interactive() -> bool:
-    return sys.stdin.isatty()
-
-
 @dataclass(frozen=True)
 class _PR:
     """A minimal stand-in for `PullRequest`: `loop_state`'s filters read only these two."""
@@ -211,7 +207,7 @@ class _PR:
 def rule(
     config_path: Path | None, repository: str, pr: int, finding: str, ruling: str, decision: str
 ) -> None:
-    """Rule on one open blocker after round 3 (spec 2026-09-25, D9). Interactive, host only."""
+    """Rule on one open blocker after round 3 (spec 2026-09-25, D9). Operator only, host only."""
     from rail.contract_guard import Unwritable, refuse_unwritable
     from rail.ledger import AttestationKind, Unattested
     from rail.model import load_rail_config
@@ -220,8 +216,9 @@ def rule(
 
     if os.environ.get("CI"):
         raise click.UsageError("a ruling is the operator's gesture: refused under CI")
-    if not _interactive():
-        raise click.UsageError("a ruling needs a terminal: it asks you to type the finding id")
+    actor = resolve_or_exit()
+    if not actor.startswith("operator"):
+        raise click.UsageError(f"a ruling is the operator's gesture, not {actor}'s")
     text = decision.strip()
     if not text or len(text) > 2000:
         raise click.UsageError("--decision must hold 1 to 2000 characters")
@@ -264,7 +261,7 @@ def rule(
     key = f"review_ruling:{repository}#{pr}:{finding}:{len(earlier) + 1}"
     try:
         ledger.attest(
-            project, AttestationKind.REVIEW_RULING, data, issuer="operator", idempotency_key=key
+            project, AttestationKind.REVIEW_RULING, data, issuer=actor, idempotency_key=key
         )
     except Unattested as exc:
         click.echo(

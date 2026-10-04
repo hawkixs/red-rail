@@ -294,3 +294,62 @@ def test_issuer_is_refused_by_release_deploy_and_drill(command: list[str], tmp_p
     repo = conforming_tree(tmp_path, "red-probe", "prod")
     out = CliRunner().invoke(main, [*command, "--repo", str(repo), "--issuer", "x"])
     assert out.exit_code == 2 and "RAIL_ACTOR" in out.output
+
+
+def _rule_world(tmp_path: Path):
+    from tests.test_cli_reviewer import _awaiting_repo, _rule
+
+    repo, config = _awaiting_repo(tmp_path)
+    return repo, lambda: _rule(config)
+
+
+def _rulings(repo: Path) -> list:
+    return FileLedger(repo / RECEIPTS_DIR).list(
+        "red-alpha", attestation=AttestationKind.REVIEW_RULING
+    )
+
+
+def test_a_ruling_is_refused_for_an_agent_behind_a_pseudo_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("RAIL_ACTOR")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setattr("rail.actor._stdin_is_tty", lambda: True)
+    repo, rule = _rule_world(tmp_path)
+    receipts = sorted((repo / RECEIPTS_DIR).glob("*.json"))
+    out = rule()
+    assert out.exit_code == 2 and "operator's gesture" in out.output
+    assert sorted((repo / RECEIPTS_DIR).glob("*.json")) == receipts and not _rulings(repo)
+    assert not list(spool_directory("red-alpha").glob("*"))
+
+
+def test_a_ruling_is_refused_when_the_actor_cannot_be_told(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("RAIL_ACTOR")
+    monkeypatch.setattr("rail.actor._stdin_is_tty", lambda: False)
+    repo, rule = _rule_world(tmp_path)
+    out = rule()
+    assert out.exit_code == 2 and "cannot tell who runs" in out.output
+    assert not _rulings(repo)
+
+
+def test_a_ruling_is_refused_for_a_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("RAIL_ACTOR", "service:cron")
+    repo, rule = _rule_world(tmp_path)
+    out = rule()
+    assert out.exit_code == 2 and "operator's gesture" in out.output
+    assert not _rulings(repo)
+
+
+def test_a_ruling_is_attested_as_the_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    repo, rule = _rule_world(tmp_path)
+    out = rule()
+    assert out.exit_code == 0, out.output
+    assert [r.issuer for r in _rulings(repo)] == ["operator"]
