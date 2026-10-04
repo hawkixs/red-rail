@@ -107,8 +107,10 @@ Each decision says what, why, what it costs if wrong, and which files it touches
      `claude` answers "native binary not installed" (its `postinstall` copies the platform binary);
      after that one rebuild, `--version`, `validate --strict` and `plugin test` run. The
      platform binary itself arrives as an optional dependency, which the lock records.
-   - Every tool runs from `node_modules/.bin` (`npx --no-install`): nothing is fetched when a target
-     runs.
+   - Every tool is called by its path, `$(BIN)/<tool>` with `BIN ?= node_modules/.bin`, never through
+     `npx`: measured on npm 10.9 and 11.19, `npx --no-install` still fetches an absent tool from the
+     registry, while a missing file in `node_modules/.bin` is an error. Nothing is fetched when a
+     target runs.
    - Why exact: a floating Biome or TypeScript changes the lints and the type errors under a green
      project; a floating `claude` changes what `validate --strict` accepts.
    - Cost: a version bump is a template edit plus `rail upgrade` per repository, as Go's is.
@@ -142,12 +144,12 @@ Each decision says what, why, what it costs if wrong, and which files it touches
      `rail.yaml.jinja`.
 
 5. **The typescript Makefile branch lines up with the other stacks.**
-   - Variables: `NPM ?= npm`, `NPX ?= npx --no-install`, `INSTALL ?= install`, so
+   - Variables: `NPM ?= npm`, `BIN ?= node_modules/.bin`, `INSTALL ?= install`, so
      `make NPM=<wrapper> ci` runs every target through a container (as `GO` and `CARGO` do).
    - `sync`: `$(NPM) $(INSTALL) --ignore-scripts`, then `$(NPM) rebuild @anthropic-ai/claude-code`
-     (decision 3). `lint`: `$(NPX) biome ci .` (formatting and
-     lints, no writes). `typecheck`: decision 4. `test`: `$(NPX) claude plugin test .`.
-     `validate`: `$(NPX) claude plugin validate --strict .`. `types`: decision 4.
+     (decision 3). `lint`: `$(BIN)/biome ci .` (formatting and
+     lints, no writes). `typecheck`: decision 4. `test`: `$(BIN)/claude plugin test .`.
+     `validate`: `$(BIN)/claude plugin validate --strict .`. `types`: decision 4.
    - `ci: lint typecheck test validate check`, so `rail check` runs last. `.PHONY` gains
      `typecheck validate types` for typescript.
    - Cost if wrong: the exact `plugin test` arguments differ from what is written here; the plan
@@ -158,7 +160,7 @@ Each decision says what, why, what it costs if wrong, and which files it touches
    `CLAUDE.md.jinja` and the `gates` chain of `AGENTS.md.jinja`) get an explicit typescript branch.
    - `.gitignore`: `node_modules/`, `.claude-plugin/types/`. Never `package-lock.json`, never
      `vendor/`.
-   - `settings.json`: `Bash(npm:*)` and `Bash(npx:*)`, as Go has `Bash(go:*)`. Not `Bash(claude:*)`:
+   - `settings.json`: `Bash(npm:*)`, as Go has `Bash(go:*)`; nothing calls `npx`. Not `Bash(claude:*)`:
      the engine is reached through `make`.
    - `CLAUDE.md` § Stack: a Claude Code plugin, TypeScript, Node pinned by `.node-version`, Biome,
      `tsc --noEmit` against the vendored types, `claude plugin test` and `validate --strict`.
@@ -213,7 +215,7 @@ Each decision says what, why, what it costs if wrong, and which files it touches
        `// Written by Claude Code <version>.` and `<version>` equals the pinned
        `@anthropic-ai/claude-code`, or the gate FAILs with "types written by X, pinned Y: load the
        plugin in a Claude Code Y session (or /plugin-types), then make types, or bump the pin".
-   - The regexes accept `$(NPX)`, as the others accept `$(CARGO)`. Each FAIL names the first
+   - The regexes accept `$(BIN)/`, as the others accept `$(CARGO)`. Each FAIL names the first
      missing piece and its remedy. The gate never runs Node.
    - A fresh `rail new --stack typescript --tier dev` FAILs `build.lint` until `make sync` writes
      the lock; `rail new` verifies only the bootstrap floor, so the scaffold stays green (rust's
@@ -276,7 +278,7 @@ Tests in red-rail. All are static; none needs Node, except criteria 9 and 10.
      `src`;
    - no `package-lock.json`, no `vendor/`, no `pyproject.toml`, `go.mod` or `Cargo.toml`;
    - `.gitignore` has `node_modules/` and `.claude-plugin/types/` and no lockfile entry;
-     `settings.json` parses and allows `Bash(npm:*)` and `Bash(npx:*)`, absent from the other stacks;
+     `settings.json` parses and allows `Bash(npm:*)`, absent from the other stacks;
    - `rail.yaml` declares `review.ignored_globs` with `vendor/claude-code/**` and a reason;
    - `CLAUDE.md` § Stack and § Structure and `AGENTS.md` § Gates carry the decision 6 content;
    - `make -n ci RAIL_FLAGS=--ci` prints, in order: `biome ci`, the typecheck, `plugin test`,
