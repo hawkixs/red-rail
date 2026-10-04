@@ -161,6 +161,34 @@ def test_rail_ci_installs_rust_from_the_project_pin() -> None:
     assert names.index(sync["name"]) < names.index("Project CI (make ci, rail gates in CI scope)")
 
 
+def test_rail_ci_installs_node_from_the_project_pin() -> None:
+    """setup-node reads the project's .node-version (the one pin, never repeated here) and keys
+    its npm cache on the lock; `make sync INSTALL=ci` is `npm ci`, so a missing or stale lock
+    fails there instead of being written (spec 2026-10-04-typescript-stack, decision 7)."""
+    wf = _load("rail-ci.yml")
+    assert "typescript" in wf["on"]["workflow_call"]["inputs"]["stack"]["description"]
+    steps = _steps(wf)
+    node = [s for s in steps if s.get("if") == "inputs.stack == 'typescript'"]
+    assert [s["name"] for s in node] == [
+        "Set up Node (the version in .node-version)",
+        "Install from the lock (npm ci, claude rebuilt)",
+    ]
+    setup, install = node
+    assert PINNED.match(setup["uses"])
+    assert setup["uses"].startswith("actions/setup-node@")
+    assert setup["with"] == {"node-version-file": ".node-version", "cache": "npm"}
+    assert install["run"].strip() == "make sync INSTALL=ci"
+
+    names = [s.get("name") for s in steps]
+    assert names.index(install["name"]) < names.index(
+        "Project CI (make ci, rail gates in CI scope)"
+    )
+    assert names.index(setup["name"]) < names.index(install["name"])
+    assert not re.search(r"\b\d{2}\.\d+\.\d+\b", str(setup)), (
+        "the Node version lives in the project"
+    )
+
+
 def test_the_template_ci_passes_no_runner() -> None:
     """GitHub-hosted by default: a project moves to red-ci by its own choice (decision 9)."""
     template = (

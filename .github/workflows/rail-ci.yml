@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       stack:
-        description: "python | go | rust | docs — must match rail.yaml"
+        description: "python | go | rust | typescript | docs — must match rail.yaml"
         type: string
         required: true
       rail-ref:
@@ -115,6 +115,21 @@ jobs:
       - name: Fetch against the committed lock, install cargo-deny
         if: inputs.stack == 'rust'
         run: make sync LOCKED=--locked
+
+      # Node: read from the project's own .node-version, the one pin, never repeated here. setup-node
+      # keys its npm cache on package-lock.json. `make sync INSTALL=ci` is `npm ci`: a missing or
+      # stale lock fails here instead of being written, install scripts stay off, and the one the
+      # claude package needs is run by `npm rebuild` (spec 2026-10-04-typescript-stack, decision 3).
+      - name: Set up Node (the version in .node-version)
+        if: inputs.stack == 'typescript'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install from the lock (npm ci, claude rebuilt)
+        if: inputs.stack == 'typescript'
+        run: make sync INSTALL=ci
 
       - name: Install gitleaks (pinned, checksum verified)
         env:

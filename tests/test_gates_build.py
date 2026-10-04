@@ -12,7 +12,14 @@ from rail.gates import build as build_gates
 from rail.gates.build import GATES, commits, has_tests, lint, secrets
 from rail.model import Stack, Tier
 from rail.scaffold import NewProject, render
-from tests.helpers import commit_all, conforming_tree, init_repo, write_manifest
+from tests.helpers import (
+    TYPESCRIPT_PIN,
+    commit_all,
+    conforming_tree,
+    init_repo,
+    write_manifest,
+    write_typescript_files,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -446,6 +453,51 @@ def test_a_fresh_rust_scaffold_fails_lint_until_make_sync_writes_the_lock(tmp_pa
     assert not result.passed and "Cargo.lock" in result.details and "make sync" in result.details
 
 
+def _rendered_typescript(tmp_path: Path) -> Path:
+    src = tmp_path / "template-src"
+    src.mkdir()
+    shutil.copy(ROOT / "copier.yml", src / "copier.yml")
+    shutil.copytree(ROOT / "template", src / "template")
+    dest = render(
+        NewProject(
+            slug="red-cockpit",
+            description="A disposable plugin.",
+            tier=Tier.DEV,
+            stack=Stack.TYPESCRIPT,
+            brain_key="red-cockpit",
+            dest=tmp_path / "red-cockpit",
+            template=str(src),
+        )
+    )
+    (dest / "package-lock.json").write_text('{"lockfileVersion": 3}\n')  # what `make sync` writes
+    return dest
+
+
+def test_typescript_lint_and_tests_pass_on_the_rendered_tree(tmp_path: Path) -> None:
+    dest = _rendered_typescript(tmp_path)
+    result = lint(dest)
+    assert result.passed, result.details
+    assert "24.21.0" in result.details and "SKIPPED" in result.details
+    assert has_tests(dest).passed
+
+
+def test_a_fresh_typescript_scaffold_fails_lint_until_make_sync_writes_the_lock(
+    tmp_path: Path,
+) -> None:
+    dest = _rendered_typescript(tmp_path)
+    (dest / "package-lock.json").unlink()
+    result = lint(dest)
+    assert not result.passed and "package-lock.json" in result.details
+    assert "make sync" in result.details
+
+
+def test_typescript_lint_fails_on_the_rendered_tree_when_a_call_is_dropped(tmp_path: Path) -> None:
+    dest = _rendered_typescript(tmp_path)
+    _replace(dest / "Makefile", "claude plugin validate --strict", "claude plugin validate")
+    result = lint(dest)
+    assert not result.passed and "--strict" in result.details, result.details
+
+
 def _replace(path: Path, old: str, new: str) -> None:
     text = path.read_text()
     assert old in text, f"{old!r} not in {path.name}"
@@ -517,3 +569,272 @@ def test_rust_lint_fails_and_names_the_file_when_toolchain_is_malformed(
     (dest / "rust-toolchain.toml").write_text(toolchain_text)
     result = lint(dest)
     assert not result.passed and "rust-toolchain.toml" in result.details, result.details
+
+
+# -- typescript (spec 2026-10-04-typescript-stack, decisions 8 and 9) ------------------------
+
+
+def _ts_project(root: Path) -> Path:
+    repo = init_repo(root)
+    write_typescript_files(repo)
+    return repo
+
+
+def test_typescript_tests_are_found(tmp_path: Path) -> None:
+    repo = _ts_project(tmp_path / "red-cockpit")
+    (repo / "plugin" / "src" / "view.test.tsx").write_text("")
+    (repo / "plugin" / "src" / "deep" / "nested").mkdir(parents=True)
+    (repo / "plugin" / "src" / "deep" / "nested" / "x.test.ts").write_text("")
+    found = build_gates._typescript_tests(repo)
+    assert {p.name for p in found} == {"core.test.ts", "view.test.tsx", "x.test.ts"}
+    assert build_gates._typescript_test_profile(repo).passed
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        "scripts",
+        "node_modules/pkg",
+        "vendor/claude-code",
+        ".claude/worktrees/x/plugin/src",
+        "plugin/node_modules/pkg",
+        "plugin/.claude-plugin/types",
+        ".git/hooks",
+    ],
+)
+def test_a_test_outside_the_plugin_or_in_its_installed_code_is_not_counted(
+    tmp_path: Path, where: str
+) -> None:
+    """Only `plugin/` is what `claude plugin test plugin` runs (spec decision 8)."""
+    repo = init_repo(tmp_path / "red-cockpit")
+    (repo / where).mkdir(parents=True, exist_ok=True)
+    (repo / where / "a.test.ts").write_text("")
+    assert build_gates._typescript_tests(repo) == []
+    result = build_gates._typescript_test_profile(repo)
+    assert not result.passed and "plugin/**/*.test.ts" in result.details
+
+
+def test_a_typescript_repo_with_only_go_tests_fails(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "red-cockpit")
+    (repo / "main_test.go").write_text("package main\n")
+    assert not build_gates._typescript_test_profile(repo).passed
+
+
+def test_undeclared_stack_reports_typescript_tests(tmp_path: Path) -> None:
+    assert (
+        "no test file found (tests/test_*.py, *_test.go), none in tests/*.rs, none in *.test.ts"
+        in has_tests(tmp_path).details
+    )
+    (tmp_path / "plugin" / "src").mkdir(parents=True)
+    (tmp_path / "plugin" / "src" / "core.test.ts").write_text("")
+    assert (
+        "0 test file(s) (tests/test_*.py), 0 (*_test.go), 0 (tests/*.rs), 1 (*.test.ts)"
+        in has_tests(tmp_path).details
+    )
+
+
+def test_typescript_lint_passes_and_names_the_skipped_typecheck(tmp_path: Path) -> None:
+    result = build_gates._typescript_profile(_ts_project(tmp_path / "red-cockpit"))
+    assert result.passed, result.details
+    assert "tsc: SKIPPED (vendor/claude-code absent)" in result.details
+    assert "24.21.0" in result.details
+
+
+def _the_flag_on_another_call(repo: Path) -> None:
+    """The install loses its flag while another call carries it: the flag must be on npm's."""
+    _replace(repo / "Makefile", "$(NPM) $(INSTALL) --ignore-scripts", "$(NPM) $(INSTALL)")
+    _replace(repo / "Makefile", "\t$(BIN)/biome ci .\n", "\t$(BIN)/biome ci . --ignore-scripts\n")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "named"),
+    [
+        (lambda d: (d / ".node-version").unlink(), ".node-version"),
+        (lambda d: (d / ".node-version").write_text("24\n"), "not an exact version"),
+        (
+            lambda d: _replace(
+                d / "package.json", '"typescript": "7.0.2"', '"typescript": "^7.0.2"'
+            ),
+            "typescript",
+        ),
+        (
+            lambda d: _replace(
+                d / "package.json", '"@biomejs/biome": "2.5.15"', '"@biomejs/biome": "latest"'
+            ),
+            "@biomejs/biome",
+        ),
+        (
+            lambda d: _replace(d / "package.json", f'"{TYPESCRIPT_PIN}"', f'"~{TYPESCRIPT_PIN}"'),
+            "@anthropic-ai/claude-code",
+        ),
+        (lambda d: (d / "package-lock.json").unlink(), "package-lock.json"),
+        (lambda d: (d / "biome.json").unlink(), "biome.json"),
+        (lambda d: (d / "tsconfig.json").unlink(), "tsconfig.json"),
+        (
+            lambda d: (d / "plugin/.claude-plugin/plugin.json").write_text('{"name": "x"}\n'),
+            "author",
+        ),
+        (
+            lambda d: _replace(d / "Makefile", "\t$(BIN)/biome ci .", "\t$(BIN)/biome format ."),
+            "biome ci",
+        ),
+        (lambda d: _replace(d / "Makefile", " --noEmit", ""), "tsc --noEmit"),
+        (
+            lambda d: _replace(d / "Makefile", "claude plugin test", "claude plugin list"),
+            "claude plugin test",
+        ),
+        (lambda d: _replace(d / "Makefile", " --strict", ""), "--strict"),
+        (
+            lambda d: _replace(d / "Makefile", "claude plugin test plugin", "claude plugin test ."),
+            "claude plugin test",
+        ),
+        (
+            lambda d: _replace(d / "Makefile", "validate --strict plugin", "validate --strict ."),
+            "claude plugin validate",
+        ),
+        (
+            lambda d: _replace(
+                d / "Makefile", "$(NPM) $(INSTALL) --ignore-scripts", "$(NPM) $(INSTALL)"
+            ),
+            "--ignore-scripts",
+        ),
+        (_the_flag_on_another_call, "--ignore-scripts"),
+        (
+            lambda d: _replace(
+                d / "Makefile",
+                "\t$(NPM) rebuild @anthropic-ai/claude-code\n",
+                "\t$(NPM) rebuild @anthropic-ai/claude-code\n\t$(NPM) rebuild\n",
+            ),
+            "rebuild",
+        ),
+        (
+            lambda d: _replace(
+                d / "Makefile",
+                "\t$(BIN)/claude plugin validate --strict plugin",
+                "\t# $(BIN)/claude plugin validate --strict plugin",
+            ),
+            "claude plugin validate",
+        ),
+        (lambda d: _replace(d / "Makefile", " --ignore-scripts", ""), "--ignore-scripts"),
+        (
+            lambda d: _replace(d / "Makefile", "\t$(NPM) rebuild @anthropic-ai/claude-code\n", ""),
+            "rebuild",
+        ),
+        (lambda d: (d / "Makefile").unlink(), "Makefile"),
+    ],
+    ids=[
+        "no-node-version",
+        "node-major-only",
+        "typescript-caret",
+        "biome-latest",
+        "claude-tilde",
+        "no-lock",
+        "no-biome-json",
+        "no-tsconfig",
+        "no-author",
+        "biome-ci-replaced",
+        "tsc-without-noemit",
+        "plugin-test-replaced",
+        "validate-not-strict",
+        "plugin-test-on-dot",
+        "validate-on-dot",
+        "install-without-the-flag",
+        "flag-on-another-call",
+        "bare-rebuild",
+        "validate-commented-out",
+        "install-with-scripts",
+        "no-rebuild",
+        "no-makefile",
+    ],
+)
+def test_typescript_lint_fails_and_names_what_is_missing(
+    tmp_path: Path, mutate, named: str
+) -> None:
+    repo = _ts_project(tmp_path / "red-cockpit")
+    mutate(repo)
+    result = build_gates._typescript_profile(repo)
+    assert not result.passed and named in result.details, result.details
+
+
+@pytest.mark.parametrize(
+    "package_text",
+    [
+        "[]\n",
+        "{\n",
+        '{"devDependencies": ["typescript"]}\n',
+        '{"devDependencies": {"typescript": 7}}\n',
+        "[" * 100000,
+        '{"devDependencies": {"typescript": ' + "9" * 5000 + "}}",
+    ],
+    ids=[
+        "a-list",
+        "unparsable",
+        "dev-dependencies-a-list",
+        "version-not-a-string",
+        "nested-too-deeply",
+        "integer-too-long",
+    ],
+)
+def test_typescript_lint_fails_on_a_malformed_package_json_and_does_not_raise(
+    tmp_path: Path, package_text: str
+) -> None:
+    repo = _ts_project(tmp_path / "red-cockpit")
+    (repo / "package.json").write_text(package_text)
+    result = build_gates._typescript_profile(repo)
+    assert not result.passed and "package.json" in result.details, result.details
+
+
+def _vendor(repo: Path, content: bytes) -> None:
+    (repo / "vendor" / "claude-code").mkdir(parents=True)
+    (repo / "vendor" / "claude-code" / "index.d.ts").write_bytes(content)
+
+
+def test_vendored_types_that_match_the_pin_pass(tmp_path: Path) -> None:
+    repo = _ts_project(tmp_path / "red-cockpit")
+    header = f"// Written by Claude Code {TYPESCRIPT_PIN}.\n"
+    _vendor(repo, (header + "declare module 'claude-code' {}\n").encode())
+    result = build_gates._typescript_profile(repo)
+    assert result.passed and f"types match claude {TYPESCRIPT_PIN}" in result.details
+    assert "SKIPPED" not in result.details
+
+
+def test_vendored_types_from_another_version_fail_and_name_both(tmp_path: Path) -> None:
+    repo = _ts_project(tmp_path / "red-cockpit")
+    _vendor(repo, b"// Written by Claude Code 2.1.288.\n")
+    result = build_gates._typescript_profile(repo)
+    assert not result.passed
+    assert "2.1.288" in result.details and TYPESCRIPT_PIN in result.details
+    assert "make types" in result.details
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"declare module 'claude-code' {}\n",
+        b"\xef\xbb\xbf// Written by Claude Code 2.1.289.\n",
+        b"// Written by Claude Code 2.1.289\n",
+        b"\xff\xfe\x00 not utf-8\n",
+        b"",
+    ],
+    ids=["no-header", "byte-order-mark", "no-trailing-dot", "not-utf-8", "empty"],
+)
+def test_vendored_types_with_an_unreadable_first_line_fail_and_do_not_raise(
+    tmp_path: Path, content: bytes
+) -> None:
+    repo = _ts_project(tmp_path / "red-cockpit")
+    _vendor(repo, content)
+    result = build_gates._typescript_profile(repo)
+    assert not result.passed and "vendor/claude-code/index.d.ts" in result.details, result.details
+
+
+def test_vendored_types_with_crlf_still_match(tmp_path: Path) -> None:
+    repo = _ts_project(tmp_path / "red-cockpit")
+    _vendor(repo, f"// Written by Claude Code {TYPESCRIPT_PIN}.\r\nx\r\n".encode())
+    assert build_gates._typescript_profile(repo).passed
+
+
+def test_conforming_tree_for_typescript_passes_the_registered_profiles(tmp_path: Path) -> None:
+    """The profiles are reached through the manifest's `stack`, not by calling them directly."""
+    repo = conforming_tree(tmp_path / "x", "red-cockpit", "dev", stack="typescript")
+    assert has_tests(repo).passed, has_tests(repo).details
+    assert lint(repo).passed, lint(repo).details

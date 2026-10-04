@@ -4,6 +4,8 @@ suite is CI's job (`make ci`); its exit code is the check, not this gate."""
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -53,6 +55,22 @@ def _rust_tests(repo: Path) -> list[Path]:
     return found
 
 
+_NOT_THE_PLUGIN_TESTS = {"node_modules", ".claude-plugin"}
+
+
+def _typescript_tests(repo: Path) -> list[Path]:
+    """What `claude plugin test plugin` runs: `*.test.ts` and `*.test.tsx` under `plugin/` only,
+    skipping installed code and the engine's own `.claude-plugin/types` there (spec
+    2026-10-04-typescript-stack, decision 8). A test elsewhere, or in a worktree kept under
+    `.claude/worktrees/`, is not the plugin's. The walk prunes instead of reading: node_modules
+    can be large."""
+    found: list[Path] = []
+    for root, dirs, files in os.walk(repo / "plugin"):
+        dirs[:] = [d for d in dirs if d not in _NOT_THE_PLUGIN_TESTS]
+        found += [Path(root) / f for f in files if f.endswith((".test.ts", ".test.tsx"))]
+    return sorted(found)
+
+
 def _ruff_configured(repo: Path) -> bool:
     pyproject = repo / "pyproject.toml"
     return (pyproject.is_file() and "[tool.ruff" in pyproject.read_text()) or any(
@@ -81,6 +99,10 @@ def _rust_test_profile(repo: Path) -> GateResult:
     return _counted(_rust_tests(repo), "tests/*.rs")
 
 
+def _typescript_test_profile(repo: Path) -> GateResult:
+    return _counted(_typescript_tests(repo), "plugin/**/*.test.ts")
+
+
 def _docs_test_profile(repo: Path) -> GateResult:
     return GateResult(Stage.BUILD, "tests", True, "stack docs: no test suite required")
 
@@ -107,10 +129,12 @@ def has_tests(repo: Path) -> GateResult:
         return GateResult(Stage.BUILD, "tests", False, decl)
     if decl.stack is None:
         python, go, rust = len(_python_tests(repo)), len(_go_tests(repo)), len(_rust_tests(repo))
+        ts = len(_typescript_tests(repo))
         observed = (
-            "no test file found (tests/test_*.py, *_test.go), none in tests/*.rs"
-            if not python and not go and not rust
-            else f"{python} test file(s) (tests/test_*.py), {go} (*_test.go), {rust} (tests/*.rs)"
+            "no test file found (tests/test_*.py, *_test.go), none in tests/*.rs, none in *.test.ts"
+            if not python and not go and not rust and not ts
+            else f"{python} test file(s) (tests/test_*.py), {go} (*_test.go), {rust} (tests/*.rs), "
+            f"{ts} (*.test.ts)"
         )
         return Need("stack", observed).result(Stage.BUILD, "tests")
     profile = TEST_PROFILES.get(decl.stack)
@@ -327,6 +351,158 @@ def _rust_profile(repo: Path) -> GateResult:
     )
 
 
+CLAUDE_PACKAGE = "@anthropic-ai/claude-code"
+TYPESCRIPT_DEV_DEPENDENCIES = ("typescript", "@biomejs/biome", CLAUDE_PACKAGE)
+# What the Makefile must run, however `npm` and `BIN` are spelled: the call, read from live
+# recipe lines only. The tools are called by path, never through npx, which fetches an absent one.
+TYPESCRIPT_CALLS: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("biome ci", re.compile(r"\bbiome\s+ci\b"), "$(BIN)/biome ci ."),
+    ("tsc --noEmit", re.compile(r"\btsc\b[^\n]*\s--noEmit\b"), "$(BIN)/tsc --noEmit"),
+    (
+        "claude plugin test",
+        re.compile(r"\bclaude\s+plugin\s+test\s+(?:\./)?plugin/?(?=\s|$)"),
+        "$(BIN)/claude plugin test plugin",
+    ),
+    (
+        "claude plugin validate --strict",
+        re.compile(r"\bclaude\s+plugin\s+validate\s+--strict\s+(?:\./)?plugin/?(?=\s|$)"),
+        "$(BIN)/claude plugin validate --strict plugin",
+    ),
+    (
+        "an install with --ignore-scripts",
+        re.compile(
+            r"(?:\$\(NPM\)|\bnpm)\s+(?:install|ci|\$\(INSTALL\))(?=\s)[^\n]*\s--ignore-scripts\b"
+        ),
+        "$(NPM) $(INSTALL) --ignore-scripts",
+    ),
+    (
+        "a rebuild of the claude package",
+        re.compile(rf"\brebuild\s+{re.escape(CLAUDE_PACKAGE)}\b"),
+        f"$(NPM) rebuild {CLAUDE_PACKAGE}",
+    ),
+)
+_TYPES_HEADER = re.compile(r"// Written by Claude Code (\d+\.\d+\.\d+)\.\r?\n?")
+TYPES_FILE = Path("vendor") / "claude-code" / "index.d.ts"
+
+
+def _json(path: Path) -> dict | str:
+    """The parsed JSON object, or why it could not be read: the gate never raises."""
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return f"{path.name} is missing"
+    except RecursionError:
+        return f"{path.name} does not parse: nested too deeply"
+    except (OSError, ValueError) as exc:  # JSON and Unicode errors, the 4300-digit integer limit
+        return f"{path.name} does not parse: {exc}"
+    return data if isinstance(data, dict) else f"{path.name} is not a JSON object"
+
+
+def _types_version(path: Path) -> str | None:
+    """The version on the first line of the vendored types, or None when it cannot be read."""
+    try:
+        with path.open(encoding="utf-8") as handle:
+            first = handle.readline()
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = _TYPES_HEADER.fullmatch(first)
+    return match.group(1) if match else None
+
+
+def _typescript_profile(repo: Path) -> GateResult:
+    """The typescript profile as a pure read, on the model of `_rust_profile`: exact Node and tool
+    pins, the lock, the config files, a plugin manifest with an author, the Makefile's calls, and
+    the vendored engine types compared with the claude pin (spec 2026-10-04-typescript-stack,
+    decision 9). The gate never runs Node, npm or claude; CI does."""
+
+    def fail(why: str) -> GateResult:
+        return GateResult(Stage.BUILD, "lint", False, why)
+
+    try:
+        node = (repo / ".node-version").read_text().strip()
+    except FileNotFoundError:
+        return fail(".node-version is missing")
+    except (OSError, UnicodeDecodeError) as exc:
+        return fail(f".node-version could not be read: {exc}")
+    if not _EXACT_CHANNEL.match(node):
+        return fail(
+            f".node-version {node!r} is not an exact version (X.Y.Z): a floating Node changes "
+            "what the tools do under a green project"
+        )
+    package = _json(repo / "package.json")
+    if isinstance(package, str):
+        return fail(package)
+    dev = package.get("devDependencies")
+    if not isinstance(dev, dict):
+        return fail("package.json has no devDependencies object")
+    for name in TYPESCRIPT_DEV_DEPENDENCIES:
+        version = dev.get(name)
+        if not isinstance(version, str) or not _EXACT_CHANNEL.match(version):
+            return fail(
+                f"package.json devDependencies {name} is {version!r}, not an exact version "
+                "(X.Y.Z): no caret, no tilde, no range"
+            )
+    if not (repo / "package-lock.json").is_file():
+        return fail("package-lock.json is missing: run `make sync`, then commit it")
+    for name in ("biome.json", "tsconfig.json"):
+        if not (repo / name).is_file():
+            return fail(f"{name} is missing")
+    plugin = _json(repo / "plugin" / ".claude-plugin" / "plugin.json")
+    if isinstance(plugin, str):
+        return fail(plugin)
+    if not plugin.get("name"):
+        return fail("plugin/.claude-plugin/plugin.json has no name")
+    if not plugin.get("author"):
+        return fail(
+            "plugin/.claude-plugin/plugin.json declares no author: `claude plugin validate "
+            "--strict` fails without one"
+        )
+    makefile = repo / "Makefile"
+    if not makefile.is_file():
+        return fail("Makefile is missing")
+    try:
+        text = makefile.read_text()
+    except (OSError, UnicodeDecodeError) as exc:
+        return fail(f"Makefile could not be read: {exc}")
+    runner = _recipe_lines(text)
+    for what, pattern, remedy in TYPESCRIPT_CALLS:
+        if not pattern.search(runner):
+            return fail(f"the Makefile never runs {what} (`{remedy}`)")
+    if any(
+        re.search(r"\brebuild\b", line) and CLAUDE_PACKAGE not in line
+        for line in runner.splitlines()
+    ):
+        return fail(
+            f"a Makefile rebuild names no package (`$(NPM) rebuild {CLAUDE_PACKAGE}`): a bare "
+            "rebuild runs every package's install script"
+        )
+    pin = dev[CLAUDE_PACKAGE]
+    types = repo / TYPES_FILE
+    if not types.is_file():
+        types_note = "tsc: SKIPPED (vendor/claude-code absent)"
+    else:
+        written = _types_version(types)
+        if written is None:
+            return fail(
+                f"{TYPES_FILE.as_posix()} does not start with `// Written by Claude Code "
+                "X.Y.Z.`: copy it again with `make types`"
+            )
+        if written != pin:
+            return fail(
+                f"{TYPES_FILE.as_posix()} was written by Claude Code {written} but the pin is "
+                f"{pin}: load the plugin in a Claude Code {pin} session, run `make types`, or "
+                "bump the pin"
+            )
+        types_note = f"types match claude {pin}"
+    return GateResult(
+        Stage.BUILD,
+        "lint",
+        True,
+        f"Node {node} and exact tool pins; biome, tsc, claude plugin test and validate called by "
+        f"the Makefile; {types_note}",
+    )
+
+
 # Every stack is routed explicitly: a stack with no entry FAILs with NO_PROFILE and is never
 # judged as another stack (spec 2026-09-24-rust-stack, decision 10).
 TEST_PROFILES: dict[Stack, Callable[[Path], GateResult]] = {
@@ -334,12 +510,14 @@ TEST_PROFILES: dict[Stack, Callable[[Path], GateResult]] = {
     Stack.GO: _go_test_profile,
     Stack.DOCS: _docs_test_profile,
     Stack.RUST: _rust_test_profile,
+    Stack.TYPESCRIPT: _typescript_test_profile,
 }
 LINT_PROFILES: dict[Stack, Callable[[Path], GateResult]] = {
     Stack.PYTHON: _python_lint,
     Stack.GO: _go_profile,
     Stack.DOCS: _docs_lint,
     Stack.RUST: _rust_profile,
+    Stack.TYPESCRIPT: _typescript_profile,
 }
 
 

@@ -1,6 +1,6 @@
 # {{ project }} task runner. Every target is what CI runs, nothing more.
 
-.PHONY: sync lint test check ci serve image{% if stack == 'go' %} vuln{% elif stack == 'rust' %} deny{% endif %}
+.PHONY: sync lint test check ci serve image{% if stack == 'go' %} vuln{% elif stack == 'rust' %} deny{% elif stack == 'typescript' %} typecheck validate types{% endif %}
 
 RAIL_FLAGS ?=
 
@@ -89,6 +89,44 @@ test:
 ## Licences, advisories, bans and sources, as deny.toml declares them
 deny:
 	$(CARGO) deny check
+{% elif stack == 'typescript' -%}
+## Where every target finds its tools: the project's own node_modules/.bin, never npx, which
+## fetches a tool that is absent. `make NPM=<wrapper> sync` installs through a wrapper.
+NPM ?= npm
+BIN ?= node_modules/.bin
+## CI runs `make sync INSTALL=ci`: `npm ci` fails on a missing or stale package-lock.json instead
+## of writing one. Locally `npm install` writes the lock, or refreshes a stale one.
+INSTALL ?= install
+
+## Install the pinned tools with install scripts off, then run the one script that is needed:
+## the claude package's postinstall puts its native binary in place.
+sync:
+	$(NPM) $(INSTALL) --ignore-scripts
+	$(NPM) rebuild @anthropic-ai/claude-code
+
+## Format and lint check, no writes
+lint:
+	$(BIN)/biome ci .
+
+## Type check against the engine's types, once this project has copied them (`make types`).
+## Until then the skip is named, never silent.
+typecheck:
+	@if [ -f vendor/claude-code/index.d.ts ]; then $(BIN)/tsc --noEmit; else echo "typecheck: SKIPPED, vendor/claude-code is absent (load the plugin (plugin/) in a Claude Code session, then run make types)"; fi
+
+## Run the plugin's tests with the engine's own runner
+test:
+	$(BIN)/claude plugin test plugin
+
+## What the engine accepts of the manifest and the hooks, warnings included
+validate:
+	$(BIN)/claude plugin validate --strict plugin
+
+## Copy the engine's types out of the folder the engine ignores, into the repository. Only the
+## core file: its sibling for MCP tools lists what is connected on one machine.
+types:
+	@test -f plugin/.claude-plugin/types/claude-code/index.d.ts || { echo "no plugin/.claude-plugin/types/claude-code/index.d.ts: load this plugin in a Claude Code session of the pinned version, which writes it"; exit 1; }
+	mkdir -p vendor/claude-code
+	cp plugin/.claude-plugin/types/claude-code/index.d.ts vendor/claude-code/index.d.ts
 {% elif stack == 'docs' -%}
 ## Nothing to install for a documentation project
 sync:
@@ -108,4 +146,4 @@ check:
 	rail check $(RAIL_FLAGS)
 
 ## What CI runs, in order
-ci: lint test {% if stack == 'go' %}vuln {% elif stack == 'rust' %}deny {% endif %}check
+ci: lint {% if stack == 'typescript' %}typecheck {% endif %}test {% if stack == 'go' %}vuln {% elif stack == 'rust' %}deny {% elif stack == 'typescript' %}validate {% endif %}check

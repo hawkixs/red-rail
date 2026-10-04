@@ -39,6 +39,32 @@ RUST_PROD_REFUSAL = (
     "rust at tier prod is not templated yet (no image, no service): scaffold at dev and "
     "promote when the rust prod template lands"
 )
+# A Claude Code plugin is distributed through a marketplace, not released as an image and deployed
+# (spec 2026-10-04-typescript-stack, decision 1). copier.yml's validator says the same.
+TYPESCRIPT_PROD_REFUSAL = (
+    "typescript at tier prod is not templated yet (a plugin has no image and no service): "
+    "scaffold at dev"
+)
+# The stacks whose prod template does not exist yet, each with the refusal it is given. The
+# three places that refuse read this table. The same text also lives in copier.yml's validator
+# (pinned by tests), so a stack is added to both.
+NOT_AT_PROD: dict[Stack, str] = {
+    Stack.RUST: RUST_PROD_REFUSAL,
+    Stack.TYPESCRIPT: TYPESCRIPT_PROD_REFUSAL,
+}
+
+
+def _refusal_at_prod(stack: object, tier: object) -> str | None:
+    """The refusal for a stack and tier as an answers file or a manifest holds them: plain
+    values, possibly invalid, so an unknown stack is no refusal here (copier says what is wrong)."""
+    if tier != Tier.PROD.value:
+        return None
+    try:
+        return NOT_AT_PROD.get(Stack(stack))
+    except ValueError:
+        return None
+
+
 # the independent reviewer's check, and the CI job the template wires (job `rail` calling the
 # reusable workflow's `make ci + rail check`) — each named with the App that publishes it
 REVIEW_CHECK = RequiredCheck(name="red-rail/review", app_slug="red-rail-reviewer")
@@ -76,8 +102,9 @@ class NewProject:
 
     @property
     def answers(self) -> dict[str, Any]:
-        if self.stack is Stack.RUST and self.tier is Tier.PROD:
-            raise ScaffoldError(RUST_PROD_REFUSAL)
+        refusal = _refusal_at_prod(self.stack.value, self.tier.value)
+        if refusal:
+            raise ScaffoldError(refusal)
         data: dict[str, Any] = {
             "project": self.slug,
             "description": self.description,
@@ -425,8 +452,11 @@ def _switchable(answers: dict[str, Any], repo: Path, stack: Stack) -> None:
             f"--stack switches only out of docs (this project is {current}): python↔go and "
             "go→rust leave build files only a diff review would catch"
         )
-    if stack is Stack.RUST and manifest.get("tier") == Tier.PROD.value:
-        raise ScaffoldError(RUST_PROD_REFUSAL)
+    # copier renders the tier of the answers file, so a prod in either place refuses
+    for tier in (manifest.get("tier"), answers.get("tier")):
+        refusal = _refusal_at_prod(stack.value, tier)
+        if refusal:
+            raise ScaffoldError(refusal)
 
 
 def upgrade(
@@ -451,9 +481,10 @@ def upgrade(
             f"{ANSWERS_FILE} has no _src_path/_commit: the template was not versioned; "
             "re-scaffold from a tagged red-rail before upgrading"
         )
-    if data.get("stack") == Stack.RUST.value and data.get("tier") == Tier.PROD.value:
+    refusal = _refusal_at_prod(data.get("stack"), data.get("tier"))
+    if refusal:
         # copier would drop this answer as invalid and, under defaults, re-render as python
-        raise ScaffoldError(f"{ANSWERS_FILE} holds stack rust at tier prod: {RUST_PROD_REFUSAL}")
+        raise ScaffoldError(f"{ANSWERS_FILE} holds stack {data['stack']} at tier prod: {refusal}")
     if stack is not None:
         _switchable(data, repo, stack)
     answers_to_give: dict[str, Any] = {"rail_ref": resolve(str(data["_src_path"]))}

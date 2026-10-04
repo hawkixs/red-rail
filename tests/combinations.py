@@ -1,13 +1,13 @@
 """The template's answer sets, shared by every test that renders "every combination" (spec
 2026-09-24-template-alignment, decisions 10, 14 and 15; spec 2026-09-24-rust-stack, decision 1).
-One list, one exclusion: rust at tier prod is not templated yet."""
+One list, two exclusions: rust and typescript at tier prod are not templated yet."""
 
 from typing import NamedTuple
 
 from rail.model import DeployTarget, LedgerBackend, Stack, Tier
 
 TARGET_FAMILIES = (DeployTarget.VPS_TRAEFIK.value, DeployTarget.PRIVATE_COMPOSE.value)
-EXCLUDED = frozenset({(Stack.RUST, Tier.PROD)})
+EXCLUDED = frozenset({(Stack.RUST, Tier.PROD), (Stack.TYPESCRIPT, Tier.PROD)})
 
 
 class Combo(NamedTuple):

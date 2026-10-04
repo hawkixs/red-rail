@@ -1,0 +1,18 @@
+import type { Register } from 'claude-code'
+import { greeting } from '../src/core.ts'
+
+const COMMAND = '{{ project }}-hello'
+const NAME = '{{ project }}'
+
+let calls = 0
+
+export const register: Register = (on) => {
+  on('session.start', async ($, e, next) => {
+    await $.command.register({ name: COMMAND, description: 'Answer a greeting' })
+    return next(e)
+  })
+  on('command.run', { command: COMMAND }, async () => {
+    calls += 1
+    return { text: greeting(NAME, calls) }
+  })
+}
