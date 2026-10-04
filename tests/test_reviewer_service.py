@@ -285,6 +285,28 @@ def test_no_verdict_at_all_fails_closed(tmp_path: Path) -> None:
     )
 
 
+def test_a_pass_without_any_judge_says_so_plainly(tmp_path: Path) -> None:
+    """Ticket 0b950eea, defect 3: with every judge down, the check must not read as a judged
+    request_changes. It says no judge was available, that nothing was judged, that no round
+    was spent, and what unblocks the pull request."""
+    repo, ledger = _repo(tmp_path)
+    github = FakeGitHub(messages=["chore: plain"])
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=lambda pr, diff, policy, *, provider, tier, criteria, **_: fail(provider, tier),
+        root=tmp_path,
+    )
+    summary = outcome.verdict.summary
+    assert "No judge was available" in summary
+    assert "nothing was judged" in summary and "no round was spent" in summary
+    assert "rail-review:rerun" in summary
+
+
 def test_the_check_says_why_each_judge_dropped_out(tmp_path: Path) -> None:
     """Ticket 0b950eea, measured on PR #33: "agy/light: provider_fallback" hid a quota reset
     13 h away. The classified reason follows the failure, in the verdict and the check."""

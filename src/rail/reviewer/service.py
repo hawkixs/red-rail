@@ -446,6 +446,19 @@ def _context(state: rounds.LoopState, *, cf_open: list[str], cf_addressed: list[
     return "\n".join(lines).strip()
 
 
+def _no_judge_summary(failures: list[str], policy: ReviewPolicy) -> str:
+    """Ticket 0b950eea, defect 3: a pass in which no judge answered is not a judged
+    request_changes, and the check says so in plain words — what failed, that nothing was judged
+    and no round was spent, and what unblocks the pull request."""
+    causes = "; ".join(failures) or "no judge available"
+    return (
+        f"no verdict: {causes}. No judge was available: nothing was judged and no round was "
+        "spent. The check stays failed until a judge answers: re-run once a provider is back "
+        f"(label `{policy.rerun_label}` or a new push); until then a merge is the operator's "
+        "own call."
+    )[:4000]
+
+
 def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdict:
     """`truncated` is only what the caller knows BEFORE judging: a file whose own patch cannot
     be bounded. The judges know the rest — `judge()` bounds its prompt in UTF-8 bytes and
@@ -1092,7 +1105,7 @@ def _review_started(
         ]
         verdict = ReviewVerdict(
             verdict="request_changes",
-            summary=f"no verdict: {'; '.join(failures) or 'no judge available'}",
+            summary=_no_judge_summary(failures, policy),
             findings=_capped(findings),
             mode=mode,
             providers=(),
