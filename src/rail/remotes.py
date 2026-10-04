@@ -13,7 +13,10 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from rail.policy import GATE_DEFAULTS
+from rail.private import PrivateFileError, read_private_file
 
 CANONICAL_OWNER = "hawkixs"
 MIRROR_GROUP = "hawkixs_project/red"
@@ -22,6 +25,12 @@ MIRROR_REMOTE = "gitlab"
 # declaration (`{host}`), since the default is none
 CANONICAL_URL = f"git@{GATE_DEFAULTS['hygiene.canonical_host']}:{CANONICAL_OWNER}/{{slug}}.git"
 MIRROR_URL = f"ssh://git@{{host}}:2222/{MIRROR_GROUP}/{{slug}}.git"
+
+# The independent reviewer's GitHub App is private: its public page does not exist, so its id is
+# read from the reviewer config of the host that runs the reviewer. The slug is the reviewer's
+# identity (`review.reviewer_identity`), which is also the slug the review check is pinned to.
+REVIEWER_APP_SLUG = str(GATE_DEFAULTS["review.reviewer_identity"])
+REVIEWER_CONFIG = Path("~/.config/red-rail/reviewer.yaml")
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -186,9 +195,7 @@ def github_repository_id(slug: str, *, run: Runner = subprocess.run) -> int:
         raise RemoteError(f"gh api repos/{slug}: not an id: {out!r}") from exc
 
 
-def app_id(slug: str, *, run: Runner = subprocess.run) -> int:
-    """The numeric id of the GitHub App `slug`, resolved from its public page — no App identity
-    is wired in code."""
+def _public_app_id(slug: str, *, run: Runner) -> int:
     out = _ok(["gh", "api", f"apps/{slug}", "--jq", ".id"], run=run, what=f"gh api apps/{slug}")
     try:
         return int(out.strip())
@@ -196,8 +203,51 @@ def app_id(slug: str, *, run: Runner = subprocess.run) -> int:
         raise RemoteError(f"gh api apps/{slug}: not an id: {out!r}") from exc
 
 
+def _configured_app_id(config: Path) -> int | None:
+    """`app_id` of the host's reviewer config; None when the file is absent. A file that is
+    there but not private, or without a usable `app_id`, is refused: that is a defect to name,
+    never an absence. The file is read for that one field — the rest of it (key path, installation)
+    is not this module's business and nothing from it is reported."""
+    if not os.path.lexists(config):
+        return None
+    try:
+        raw = yaml.safe_load(read_private_file(config))
+    except (PrivateFileError, yaml.YAMLError) as exc:
+        raise RemoteError(f"{config}: {exc}") from exc
+    found = raw.get("app_id") if isinstance(raw, dict) else None
+    if not isinstance(found, int) or isinstance(found, bool) or found <= 0:
+        raise RemoteError(f"{config}: `app_id` is not a positive integer")
+    return found
+
+
+def app_id(slug: str, *, run: Runner = subprocess.run, reviewer_config: Path | None = None) -> int:
+    """The numeric id of the GitHub App `slug`. No App identity is wired in code.
+
+    The independent reviewer's App is private, so `gh api apps/<slug>` answers 404 for it: its
+    id is read from this host's reviewer config (`app_id`), and the public page is asked only
+    where that file is absent. Any other App is public and resolved by its page."""
+    if slug != REVIEWER_APP_SLUG:
+        return _public_app_id(slug, run=run)
+    config = (reviewer_config or REVIEWER_CONFIG).expanduser()
+    configured = _configured_app_id(config)
+    if configured is not None:
+        return configured
+    try:
+        return _public_app_id(slug, run=run)
+    except RemoteError as exc:
+        raise RemoteError(
+            f"cannot resolve the id of the reviewer App {slug}: {config} is absent and "
+            f"`gh api apps/{slug}` failed ({exc}) — put the App's `app_id` in the reviewer "
+            "config, or make the App public"
+        ) from exc
+
+
 def protect_main(
-    slug: str, checks: Sequence[tuple[str, str]], *, run: Runner = subprocess.run
+    slug: str,
+    checks: Sequence[tuple[str, str]],
+    *,
+    run: Runner = subprocess.run,
+    reviewer_config: Path | None = None,
 ) -> None:
     """Require `checks` — `(check name, slug of the App that publishes it)` — on `main`, each
     pinned to its App so a same-named check from another App never satisfies it (decision
@@ -206,7 +256,10 @@ def protect_main(
     repository was created and pushed, so any refusal says main is left unprotected."""
     repository = f"{CANONICAL_OWNER}/{slug}"
     try:
-        pinned = [{"context": name, "app_id": app_id(app, run=run)} for name, app in checks]
+        pinned = [
+            {"context": name, "app_id": app_id(app, run=run, reviewer_config=reviewer_config)}
+            for name, app in checks
+        ]
         body = {
             "required_status_checks": {"strict": False, "checks": pinned},
             "enforce_admins": False,

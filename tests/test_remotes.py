@@ -1,6 +1,7 @@
 """Publishing uses the host's gh — and glab only for a declared mirror; here they are fakes that
 create local bare repos."""
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -195,3 +196,119 @@ def test_ensure_absent_asks_the_mirror_only_when_declared() -> None:
     assert asked == ["gh"]
     remotes.ensure_absent("red-probe", mirror="gitlab.hawkixs.local", run=absent)
     assert asked == ["gh", "gh", "glab"]
+
+
+def _apps(answers: dict[str, str], calls: list[list[str]]):
+    """A `gh` that answers `gh api apps/<slug>` from `answers`, 404 for a private App."""
+
+    def run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        slug = args[2].removeprefix("apps/")
+        if slug in answers:
+            return subprocess.CompletedProcess(args, 0, f"{answers[slug]}\n", "")
+        return subprocess.CompletedProcess(args, 1, "", "gh: Not Found (HTTP 404)")
+
+    return run
+
+
+def _reviewer_config(tmp_path: Path, app_id: object = 424242) -> Path:
+    """A private reviewer.yaml with a made-up App id; the key file is named, never read."""
+    path = tmp_path / "reviewer.yaml"
+    path.write_text(f"app_id: {app_id}\ninstallation_id: 2\nprivate_key_file: /nowhere/key.pem\n")
+    path.chmod(0o600)
+    return path
+
+
+def test_the_reviewer_apps_id_comes_from_the_host_reviewer_config(tmp_path: Path) -> None:
+    """The reviewer App is private: `gh api apps/<slug>` 404s for it, so its id is read from the
+    reviewer config of the host — the one place it already is — and the public page is not asked."""
+    calls: list[list[str]] = []
+    found = remotes.app_id(
+        remotes.REVIEWER_APP_SLUG, run=_apps({}, calls), reviewer_config=_reviewer_config(tmp_path)
+    )
+    assert found == 424242
+    assert calls == []
+
+
+def test_the_reviewer_apps_id_falls_back_to_the_public_page_without_a_config(
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    found = remotes.app_id(
+        remotes.REVIEWER_APP_SLUG,
+        run=_apps({remotes.REVIEWER_APP_SLUG: "77"}, calls),
+        reviewer_config=tmp_path / "absent.yaml",
+    )
+    assert found == 77
+    assert [c[2] for c in calls] == [f"apps/{remotes.REVIEWER_APP_SLUG}"]
+
+
+def test_the_reviewer_apps_id_error_names_both_sources(tmp_path: Path) -> None:
+    config = tmp_path / "absent.yaml"
+    with pytest.raises(RemoteError) as raised:
+        remotes.app_id(remotes.REVIEWER_APP_SLUG, run=_apps({}, []), reviewer_config=config)
+    message = str(raised.value)
+    assert str(config) in message
+    assert f"gh api apps/{remotes.REVIEWER_APP_SLUG}" in message
+    assert "app_id" in message and "public" in message
+
+
+@pytest.mark.parametrize("content", ["app_id: nope\n", "- a list\n", "installation_id: 2\n"])
+def test_a_reviewer_config_without_a_usable_app_id_is_refused_not_skipped(
+    tmp_path: Path, content: str
+) -> None:
+    """A config that is there but says nothing usable is a defect to name, not an absence to
+    paper over with the public page."""
+    config = tmp_path / "reviewer.yaml"
+    config.write_text(content)
+    config.chmod(0o600)
+    calls: list[list[str]] = []
+    with pytest.raises(RemoteError, match="app_id"):
+        remotes.app_id(
+            remotes.REVIEWER_APP_SLUG,
+            run=_apps({remotes.REVIEWER_APP_SLUG: "77"}, calls),
+            reviewer_config=config,
+        )
+    assert calls == []
+
+
+def test_a_reviewer_config_that_is_not_private_is_refused(tmp_path: Path) -> None:
+    config = _reviewer_config(tmp_path)
+    config.chmod(0o644)
+    with pytest.raises(RemoteError, match="mode"):
+        remotes.app_id(remotes.REVIEWER_APP_SLUG, run=_apps({}, []), reviewer_config=config)
+
+
+def test_any_other_app_keeps_the_public_endpoint(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    found = remotes.app_id(
+        "github-actions",
+        run=_apps({"github-actions": "15368"}, calls),
+        reviewer_config=_reviewer_config(tmp_path),
+    )
+    assert found == 15368
+    assert [c[2] for c in calls] == ["apps/github-actions"]
+
+
+def test_protect_main_pins_the_reviewer_check_to_the_configured_app_id(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    bodies: list[dict] = []
+
+    def run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[2].startswith("apps/"):
+            return _apps({"github-actions": "101"}, [])(args, **kwargs)
+        bodies.append(json.loads(str(kwargs["input"])))
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    remotes.protect_main(
+        "red-probe",
+        [("rail / ci", "github-actions"), ("red-rail/review", remotes.REVIEWER_APP_SLUG)],
+        run=run,
+        reviewer_config=_reviewer_config(tmp_path),
+    )
+    assert bodies[0]["required_status_checks"]["checks"] == [
+        {"context": "rail / ci", "app_id": 101},
+        {"context": "red-rail/review", "app_id": 424242},
+    ]
+    assert [c[2] for c in calls if c[2].startswith("apps/")] == ["apps/github-actions"]

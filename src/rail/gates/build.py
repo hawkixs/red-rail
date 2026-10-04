@@ -25,6 +25,23 @@ CONVENTIONAL = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]+\))?!?: \S")
 _EMOJI_PARTS = frozenset({"So", "Sk", "Mn", "Me", "Cf"})
 
 
+# The lockfile a stack's lint gate requires committed. `make sync` writes it, so a project's
+# birth syncs exactly the stacks listed here (`rail.scaffold`) and checks the lock is there.
+LOCKFILES: dict[Stack, str] = {
+    Stack.RUST: "Cargo.lock",
+    Stack.TYPESCRIPT: "package-lock.json",
+}
+
+
+def lock_missing(repo: Path, stack: Stack) -> str | None:
+    """Why `repo` lacks the lock its stack's lint gate requires; None when it has it, or when
+    the stack has no lock gate."""
+    lock = LOCKFILES.get(stack)
+    if lock is not None and not (repo / lock).is_file():
+        return f"{lock} is missing: run `make sync`, then commit it"
+    return None
+
+
 def _python_tests(repo: Path) -> list[Path]:
     root = repo / "tests"
     if not root.is_dir():
@@ -325,8 +342,8 @@ def _rust_profile(repo: Path) -> GateResult:
         return fail(f"rust-toolchain.toml components lack {', '.join(missing)}")
     if not (repo / "Cargo.toml").is_file():
         return fail("Cargo.toml is missing")
-    if not (repo / "Cargo.lock").is_file():
-        return fail("Cargo.lock is missing: run `make sync`, then commit it")
+    if (missing_lock := lock_missing(repo, Stack.RUST)) is not None:
+        return fail(missing_lock)
     deny = _toml(repo / "deny.toml")
     if isinstance(deny, str):
         return fail(deny)
@@ -442,8 +459,8 @@ def _typescript_profile(repo: Path) -> GateResult:
                 f"package.json devDependencies {name} is {version!r}, not an exact version "
                 "(X.Y.Z): no caret, no tilde, no range"
             )
-    if not (repo / "package-lock.json").is_file():
-        return fail("package-lock.json is missing: run `make sync`, then commit it")
+    if (missing_lock := lock_missing(repo, Stack.TYPESCRIPT)) is not None:
+        return fail(missing_lock)
     for name in ("biome.json", "tsconfig.json"):
         if not (repo / name).is_file():
             return fail(f"{name} is missing")

@@ -4,13 +4,14 @@ import json
 import re
 import shutil
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
-from rail import gitrepo
+from rail import gitrepo, remotes, scaffold
 from rail.brain.client import BrainClient
 from rail.cli import main
 from rail.commands.new import BRAIN_KEY
@@ -159,6 +160,13 @@ CI_CHECK = {"context": "rail / make ci + rail check", "app_id": 101}
 REVIEW_CHECK = {"context": "red-rail/review", "app_id": 202}
 
 
+@pytest.fixture(autouse=True)
+def _no_host_reviewer_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The reviewer App's id is read from the host's reviewer config: a test that does not
+    declare one sees none, never the developer's own `~/.config/red-rail/reviewer.yaml`."""
+    monkeypatch.setattr(remotes, "REVIEWER_CONFIG", tmp_path / "no-host" / "reviewer.yaml")
+
+
 def _github(calls: list[list[str]], bodies: list[dict], *, refuse: str | None = None):
     """A fake host: GitHub does not know the repository yet, knows the Apps by slug, and takes
     the branch protection put on `main` — or refuses `refuse`: the App lookup or the
@@ -244,6 +252,36 @@ def test_new_project_protects_main_with_the_checks_of_its_tier(
     ]
 
 
+def test_a_birth_pins_the_review_check_to_a_private_reviewer_app(
+    template_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reviewer App is private: GitHub has no public page for it, so its id comes from the
+    host's reviewer config and `gh api apps/<reviewer>` is never asked (ticket 3623548f)."""
+    config = tmp_path / "reviewer.yaml"
+    config.write_text("app_id: 303\ninstallation_id: 4\nprivate_key_file: /nowhere/key.pem\n")
+    config.chmod(0o600)
+    monkeypatch.setattr(remotes, "REVIEWER_CONFIG", config)
+    calls: list[list[str]] = []
+    bodies: list[dict] = []
+    assert scaffold.REVIEW_CHECK.app_slug == remotes.REVIEWER_APP_SLUG
+
+    new_project(
+        _project(template_dir, tmp_path / "red-probe", tier=Tier.DEV),
+        publish=True,
+        clock=CLOCK,
+        run=_github(calls, bodies),
+        resolve=_pin,
+    )
+
+    assert [c[2] for c in calls if c[:2] == ["gh", "api"] and c[2].startswith("apps/")] == [
+        "apps/github-actions"
+    ]
+    assert bodies[0]["required_status_checks"]["checks"] == [
+        {**CI_CHECK},
+        {"context": "red-rail/review", "app_id": 303},
+    ]
+
+
 def test_new_project_protects_main_only_after_its_last_direct_push(
     template_dir: Path, tmp_path: Path
 ) -> None:
@@ -303,6 +341,140 @@ def test_new_project_passes_bootstrap_without_remotes(template_dir: Path, tmp_pa
     assert "A disposable HTTP probe." in spec.read_text()
     out = CliRunner().invoke(main, ["check", "--repo", str(dest), "--ci"])
     assert out.exit_code == 0, out.output
+
+
+def _syncing(calls: list[list[str]], *, writes: str | None, status: int = 0, stderr: str = ""):
+    """A runner standing in for `make sync`: it records the call, and writes `writes` (the lock
+    the real recipe would) into the tree it runs in. Nothing here runs npm or cargo."""
+
+    def run(args, **kwargs):
+        calls.append(list(args))
+        if args == ["make", "sync"]:
+            if writes and status == 0:
+                (Path(kwargs["cwd"]) / writes).write_text("{}\n")
+            return subprocess.CompletedProcess(args, status, stdout="", stderr=stderr)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    return run
+
+
+def test_the_typescript_template_leaves_rail_cis_checkout_alone(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """rail-ci checks red-rail out into `.rail/` inside the workspace, and `biome ci .` lints
+    what git does not ignore: every typescript birth failed its first CI on `.rail/**.json` and
+    `.rail/workflows/pre-review.js`. Biome follows `.gitignore` (the variant a judge could not
+    call a false blocker, red-cockpit), and `.gitignore` names `.rail/` (ticket 3623548f)."""
+    dest = render(
+        _project(
+            template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.TYPESCRIPT
+        )
+    )
+    biome = json.loads((dest / "biome.json").read_text())
+    assert biome["vcs"] == {"enabled": True, "clientKind": "git", "useIgnoreFile": True}
+    assert ".rail/" in (dest / ".gitignore").read_text().splitlines()
+    assert not any(".rail" in entry for entry in biome["files"]["includes"]), "no `!.rail` include"
+
+
+@pytest.mark.parametrize(
+    ("stack", "lock"),
+    [(Stack.RUST, "Cargo.lock"), (Stack.TYPESCRIPT, "package-lock.json")],
+)
+def test_a_birth_of_a_lock_bearing_stack_commits_the_lock_it_syncs(
+    template_dir: Path, tmp_path: Path, stack: Stack, lock: str
+) -> None:
+    """The stack's lint gate requires the lock committed, and only `make sync` writes it: the
+    birth runs the tree's own `make sync` before the bootstrap commit, so a tier dev birth does
+    not publish a tree on which `rail check` fails build.lint (ticket 3623548f)."""
+    calls: list[list[str]] = []
+    project = _project(template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=stack)
+
+    new_project(project, publish=False, clock=CLOCK, run=_syncing(calls, writes=lock), resolve=_pin)
+
+    assert calls == [["make", "sync"]]
+    tracked = subprocess.run(
+        ["git", "-C", str(project.dest), "ls-files"], capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert lock in tracked
+    assert gitrepo.recent_subjects(project.dest, 5) == [
+        "chore: bootstrap red-throwaway with the ReD rail"
+    ]
+
+
+@pytest.mark.parametrize("stack", [Stack.PYTHON, Stack.GO, Stack.DOCS])
+def test_a_stack_without_a_lock_gate_runs_no_sync(
+    template_dir: Path, tmp_path: Path, stack: Stack
+) -> None:
+    calls: list[list[str]] = []
+    project = _project(template_dir, tmp_path / "red-probe", stack=stack)
+    new_project(project, publish=False, clock=CLOCK, run=_syncing(calls, writes=None), resolve=_pin)
+    assert calls == []
+
+
+def test_a_failing_sync_stops_the_birth_before_anything_is_committed_or_published(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+    project = _project(template_dir, tmp_path / "red-throwaway", slug="red-throwaway")
+    project = replace(project, stack=Stack.RUST)
+    run = _syncing(calls, writes=None, status=101, stderr="a\n" * 40 + "error: no network")
+
+    with pytest.raises(ScaffoldError) as refused:
+        new_project(project, publish=True, clock=CLOCK, run=run, resolve=_pin)
+
+    message = str(refused.value)
+    assert "make sync" in message and "exit 101" in message and "error: no network" in message
+    assert message.count("a\n") < 40, "the stderr is tailed, not dumped"
+    assert calls == [["make", "sync"]], "no gh call, no push"
+    assert not (project.dest / ".git").exists()
+
+
+def test_a_sync_that_leaves_no_lock_fails_the_birth_like_the_gate_would(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+    project = _project(
+        template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.TYPESCRIPT
+    )
+    with pytest.raises(ScaffoldError, match=r"build\.lint: package-lock\.json is missing"):
+        new_project(
+            project, publish=False, clock=CLOCK, run=_syncing(calls, writes=None), resolve=_pin
+        )
+
+
+def test_a_host_without_make_refuses_the_birth_by_name(template_dir: Path, tmp_path: Path) -> None:
+    def no_make(args, **kwargs):
+        raise FileNotFoundError(args[0])
+
+    project = _project(
+        template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.RUST
+    )
+    with pytest.raises(ScaffoldError, match="make"):
+        new_project(project, publish=False, clock=CLOCK, run=no_make, resolve=_pin)
+
+
+def test_the_lock_bearing_stacks_are_the_ones_the_lint_gate_demands_a_lock_of(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """One list, owned by the gate: every stack in it fails build.lint without its lock, and the
+    birth syncs exactly those."""
+    from rail.gates import build
+
+    assert set(build.LOCKFILES) == {Stack.RUST, Stack.TYPESCRIPT}
+    for stack, lock in build.LOCKFILES.items():
+        dest = render(
+            _project(
+                template_dir,
+                tmp_path / f"red-{stack.value}",
+                stack=stack,
+                slug=f"red-{stack.value}",
+            )
+        )
+        assert (
+            build.lock_missing(dest, stack) == f"{lock} is missing: run `make sync`, then commit it"
+        )
+        (dest / lock).write_text("{}\n")
+        assert build.lock_missing(dest, stack) is None
 
 
 def test_new_project_reports_failing_gates(template_dir: Path, tmp_path: Path) -> None:
@@ -643,6 +815,67 @@ def test_an_unregistered_repository_still_gets_main_protected_and_the_resume_ste
     assert "434dc417" in message and "the contract is missing" in message
     assert "rail contract set" in message and "--key contract:red-probe:1" in message
     assert "mirror receipt" not in message, "no file promise remains once nothing is written"
+
+
+def test_a_refused_protection_after_a_recorded_contract_says_the_contract_is_recorded(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """The protection failure used to replace the contract's outcome: one could not tell whether
+    the contract was recorded, refused or never reached (ticket 3623548f)."""
+    brain, ticket, project = _unregistered_birth(template_dir, tmp_path, Tier.DEV)
+    brain.register_repository("red-probe", 4242, "hawkixs/red-probe")
+    with pytest.raises(RemoteError) as refused:
+        new_project(
+            project,
+            clock=CLOCK,
+            client=BrainClient.in_memory(brain, agent="rail new"),
+            run=_github([], [], refuse="protection"),
+            resolve=_pin,
+        )
+    message = str(refused.value)
+    assert "main is NOT protected" in message and "HTTP 403" in message
+    assert "the delivery contract was recorded" in message
+    assert brain.tickets[ticket].revisions
+
+
+def test_a_refused_protection_after_a_refused_contract_says_both_and_how_to_resume(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    brain, ticket, project = _unregistered_birth(template_dir, tmp_path, Tier.DEV)
+    with pytest.raises(RemoteError) as refused:
+        new_project(
+            project,
+            clock=CLOCK,
+            client=BrainClient.in_memory(brain, agent="rail new"),
+            run=_github([], [], refuse="protection"),
+            resolve=_pin,
+        )
+    message = str(refused.value)
+    assert "main is NOT protected" in message and "HTTP 403" in message
+    assert "unknown_repository" in message and "the delivery contract was not recorded" in message
+    assert "434dc417" in message and "--key contract:red-probe:1" in message
+    assert "main is protected" not in message, "the protection did not happen: never say it did"
+    assert not brain.tickets[ticket].revisions
+
+
+def test_a_refused_protection_before_the_contract_was_reached_says_so(
+    template_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An error that is neither a ledger refusal nor a success leaves the contract unreached; the
+    protection is still attempted, and when it fails too the message gives the resume command."""
+    brain, ticket, project = _unregistered_birth(template_dir, tmp_path, Tier.DEV)
+
+    def unreachable(*args: object, **kwargs: object) -> None:
+        raise ConnectionError("brain is down")
+
+    monkeypatch.setattr(scaffold, "record_contract", unreachable)
+    with pytest.raises(RemoteError) as refused:
+        new_project(project, clock=CLOCK, run=_github([], [], refuse="protection"), resolve=_pin)
+    message = str(refused.value)
+    assert "main is NOT protected" in message
+    assert "the delivery contract was not reached" in message
+    assert "rail contract set" in message and "--key contract:red-probe:1" in message
+    assert isinstance(refused.value.__cause__, RemoteError)
 
 
 @pytest.mark.parametrize("tier", [Tier.BOOTSTRAP, Tier.PROD])
@@ -1104,7 +1337,7 @@ GITIGNORED = {
     ],
     Stack.GO: ["bin/"],
     Stack.RUST: ["target/", ".cargo-tools/"],
-    Stack.TYPESCRIPT: ["node_modules/", "plugin/.claude-plugin/types/"],
+    Stack.TYPESCRIPT: ["node_modules/", "plugin/.claude-plugin/types/", ".rail/"],
     Stack.DOCS: [],
 }
 

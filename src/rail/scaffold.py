@@ -17,7 +17,8 @@ import copier
 import yaml
 
 from rail import remotes
-from rail.gates import GateResult, run_gates
+from rail.gates import GateResult, Stage, run_gates
+from rail.gates.build import LOCKFILES, lock_missing
 from rail.ledger import (
     Contract,
     Deliverable,
@@ -320,10 +321,38 @@ def init_git(project: NewProject) -> str:
     return _git(project.dest, "rev-parse", "HEAD")
 
 
+SYNC_TAIL_LINES = 10
+
+
+def sync_locks(project: NewProject, *, run: remotes.Runner = subprocess.run) -> None:
+    """Run the generated tree's own `make sync` where the stack's lint gate requires a lockfile
+    that only the sync writes, so the lock is part of the bootstrap commit. Fail-closed, and
+    before anything is committed or published."""
+    if project.stack not in LOCKFILES:
+        return
+    try:
+        done = run(
+            ["make", "sync"], cwd=str(project.dest), capture_output=True, text=True, check=False
+        )
+    except (FileNotFoundError, OSError) as exc:
+        raise ScaffoldError(f"make is not available on this host: {exc}") from exc
+    if done.returncode != 0:
+        tail = "\n".join((done.stderr or done.stdout or "").strip().splitlines()[-SYNC_TAIL_LINES:])
+        raise ScaffoldError(
+            f"`make sync` failed in {project.dest} (exit {done.returncode}): the stack needs "
+            f"{LOCKFILES[project.stack]} committed and nothing was published\n{tail}"
+        )
+
+
 def verify(project: NewProject) -> list[GateResult]:
-    """The floor a fresh tree can pass (hygiene, intent, design); the declared tier is what
-    `rail check` demands next."""
-    return run_gates(project.dest, stages=stages_for(Tier.BOOTSTRAP), ci=True)
+    """The floor a fresh tree can pass (hygiene, intent, design) and, for a stack whose lint
+    gate requires a lockfile, that the lock is there — what `rail check` will read next at the
+    declared tier."""
+    results = run_gates(project.dest, stages=stages_for(Tier.BOOTSTRAP), ci=True)
+    missing = lock_missing(project.dest, project.stack)
+    if missing is not None:
+        results.append(GateResult(Stage.BUILD, "lint", False, missing))
+    return results
 
 
 def new_project(
@@ -344,6 +373,7 @@ def new_project(
     write_bootstrap_spec(project)
     if project.ledger is LedgerBackend.FILE:
         record_contract(project, clock=clock, client=client)  # part of the bootstrap commit
+    sync_locks(project, run=run)
     init_git(project)
     results = verify(project)
     failing = [r for r in results if not r.passed]
@@ -353,21 +383,44 @@ def new_project(
     mirror = parameter(project.dest, "hygiene.mirror_host")  # GitHub only unless declared
     if publish:
         remotes.publish(project.dest, project.slug, project.description, mirror=mirror, run=run)
+    refusal: LedgerError | None = None
+    recorded = project.ledger is LedgerBackend.FILE  # committed with the bootstrap commit
     try:
         if project.ledger is LedgerBackend.BRAIN:
             # brain enriches the deliverable from its repository registry: the repository
             # exists first, so the contract is set only once it is published
             try:
                 record_contract(project, clock=clock, client=client)
+                recorded = True
             except LedgerError as exc:
-                raise ScaffoldError(_interrupted_birth(project, exc, published=publish)) from exc
+                refusal = exc
     finally:
         if publish:
             # last, once every direct push of `rail new` is done: from here main takes pull
             # requests. In a `finally` (b185c51d): a published repository whose birth stopped
-            # half-way must not be left with a main open to direct pushes
-            remotes.protect_main(project.slug, protected_checks(project), run=run)
+            # half-way must not be left with a main open to direct pushes. A failure here says
+            # where the contract stands too, so it never hides that outcome (ticket 3623548f)
+            try:
+                remotes.protect_main(project.slug, protected_checks(project), run=run)
+            except remotes.RemoteError as exc:
+                outcome = _contract_outcome(project, recorded=recorded, refusal=refusal)
+                raise remotes.RemoteError(f"{exc}\n{outcome}") from exc
+    if refusal is not None:
+        raise ScaffoldError(_interrupted_birth(project, refusal, published=publish)) from refusal
     return results
+
+
+def _contract_outcome(project: NewProject, *, recorded: bool, refusal: LedgerError | None) -> str:
+    """Where the delivery contract stands when main could not be protected: recorded, refused
+    (with its reason and the resume steps) or never reached (the birth stopped before it)."""
+    if recorded:
+        return "the delivery contract was recorded"
+    if refusal is not None:
+        return _interrupted_birth(project, refusal, published=True, protected=False)
+    return (
+        "the delivery contract was not reached: the birth stopped before it was recorded. To "
+        f"record it once the repository is registered:\n  {resume_contract_command(project)}"
+    )
 
 
 def resume_contract_command(project: NewProject) -> str:
@@ -394,12 +447,15 @@ def resume_contract_command(project: NewProject) -> str:
     return shlex.join(args)
 
 
-def _interrupted_birth(project: NewProject, exc: LedgerError, *, published: bool) -> str:
+def _interrupted_birth(
+    project: NewProject, exc: LedgerError, *, published: bool, protected: bool = True
+) -> str:
     """What a brain-ledger birth that stopped at the contract says: where things stand and
     the three steps that finish it. A repository `rail new` has just created is never in
     brain's registry yet (runbook 434dc417 builds it from GitHub), hence `unknown_repository`."""
+    standing = "protected" if protected else "NOT protected"
     where = (
-        f"{remotes.CANONICAL_OWNER}/{project.slug} is published and main is protected"
+        f"{remotes.CANONICAL_OWNER}/{project.slug} is published and main is {standing}"
         if published
         else f"the tree under {project.dest} is committed (nothing published)"
     )
