@@ -31,10 +31,13 @@ the `Stack` enum and copier choice, the refusal at `tier: prod`, the `TEST_PROFI
   - Tests import `claude-code/testing`: no other runner can execute them, only
     `claude plugin test`. `claude plugin validate [--strict] <dir>` checks the manifest and hooks.
     Both passed with an empty `HOME` and no network.
-  - The engine's types are not on npm. `/plugin-types` writes them (three `index.d.ts`, about
-    21,000 lines, line 1 `Written by Claude Code <version>`) into `.claude-plugin/types/`, and
-    puts a `.gitignore` containing `*` there. It is a slash command: neither the CLI, `validate`
-    nor `test` writes them, so no CI job can produce them.
+  - The engine's types are not on npm. The engine writes them into `.claude-plugin/types/` (the
+    core in `claude-code/index.d.ts`, about 15,000 lines, line 1 `// Written by Claude Code
+    <version>.`; beside it `claude-code-tools/`, `claude-code-mcp/` and a `tsconfig.json`) each time
+    a session loads the plugin from its folder, and `/plugin-types` forces it; it also puts a
+    `.gitignore` containing `*` there. Neither the CLI, `validate` nor `test` writes them, so no
+    CI job can produce them. The package `@anthropic-ai/claude-code` carries the binary, not these
+    types (measured on 2.1.289 and 2.1.288).
 - **The build gate would judge it as nothing.** `TEST_PROFILES` and `LINT_PROFILES` have no entry
   for a fifth stack: a lookup miss FAILs "no build profile", and `build.tests` cannot count
   `*.test.ts`.
@@ -99,10 +102,11 @@ Each decision says what, why, what it costs if wrong, and which files it touches
    - `package-lock.json` is written by `make sync` and committed. Locally `make sync` runs
      `npm install`, which writes or refreshes it. CI runs `make sync INSTALL=ci`: `npm ci` fails on
      a missing or stale lock instead of writing one there. This mirrors Rust's `LOCKED=--locked`.
-   - Install scripts are off by default: `sync` passes `--ignore-scripts`. If the engine package
-     needs its install script to provide the `claude` binary, the plan measures it, and the
-     decision narrows to running that one package's script (`npm rebuild @anthropic-ai/claude-code`)
-     right after.
+   - Install scripts are off by default: `sync` passes `--ignore-scripts`, then runs
+     `npm rebuild @anthropic-ai/claude-code`. Measured on 2.1.289: after an install with scripts off,
+     `claude` answers "native binary not installed" (its `postinstall` copies the platform binary);
+     after that one rebuild, `--version`, `validate --strict` and `plugin test` run. The
+     platform binary itself arrives as an optional dependency, which the lock records.
    - Every tool runs from `node_modules/.bin` (`npx --no-install`): nothing is fetched when a target
      runs.
    - Why exact: a floating Biome or TypeScript changes the lints and the type errors under a green
@@ -114,12 +118,16 @@ Each decision says what, why, what it costs if wrong, and which files it touches
    does, `tsc` is a named SKIP.**
    - Why not ship them: the types are Anthropic's; whether a public Apache-2.0 template may
      redistribute them is unverified, and the engine itself marks them non-committable.
-   - The project's own copy: a session runs `/plugin-types`, which writes `.claude-plugin/types/`;
-     `make types` then copies that directory to `vendor/claude-code/` (committed, a path the engine
-     does not ignore) and fails with that instruction when the source directory is absent.
-   - `tsconfig.json` maps `claude-code` and `claude-code/testing` onto `vendor/claude-code/`.
-   - `make typecheck` runs `tsc --noEmit` when `vendor/claude-code/` exists. When it does not, it
-     prints one line, `typecheck: SKIPPED, vendor/claude-code is absent (run /plugin-types, then
+   - The project's own copy: a session in the plugin folder writes `.claude-plugin/types/` (or runs
+     `/plugin-types`); `make types` then copies `.claude-plugin/types/claude-code/index.d.ts` to
+     `vendor/claude-code/index.d.ts` (committed, a path the engine does not ignore) and fails with
+     that instruction when the source file is absent. Only the core file is copied:
+     `claude-code-mcp/` lists the MCP tools connected on one machine and stays out of the repository.
+   - `tsconfig.json` is the one the engine documents for a hooks module, with `include` of
+     `vendor/claude-code`, `hooks` and `src`: the file declares the modules `claude-code` and
+     `claude-code/testing` ambiently, so no `paths` mapping is needed (measured with `tsc` 7.0.2).
+   - `make typecheck` runs `tsc --noEmit` when `vendor/claude-code/index.d.ts` exists. When it does
+     not, it prints one line, `typecheck: SKIPPED, vendor/claude-code is absent (run /plugin-types, then
      make types)`, and exits 0. The line is in the CI log and in the lint gate's observation
      (decision 9). It is a named SKIP, never a silent pass: `docs.root` is the precedent.
    - The vendored types are only ever read through `import type`: a stale or tampered file cannot
@@ -136,7 +144,8 @@ Each decision says what, why, what it costs if wrong, and which files it touches
 5. **The typescript Makefile branch lines up with the other stacks.**
    - Variables: `NPM ?= npm`, `NPX ?= npx --no-install`, `INSTALL ?= install`, so
      `make NPM=<wrapper> ci` runs every target through a container (as `GO` and `CARGO` do).
-   - `sync`: `$(NPM) $(INSTALL) --ignore-scripts`. `lint`: `$(NPX) biome ci .` (formatting and
+   - `sync`: `$(NPM) $(INSTALL) --ignore-scripts`, then `$(NPM) rebuild @anthropic-ai/claude-code`
+     (decision 3). `lint`: `$(NPX) biome ci .` (formatting and
      lints, no writes). `typecheck`: decision 4. `test`: `$(NPX) claude plugin test .`.
      `validate`: `$(NPX) claude plugin validate --strict .`. `types`: decision 4.
    - `ci: lint typecheck test validate check`, so `rail check` runs last. `.PHONY` gains
@@ -198,12 +207,12 @@ Each decision says what, why, what it costs if wrong, and which files it touches
        `name` and an `author`;
      - the Makefile's live recipe lines (`_recipe_lines`) call `biome ci`, `tsc --noEmit`,
        `claude plugin test`, `claude plugin validate --strict` and `install` with
-       `--ignore-scripts`;
-     - **types:** if `vendor/claude-code/` is absent, the gate PASSes and its observation says
-       `tsc: SKIPPED (vendor/claude-code absent)`; if present, the first line of each `index.d.ts`
-       in it is `Written by Claude Code <version>` and `<version>` equals the pinned
-       `@anthropic-ai/claude-code`, or the gate FAILs with "types written by X, pinned Y: run
-       /plugin-types, then make types".
+       `--ignore-scripts` and `rebuild @anthropic-ai/claude-code`;
+     - **types:** if `vendor/claude-code/index.d.ts` is absent, the gate PASSes and its observation
+       says `tsc: SKIPPED (vendor/claude-code absent)`; if present, its first line is
+       `// Written by Claude Code <version>.` and `<version>` equals the pinned
+       `@anthropic-ai/claude-code`, or the gate FAILs with "types written by X, pinned Y: load the
+       plugin in a Claude Code Y session (or /plugin-types), then make types, or bump the pin".
    - The regexes accept `$(NPX)`, as the others accept `$(CARGO)`. Each FAIL names the first
      missing piece and its remedy. The gate never runs Node.
    - A fresh `rail new --stack typescript --tier dev` FAILs `build.lint` until `make sync` writes
@@ -263,7 +272,8 @@ Tests in red-rail. All are static; none needs Node, except criteria 9 and 10.
    - `plugin.json` parses: `name == project`, a `version`, an `author`; `hooks.json` lists
      `./register.ts`; `register.ts` imports only `../src/core.ts` and `claude-code`;
    - `package.json`: `private`, `type == "module"`, no `dependencies`, the three devDependencies
-     exact; `.node-version` is `X.Y.Z`; `tsconfig.json` maps `claude-code` onto `vendor/claude-code`;
+     exact; `.node-version` is `X.Y.Z`; `tsconfig.json` includes `vendor/claude-code`, `hooks` and
+     `src`;
    - no `package-lock.json`, no `vendor/`, no `pyproject.toml`, `go.mod` or `Cargo.toml`;
    - `.gitignore` has `node_modules/` and `.claude-plugin/types/` and no lockfile entry;
      `settings.json` parses and allows `Bash(npm:*)` and `Bash(npx:*)`, absent from the other stacks;
@@ -271,7 +281,7 @@ Tests in red-rail. All are static; none needs Node, except criteria 9 and 10.
    - `CLAUDE.md` § Stack and § Structure and `AGENTS.md` § Gates carry the decision 6 content;
    - `make -n ci RAIL_FLAGS=--ci` prints, in order: `biome ci`, the typecheck, `plugin test`,
      `plugin validate --strict`, `rail check --ci`; `make -n sync` prints the install with
-     `--ignore-scripts`.
+     `--ignore-scripts`, then the rebuild.
 2. `test_typescript_at_prod_is_refused`: `NewProject(...).answers` raises `ScaffoldError` with the
    message, and a direct `render` is refused by the copier validator. A test pins `EXCLUDED` as
    exactly `(rust, prod)` and `(typescript, prod)`. The template-alignment tests stay green over
@@ -307,12 +317,11 @@ Tests in red-rail. All are static; none needs Node, except criteria 9 and 10.
 
 On the host, before merge:
 
-9. **Measured, not assumed.** On a throwaway render at `dev`: `npm install --ignore-scripts`
-   writes a lock; `claude` runs from `node_modules/.bin` after an install with scripts off (or the
-   decision 3 narrowing is recorded); `make sync lint test validate` exits 0 and `rail check --ci
+9. **Measured, not assumed.** On a throwaway render at `dev`: `make sync` writes a lock and leaves
+   `claude` runnable from `node_modules/.bin` (the rebuild of decision 3); `make lint test validate` exits 0 and `rail check --ci
    build --json` reports PASS for `build.tests` and `build.lint` with the SKIPPED observation;
-   after `/plugin-types` and `make types`, `make typecheck` exits 0 and the gate compares the
-   versions; a second `make sync INSTALL=ci` after deleting the lock fails. The trees are deleted.
+   after the engine writes `.claude-plugin/types/` and `make types` copies it, `make typecheck`
+   exits 0 and the gate compares the versions; a second `make sync INSTALL=ci` after deleting the lock fails. The trees are deleted.
 10. **The ticket's "in CI", before the tag.** A throwaway private repository rendered with
     `--template-ref <head SHA>` and its lock committed: its `rail-ci` run is green twice (cold, then
     warm on the npm cache), summary lines read, run URLs in the PR; durations against
@@ -354,7 +363,7 @@ What it does not defend against, declared:
 - **`red-ci` and npm.** Unknown until a run: if the guest cannot reach the npm registry or download
   Node, red-cockpit's CI stays GitHub-hosted, or a ticket red → red-runners opens egress.
   Recommendation: start GitHub-hosted.
-- **`--ignore-scripts`.** If the engine package needs its install script, criterion 9 records the
-  one-package narrowing. Recommendation: keep scripts off for everything else.
+- **`--ignore-scripts`.** Measured: the engine package needs its `postinstall`, so decision 3 runs
+  that one script through `npm rebuild`. Recommendation: keep scripts off for everything else.
 - **A SKIP at `dev`.** Recommendation: allow it at day 0, with the named line; red-cockpit vendors
   its types in its first PR, and a project that wants it stricter can add a gate later.
