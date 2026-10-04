@@ -39,9 +39,19 @@ RUST_PROD_REFUSAL = (
     "rust at tier prod is not templated yet (no image, no service): scaffold at dev and "
     "promote when the rust prod template lands"
 )
+# A Claude Code plugin is distributed through a marketplace, not released as an image and deployed
+# (spec 2026-10-04-typescript-stack, decision 1). copier.yml's validator says the same.
+TYPESCRIPT_PROD_REFUSAL = (
+    "typescript at tier prod is not templated yet (a plugin has no image and no service): "
+    "scaffold at dev"
+)
 # The stacks whose prod template does not exist yet, each with the refusal it is given. The
-# three places that refuse read this table, so a stack is added here and nowhere else.
-NOT_AT_PROD: dict[Stack, str] = {Stack.RUST: RUST_PROD_REFUSAL}
+# three places that refuse read this table. The same text also lives in copier.yml's validator
+# (pinned by tests), so a stack is added to both.
+NOT_AT_PROD: dict[Stack, str] = {
+    Stack.RUST: RUST_PROD_REFUSAL,
+    Stack.TYPESCRIPT: TYPESCRIPT_PROD_REFUSAL,
+}
 
 
 def _refusal_at_prod(stack: object, tier: object) -> str | None:

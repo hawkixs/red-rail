@@ -30,11 +30,13 @@ tier:
   help: Maturity tier the project is scored against
 stack:
   type: str
-  choices: [python, go, rust, docs]
+  choices: [python, go, rust, typescript, docs]
   default: python
   validator: >-
     {% if stack == 'rust' and tier == 'prod' %}
     rust at tier prod is not templated yet (no image, no service): scaffold at dev and promote when the rust prod template lands
+    {% elif stack == 'typescript' and tier == 'prod' %}
+    typescript at tier prod is not templated yet (a plugin has no image and no service): scaffold at dev
     {% endif %}
 rail_ref:
   type: str

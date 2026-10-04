@@ -1,0 +1,6 @@
+import { expect, test } from 'claude-code/testing'
+import { greeting } from './core.ts'
+
+test('greeting counts', () => {
+  expect(greeting('rail', 2)).toBe('hello rail (2)')
+})

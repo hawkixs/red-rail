@@ -952,6 +952,11 @@ STACK_LINE = {
         "Rust, edition 2024, toolchain pinned by `rust-toolchain.toml`: `cargo fmt`, clippy with "
         "`-D warnings`, `cargo test --locked`, `cargo deny check`."
     ),
+    Stack.TYPESCRIPT: (
+        "A Claude Code plugin in TypeScript: Node pinned by `.node-version`, Biome, "
+        "`tsc --noEmit` against the vendored engine types, `claude plugin test` and "
+        "`claude plugin validate --strict`."
+    ),
     Stack.DOCS: "Documentation only (Markdown).",
 }
 STACK_CHAIN = re.compile(
@@ -971,6 +976,7 @@ STACK_GATES = {
     Stack.PYTHON: "`uv run pytest -q`",
     Stack.GO: "`go test -race -count=1 ./...`",
     Stack.RUST: "`cargo test --workspace --locked`",
+    Stack.TYPESCRIPT: "`node_modules/.bin/claude plugin test .`",
     Stack.DOCS: "no stack command of its own",
 }
 # D9's sections and D10's rows, in the order AGENTS.md must hold them
@@ -1086,6 +1092,7 @@ GITIGNORED = {
     ],
     Stack.GO: ["bin/"],
     Stack.RUST: ["target/", ".cargo-tools/"],
+    Stack.TYPESCRIPT: ["node_modules/", ".claude-plugin/types/"],
     Stack.DOCS: [],
 }
 
@@ -1274,11 +1281,13 @@ def test_red_rails_own_guidance_follows_its_template() -> None:
     assert 'names as "Parent project"' in agents
 
 
-def test_rust_at_prod_is_the_only_excluded_combination() -> None:
-    """Every stack × tier pair is rendered by some combination, except exactly (rust, prod)."""
+def test_the_stacks_with_no_prod_template_are_the_only_excluded_combinations() -> None:
+    """Every stack × tier pair is rendered by some combination, except exactly the pairs that
+    have no prod template: rust and typescript at prod."""
     covered = {(c.stack, c.tier) for c in COMBINATIONS}
-    assert {(s, t) for s in Stack for t in Tier} - covered == {(Stack.RUST, Tier.PROD)}
-    assert EXCLUDED == {(Stack.RUST, Tier.PROD)}
+    refused = {(Stack.RUST, Tier.PROD), (Stack.TYPESCRIPT, Tier.PROD)}
+    assert {(s, t) for s in Stack for t in Tier} - covered == refused
+    assert EXCLUDED == refused
 
 
 def test_rust_at_prod_is_refused(template_dir: Path, tmp_path: Path) -> None:
@@ -1330,6 +1339,81 @@ def test_render_refuses_rust_at_prod_with_a_bare_message(
     assert str(raised.value) == RUST_PROD_REFUSAL
 
 
+def test_typescript_at_prod_is_refused(template_dir: Path, tmp_path: Path) -> None:
+    """Refused before copier by `rail new` (a bare message) and by copier's own validator for a
+    direct run (spec 2026-10-04-typescript-stack, decision 1)."""
+    import copier
+
+    from rail.scaffold import NOT_AT_PROD, TYPESCRIPT_PROD_REFUSAL
+
+    assert NOT_AT_PROD[Stack.TYPESCRIPT] == TYPESCRIPT_PROD_REFUSAL
+    project = _project(
+        template_dir,
+        tmp_path / "red-cockpit",
+        slug="red-cockpit",
+        stack=Stack.TYPESCRIPT,
+        tier=Tier.PROD,
+    )
+    with pytest.raises(ScaffoldError) as raised:
+        _ = project.answers
+    assert str(raised.value) == TYPESCRIPT_PROD_REFUSAL
+    with pytest.raises(ScaffoldError) as rendered:
+        render(project)
+    assert str(rendered.value) == TYPESCRIPT_PROD_REFUSAL
+    with pytest.raises(Exception, match="typescript at tier prod is not templated yet"):
+        copier.run_copy(
+            str(template_dir),
+            tmp_path / "direct",
+            data={
+                "project": "red-cockpit",
+                "description": "d",
+                "brain_key": "red-cockpit",
+                "tier": "prod",
+                "stack": "typescript",
+                "deploy_target": "vps-traefik",
+                "healthcheck": "https://cockpit.example.invalid/healthz",
+            },
+            defaults=True,
+            quiet=True,
+            unsafe=False,
+        )
+    assert not (tmp_path / "direct" / "rail.yaml").exists()
+
+
+def test_the_copier_validator_says_what_rail_new_says_for_typescript() -> None:
+    from rail.scaffold import TYPESCRIPT_PROD_REFUSAL
+
+    assert TYPESCRIPT_PROD_REFUSAL in (ROOT / "copier.yml").read_text()
+
+
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
+def test_every_rendered_settings_file_allows_npm_for_typescript_only(
+    renders: dict[Combo, Path], combo: Combo
+) -> None:
+    allow = json.loads((renders[combo] / ".claude" / "settings.json").read_text())["permissions"]
+    assert ("Bash(npm:*)" in allow["allow"]) is (combo.stack is Stack.TYPESCRIPT)
+    assert "Bash(npx:*)" not in allow["allow"]
+
+
+@pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
+def test_only_typescript_declares_the_vendored_types_as_generated(
+    renders: dict[Combo, Path], combo: Combo
+) -> None:
+    """`review.ignored_globs` keeps 15,000 generated lines away from a judge, with a reason; no
+    other stack declares an exception at birth. The manifest the render writes still loads."""
+    import yaml
+
+    from rail.model import try_load_rail_config
+
+    gates = yaml.safe_load((renders[combo] / "rail.yaml").read_text())["gates"]
+    if combo.stack is Stack.TYPESCRIPT:
+        assert gates["review.ignored_globs"]["value"] == ["vendor/claude-code/**"]
+        assert gates["review.ignored_globs"]["reason"].strip()
+    else:
+        assert gates == {}
+    assert try_load_rail_config(renders[combo]) is not None
+
+
 def test_render_refuses_a_private_target_without_healthcheck_with_a_bare_message(
     template_dir: Path, tmp_path: Path
 ) -> None:
@@ -1356,9 +1440,12 @@ def test_the_copier_validator_says_what_rail_new_says() -> None:
 def test_not_at_prod_holds_each_refusal_once() -> None:
     """One table says which stacks have no prod template: `answers`, the stack switch and the
     answers-file check all read it (spec 2026-10-04-typescript-stack, decision 1)."""
-    from rail.scaffold import NOT_AT_PROD, RUST_PROD_REFUSAL
+    from rail.scaffold import NOT_AT_PROD, RUST_PROD_REFUSAL, TYPESCRIPT_PROD_REFUSAL
 
-    assert NOT_AT_PROD == {Stack.RUST: RUST_PROD_REFUSAL}
+    assert NOT_AT_PROD == {
+        Stack.RUST: RUST_PROD_REFUSAL,
+        Stack.TYPESCRIPT: TYPESCRIPT_PROD_REFUSAL,
+    }
 
 
 @pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
@@ -1483,6 +1570,173 @@ def test_rust_smoke_and_main_fit_rustfmt_width_at_any_slug_length(
         text = (dest / relative).read_text()
         for line in text.splitlines():
             assert len(line) <= 100, f"{relative}: line too long for rustfmt: {line!r}"
+            assert line == line.rstrip(), f"{relative}: trailing whitespace: {line!r}"
+            assert "\t" not in line, f"{relative}: tab: {line!r}"
+
+
+TYPESCRIPT_PINS = {
+    "typescript": "7.0.2",
+    "@biomejs/biome": "2.5.15",
+    "@anthropic-ai/claude-code": "2.1.289",
+}
+TYPESCRIPT_NODE = "24.21.0"
+
+
+def test_render_typescript_bootstrap(template_dir: Path, tmp_path: Path) -> None:
+    dest = render(
+        _project(
+            template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.TYPESCRIPT
+        )
+    )
+
+    plugin = json.loads((dest / ".claude-plugin" / "plugin.json").read_text())
+    assert plugin["name"] == "red-throwaway" and plugin["version"] == "0.1.0"
+    assert plugin["description"] == "A disposable HTTP probe."
+    assert plugin["author"] == {"name": "hawkixs"}
+    assert json.loads((dest / "hooks" / "hooks.json").read_text()) == {"modules": ["./register.ts"]}
+    register = (dest / "hooks" / "register.ts").read_text()
+    assert sorted(re.findall(r"^import .* from '([^']+)'$", register, re.MULTILINE)) == [
+        "../src/core.ts",
+        "claude-code",
+    ]
+    assert "red-throwaway-hello" in register
+    assert "claude-code/testing" in (dest / "src" / "core.test.ts").read_text()
+
+    package = json.loads((dest / "package.json").read_text())
+    assert package["name"] == "red-throwaway"
+    assert package["private"] is True and package["type"] == "module"
+    assert "dependencies" not in package
+    assert package["devDependencies"] == TYPESCRIPT_PINS
+    assert (dest / ".node-version").read_text().strip() == TYPESCRIPT_NODE
+    tsconfig = json.loads((dest / "tsconfig.json").read_text())
+    assert tsconfig["include"] == ["vendor/claude-code", "hooks", "src"]
+    assert "paths" not in tsconfig["compilerOptions"]
+    assert tsconfig["compilerOptions"]["noEmit"] is True
+    biome = json.loads((dest / "biome.json").read_text())
+    assert "!vendor" in biome["files"]["includes"]
+
+    assert not (dest / "package-lock.json").exists() and not (dest / "vendor").exists()
+    assert not (dest / "pyproject.toml").exists() and not (dest / "go.mod").exists()
+    assert not (dest / "Cargo.toml").exists()
+
+    ignored = (dest / ".gitignore").read_text().splitlines()
+    assert "node_modules/" in ignored and ".claude-plugin/types/" in ignored
+    assert not any("package-lock" in line or "vendor" in line for line in ignored)
+
+    claude = (dest / "CLAUDE.md").read_text()
+    structure = claude.split("## Structure", 1)[1]
+    for entry in (
+        ".claude-plugin/plugin.json",
+        "hooks/",
+        "src/",
+        "package.json",
+        "package-lock.json",
+        ".node-version",
+        "tsconfig.json",
+        "biome.json",
+        "vendor/claude-code/",
+    ):
+        assert f"── {entry}" in structure, entry
+    agents = (dest / "AGENTS.md").read_text()
+    gates = agents.split("## Gates", 1)[1].split("## Brain MCP", 1)[0]
+    assert gates.index("`make sync` first") < gates.index("Then `make ci`")
+    assert "`make types`" in gates and "named SKIP" in gates
+
+    _after(
+        _dry_run(dest, "ci", "RAIL_FLAGS=--ci"),
+        "node_modules/.bin/biome ci .",
+        "node_modules/.bin/tsc --noEmit",
+        "node_modules/.bin/claude plugin test .",
+        "node_modules/.bin/claude plugin validate --strict .",
+        "rail check --ci",
+    )
+    _after(
+        _dry_run(dest, "sync"),
+        "npm install --ignore-scripts",
+        "npm rebuild @anthropic-ai/claude-code",
+    )
+    _after(
+        _dry_run(dest, "sync", "INSTALL=ci"),
+        "npm ci --ignore-scripts",
+        "npm rebuild @anthropic-ai/claude-code",
+    )
+    assert not any("npx" in line for line in _dry_run(dest, "ci", "sync", "types"))
+
+
+def _make(dest: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    make = shutil.which("make")
+    assert make, "make is required: the Makefile is read by make itself"
+    return subprocess.run([make, *args], cwd=dest, capture_output=True, text=True)
+
+
+def test_typescript_typecheck_is_a_named_skip_until_the_types_are_vendored(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """No Node is needed: with no vendored types the recipe never reaches `tsc`. With them and no
+    installed `tsc`, it fails on the missing file: nothing is fetched (spec decision 4)."""
+    dest = render(
+        _project(
+            template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.TYPESCRIPT
+        )
+    )
+    skipped = _make(dest, "typecheck")
+    assert skipped.returncode == 0, skipped.stderr
+    assert "typecheck: SKIPPED, vendor/claude-code is absent" in skipped.stdout
+
+    (dest / "vendor" / "claude-code").mkdir(parents=True)
+    (dest / "vendor" / "claude-code" / "index.d.ts").write_text(
+        "// Written by Claude Code 2.1.289.\n"
+    )
+    attempted = _make(dest, "typecheck")
+    assert attempted.returncode != 0
+    assert "node_modules/.bin/tsc" in attempted.stdout + attempted.stderr
+
+
+def test_typescript_make_types_copies_the_core_file_only(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    dest = render(
+        _project(
+            template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.TYPESCRIPT
+        )
+    )
+    missing = _make(dest, "types")
+    assert missing.returncode != 0
+    assert ".claude-plugin/types/claude-code/index.d.ts" in missing.stdout + missing.stderr
+
+    types = dest / ".claude-plugin" / "types"
+    (types / "claude-code").mkdir(parents=True)
+    (types / "claude-code" / "index.d.ts").write_text("// Written by Claude Code 2.1.289.\nx\n")
+    (types / "claude-code-mcp").mkdir()
+    (types / "claude-code-mcp" / "index.d.ts").write_text("// this machine's MCP tools\n")
+    done = _make(dest, "types")
+    assert done.returncode == 0, done.stderr
+    vendored = dest / "vendor" / "claude-code"
+    assert (vendored / "index.d.ts").read_text() == "// Written by Claude Code 2.1.289.\nx\n"
+    assert [p.name for p in vendored.iterdir()] == ["index.d.ts"]
+    assert not (dest / "vendor" / "claude-code-mcp").exists()
+
+
+@pytest.mark.parametrize("slug", ["red-x", f"red-{_LONG_KEBAB}"], ids=["short", "long"])
+def test_typescript_files_fit_biome_width_at_any_slug_length(
+    template_dir: Path, tmp_path: Path, slug: str
+) -> None:
+    """`biome ci` reformats a line past 100 columns, and a fresh scaffold must pass `make lint`
+    whatever its name: the slug appears in one constant, never in a call (Review Focus 1). This
+    test does not run Node; the host verification runs `biome ci` on a long-slug render."""
+    dest = render(_project(template_dir, tmp_path / slug, slug=slug, stack=Stack.TYPESCRIPT))
+    for relative in (
+        "hooks/register.ts",
+        "hooks/hooks.json",
+        "src/core.ts",
+        "src/core.test.ts",
+        "package.json",
+        ".claude-plugin/plugin.json",
+        "tsconfig.json",
+        "biome.json",
+    ):
+        for line in (dest / relative).read_text().splitlines():
+            assert len(line) <= 100, f"{relative}: line too long for biome: {line!r}"
             assert line == line.rstrip(), f"{relative}: trailing whitespace: {line!r}"
             assert "\t" not in line, f"{relative}: tab: {line!r}"
 

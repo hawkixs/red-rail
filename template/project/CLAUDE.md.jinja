@@ -57,6 +57,8 @@ Python 3.12+, uv, pytest, ruff.
 Go 1.22+, `go test`, `go vet`, `gofmt`.
 {%- elif stack == 'rust' -%}
 Rust, edition 2024, toolchain pinned by `rust-toolchain.toml`: `cargo fmt`, clippy with `-D warnings`, `cargo test --locked`, `cargo deny check`.
+{%- elif stack == 'typescript' -%}
+A Claude Code plugin in TypeScript: Node pinned by `.node-version`, Biome, `tsc --noEmit` against the vendored engine types, `claude plugin test` and `claude plugin validate --strict`.
 {%- elif stack == 'docs' -%}
 Documentation only (Markdown).
 {%- endif %}
@@ -99,6 +101,16 @@ make check     # the rail gates against this repository
 ├── deny.toml          # licences, advisories, bans, sources
 ├── src/main.rs
 └── tests/
+{%- elif stack == 'typescript' %}
+├── .claude-plugin/plugin.json
+├── hooks/             # hooks.json and the module it names
+├── src/               # pure logic and its *.test.ts files
+├── package.json       # exact devDependencies: typescript, Biome, claude
+├── package-lock.json  # written by `make sync`, committed
+├── .node-version      # the one Node pin
+├── tsconfig.json
+├── biome.json
+└── vendor/claude-code/ # the engine's types, copied by `make types`
 {%- elif stack == 'docs' %}
 └── README.md
 {%- endif %}

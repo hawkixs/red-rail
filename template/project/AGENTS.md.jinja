@@ -57,6 +57,14 @@ Run `make sync` first: it writes `Cargo.lock` and installs the pinned cargo-deny
 `cargo test --workspace --locked`, `cargo deny check`; on a host with no Rust installed,
 `make CARGO=<wrapper> ci` runs them all through the wrapper. A new licence or source is a
 reviewed line in `deny.toml`.
+{%- elif stack == 'typescript' -%}
+Run `make sync` first: it installs the pinned tools from `package-lock.json` (writing it the
+first time) and runs the one install script the claude package needs. Then `make ci`. This
+stack's own commands: `node_modules/.bin/biome ci .`, `node_modules/.bin/tsc --noEmit`,
+`node_modules/.bin/claude plugin test .`, `node_modules/.bin/claude plugin validate --strict .`.
+The engine's types are not in this repository until `make types` copies them (a Claude Code
+session of the pinned version writes them into `.claude-plugin/types/` when it loads the plugin);
+until then `make typecheck` prints a named SKIP.
 {%- elif stack == 'docs' -%}
 A documentation project has no stack command of its own: `make ci` runs the rail's gates.
 {%- endif %}

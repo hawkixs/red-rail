@@ -498,12 +498,14 @@ TEST_PROFILES: dict[Stack, Callable[[Path], GateResult]] = {
     Stack.GO: _go_test_profile,
     Stack.DOCS: _docs_test_profile,
     Stack.RUST: _rust_test_profile,
+    Stack.TYPESCRIPT: _typescript_test_profile,
 }
 LINT_PROFILES: dict[Stack, Callable[[Path], GateResult]] = {
     Stack.PYTHON: _python_lint,
     Stack.GO: _go_profile,
     Stack.DOCS: _docs_lint,
     Stack.RUST: _rust_profile,
+    Stack.TYPESCRIPT: _typescript_profile,
 }
 
 

@@ -13,6 +13,9 @@ bin/
 {% elif stack == 'rust' -%}
 target/
 .cargo-tools/
+{% elif stack == 'typescript' -%}
+node_modules/
+.claude-plugin/types/
 {% elif stack == 'docs' -%}
 {% endif -%}
 {#- /stack-chain -#}

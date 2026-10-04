@@ -70,6 +70,7 @@ class Stack(StrEnum):
     PYTHON = "python"
     GO = "go"
     RUST = "rust"
+    TYPESCRIPT = "typescript"
     DOCS = "docs"
 
 

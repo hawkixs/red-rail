@@ -7,7 +7,8 @@
       "Bash(uv sync:*)",
       "Bash(uv run:*)"{% elif stack == 'go' %},
       "Bash(go:*)"{% elif stack == 'rust' %},
-      "Bash(cargo:*)"{% elif stack == 'docs' %}{% endif %}{# /stack-chain #}
+      "Bash(cargo:*)"{% elif stack == 'typescript' %},
+      "Bash(npm:*)"{% elif stack == 'docs' %}{% endif %}{# /stack-chain #}
     ]
   }
 }

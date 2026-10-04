@@ -453,6 +453,51 @@ def test_a_fresh_rust_scaffold_fails_lint_until_make_sync_writes_the_lock(tmp_pa
     assert not result.passed and "Cargo.lock" in result.details and "make sync" in result.details
 
 
+def _rendered_typescript(tmp_path: Path) -> Path:
+    src = tmp_path / "template-src"
+    src.mkdir()
+    shutil.copy(ROOT / "copier.yml", src / "copier.yml")
+    shutil.copytree(ROOT / "template", src / "template")
+    dest = render(
+        NewProject(
+            slug="red-cockpit",
+            description="A disposable plugin.",
+            tier=Tier.DEV,
+            stack=Stack.TYPESCRIPT,
+            brain_key="red-cockpit",
+            dest=tmp_path / "red-cockpit",
+            template=str(src),
+        )
+    )
+    (dest / "package-lock.json").write_text('{"lockfileVersion": 3}\n')  # what `make sync` writes
+    return dest
+
+
+def test_typescript_lint_and_tests_pass_on_the_rendered_tree(tmp_path: Path) -> None:
+    dest = _rendered_typescript(tmp_path)
+    result = lint(dest)
+    assert result.passed, result.details
+    assert "24.21.0" in result.details and "SKIPPED" in result.details
+    assert has_tests(dest).passed
+
+
+def test_a_fresh_typescript_scaffold_fails_lint_until_make_sync_writes_the_lock(
+    tmp_path: Path,
+) -> None:
+    dest = _rendered_typescript(tmp_path)
+    (dest / "package-lock.json").unlink()
+    result = lint(dest)
+    assert not result.passed and "package-lock.json" in result.details
+    assert "make sync" in result.details
+
+
+def test_typescript_lint_fails_on_the_rendered_tree_when_a_call_is_dropped(tmp_path: Path) -> None:
+    dest = _rendered_typescript(tmp_path)
+    _replace(dest / "Makefile", "claude plugin validate --strict", "claude plugin validate")
+    result = lint(dest)
+    assert not result.passed and "--strict" in result.details, result.details
+
+
 def _replace(path: Path, old: str, new: str) -> None:
     text = path.read_text()
     assert old in text, f"{old!r} not in {path.name}"

@@ -12,4 +12,11 @@ deploy:
   target: {{ deploy_target }}
   healthcheck: {{ healthcheck }}
 {%- endif %}
+{%- if stack == 'typescript' %}
+gates:
+  review.ignored_globs:
+    value: ["vendor/claude-code/**"]
+    reason: "generated engine types, copied by make types, not authored"
+{%- else %}
 gates: {}
+{%- endif %}
