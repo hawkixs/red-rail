@@ -208,8 +208,10 @@ Each decision says what, why, what it costs if wrong, and which files it touches
 8. **The build gate routes typescript by the existing tables.**
    - `TEST_PROFILES` and `LINT_PROFILES` gain `Stack.TYPESCRIPT`. The completeness assertion
      (`set(LINT_PROFILES) == set(Stack)`) keeps the miss path honest.
-   - `_typescript_tests(repo)` counts `*.test.ts` and `*.test.tsx` anywhere, skipping
-     `node_modules`, `vendor` and `.claude-plugin`. The failure message names `*.test.ts`.
+   - `_typescript_tests(repo)` counts `*.test.ts` and `*.test.tsx` under `plugin/` only, the
+     directory `claude plugin test plugin` runs, skipping `node_modules` and `.claude-plugin`
+     there. A test elsewhere in the repository, or in a worktree kept under `.claude/worktrees/`,
+     is not the plugin's test and does not count. The failure message names `plugin/**/*.test.ts`.
    - The `stack is None` observation keeps its text and appends the count, as rust's did: "…, none
      in tests/*.rs, none in *.test.ts" when empty, "…, {ts} (*.test.ts)" otherwise. The substring
      the existing test asserts is unchanged.
@@ -224,8 +226,10 @@ Each decision says what, why, what it costs if wrong, and which files it touches
      - `biome.json` and `tsconfig.json` are present, `plugin/.claude-plugin/plugin.json` parses
        with a `name` and an `author`;
      - the Makefile's live recipe lines (`_recipe_lines`) call `biome ci`, `tsc --noEmit`,
-       `claude plugin test`, `claude plugin validate --strict` and `install` with
-       `--ignore-scripts` and `rebuild @anthropic-ai/claude-code`;
+       `claude plugin test plugin`, `claude plugin validate --strict plugin` (the operand is the
+       directory the gate reads the manifest from) and an npm install (`install`, `ci` or
+       `$(INSTALL)`) with `--ignore-scripts`; every `rebuild` names
+       `@anthropic-ai/claude-code`, and at least one does;
      - **types:** if `vendor/claude-code/index.d.ts` is absent, the gate PASSes and its observation
        says `tsc: SKIPPED (vendor/claude-code absent)`; if present, its first line is
        `// Written by Claude Code <version>.` and `<version>` equals the pinned
@@ -241,7 +245,7 @@ Each decision says what, why, what it costs if wrong, and which files it touches
    - Cost if wrong: a Makefile that spells a call some unforeseen way declares an override.
 
 10. **`rail upgrade --stack typescript` works through the existing mechanism.** The transition
-    rules are rust's (only out of `docs`; refused when the manifest says `prod`; the refusal comes
+    rules are rust's (only out of `docs`; refused when the manifest or the answers file says `prod`; the refusal comes
     before copier; copier's merge is the one writer of `rail.yaml`). Adding the stack to
     `NOT_AT_PROD` (decision 1) is all the code changes. The tests are parametrised over both
     stacks.
@@ -309,7 +313,7 @@ Tests in red-rail. All are static; none needs Node, except criteria 9 and 10.
 3. In `tests/test_gates_build.py`:
    - `test_every_stack_has_a_build_profile` and the no-profile FAIL still hold with five stacks;
    - `test_typescript_tests_are_found` (`plugin/src/core.test.ts`, a `.test.tsx`, a nested one);
-     `test_a_test_under_node_modules_or_vendor_is_not_counted`; `test_typescript_repo_with_only_go_tests_fails`;
+     `test_a_test_outside_plugin_is_not_counted` (`scripts/`, `vendor/`, `.claude/worktrees/x/plugin/src`) and `test_a_test_under_node_modules_or_the_engines_types_is_not_counted`; `test_typescript_repo_with_only_go_tests_fails`;
    - `test_undeclared_stack_reports_typescript_tests` (the decision 8 text);
    - `test_typescript_lint_passes_on_the_rendered_tree` (a placeholder lock written);
    - `test_typescript_lint_fails_…`, parametrised: `.node-version` as `22`, a caret in a devDependency,
