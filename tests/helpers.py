@@ -96,6 +96,54 @@ RUST_TOOLCHAIN_TOML = (
     '[toolchain]\nchannel = "1.98.1"\ncomponents = ["rustfmt", "clippy"]\nprofile = "minimal"\n'
 )
 
+# A typescript project's files, as the template renders them: the calls `build.lint` reads
+# (spec 2026-10-04-typescript-stack, decision 9) and the pins it compares.
+TYPESCRIPT_NODE = "24.21.0"
+TYPESCRIPT_PIN = "2.1.289"  # the @anthropic-ai/claude-code pin
+TYPESCRIPT_MAKEFILE = (
+    ".PHONY: sync lint typecheck test validate types check ci\n"
+    "NPM ?= npm\nBIN ?= node_modules/.bin\nINSTALL ?= install\n"
+    "sync:\n\t$(NPM) $(INSTALL) --ignore-scripts\n\t$(NPM) rebuild @anthropic-ai/claude-code\n"
+    "lint:\n\t$(BIN)/biome ci .\n"
+    "typecheck:\n\t$(BIN)/tsc --noEmit\n"
+    "test:\n\t$(BIN)/claude plugin test .\n"
+    "validate:\n\t$(BIN)/claude plugin validate --strict .\n"
+    "check:\n\trail check\nci: lint typecheck test validate check\n"
+)
+
+
+def write_typescript_files(repo: Path) -> None:
+    """Everything `build.tests` and `build.lint` read for a typescript plugin, and no more."""
+    (repo / ".node-version").write_text(TYPESCRIPT_NODE + "\n")
+    (repo / "package.json").write_text(
+        json.dumps(
+            {
+                "name": repo.name,
+                "private": True,
+                "type": "module",
+                "devDependencies": {
+                    "@anthropic-ai/claude-code": TYPESCRIPT_PIN,
+                    "@biomejs/biome": "2.5.15",
+                    "typescript": "7.0.2",
+                },
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    (repo / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
+    (repo / "biome.json").write_text("{}\n")
+    (repo / "tsconfig.json").write_text("{}\n")
+    (repo / ".claude-plugin").mkdir(exist_ok=True)
+    (repo / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": repo.name, "version": "0.1.0", "author": {"name": "hawkixs"}}) + "\n"
+    )
+    (repo / "hooks").mkdir(exist_ok=True)
+    (repo / "hooks" / "hooks.json").write_text('{"modules": ["./register.ts"]}\n')
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "core.test.ts").write_text("// a test\n")
+    (repo / "Makefile").write_text(TYPESCRIPT_MAKEFILE)
+
 
 def added_receipt_diff(path: Path, name: str | None = None) -> str:
     """The pull-request diff that adds the receipt at `path` under docs/receipts/."""
@@ -211,6 +259,8 @@ def conforming_tree(root: Path, name: str, tier: str, *, stack: str = "python") 
         (repo / "tests").mkdir()
         (repo / "tests" / "smoke.rs").write_text("#[test]\nfn smoke() {}\n")
         (repo / "Makefile").write_text(RUST_MAKEFILE)
+    elif stack == "typescript":
+        write_typescript_files(repo)
     commit_all(repo, "chore: bootstrap the fixture")
     return repo
 
