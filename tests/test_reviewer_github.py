@@ -282,3 +282,79 @@ def test_diff_falls_back_to_the_file_list_when_github_refuses_a_large_one() -> N
     # to know it changed even though it cannot read how
     assert "logo.png" in diff and "no patch" in diff
     assert any("/files" in c for c in calls), "the fallback actually asked for the file list"
+
+
+def _contents_app(handler) -> GitHubApp:
+    def routed(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return httpx.Response(200, json=TOKEN)
+        return handler(request)
+
+    return GitHubApp(
+        app_id=1, installation_id=2, private_key_pem=PEM, transport=httpx.MockTransport(routed)
+    )
+
+
+def test_file_at_reads_one_file_at_a_ref_as_raw_text() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"line one\nline two\n")
+
+    app = _contents_app(handler)
+    assert app.file_at("hawkixs/red-rail", "src/a b.py", "c" * 40) == "line one\nline two\n"
+    [request] = seen
+    assert request.url.raw_path.startswith(b"/repos/hawkixs/red-rail/contents/src/a%20b.py?")
+    assert request.url.params["ref"] == "c" * 40
+    assert request.headers["accept"] == "application/vnd.github.raw+json"
+
+
+def test_file_at_answers_none_for_a_path_absent_at_the_ref() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    assert _contents_app(handler).file_at("hawkixs/red-rail", "404.md", "c" * 40) is None
+
+
+def test_file_at_refuses_what_a_judge_cannot_read() -> None:
+    """Binary or oversized content is an error with a reason, never an excerpt of garbage, and
+    never confused with an absent file."""
+    binary = _contents_app(lambda r: httpx.Response(200, content=b"\x89PNG\x00\xff\xfe"))
+    with pytest.raises(GitHubError, match="not text"):
+        binary.file_at("hawkixs/red-rail", "logo.png", "c" * 40)
+    huge = _contents_app(lambda r: httpx.Response(200, content=b"x" * (2 * 1024 * 1024 + 1)))
+    with pytest.raises(GitHubError, match="too large"):
+        huge.file_at("hawkixs/red-rail", "big.txt", "c" * 40)
+    denied = _contents_app(lambda r: httpx.Response(403, json={"message": "no"}))
+    with pytest.raises(GitHubError, match="403"):
+        denied.file_at("hawkixs/red-rail", "a.py", "c" * 40)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "",
+        "/etc/passwd",
+        "../../other-repo/contents/x",
+        "src/../../x",
+        "src/./a.py",
+        "src//a.py",
+        "src/",
+        "src\\a.py",
+        "a\x00b",
+        "a\nb",
+        "a?ref=main",
+        "a#b",
+    ],
+)
+def test_file_at_refuses_a_path_that_could_leave_the_file(path: str) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"x")
+
+    with pytest.raises(GitHubError, match="refused path"):
+        _contents_app(handler).file_at("hawkixs/red-rail", path, "c" * 40)
+    assert seen == []
