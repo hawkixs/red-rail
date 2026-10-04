@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 import jwt
@@ -17,6 +18,7 @@ API = "https://api.github.com"
 API_VERSION = "2022-11-28"
 JSON = "application/vnd.github+json"
 DIFF = "application/vnd.github.diff"
+RAW = "application/vnd.github.raw+json"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_FILE_PAGES = 30  # GitHub lists at most 3000 files on a pull request, 100 per page
 TIMEOUT_SECONDS = 10.0
@@ -26,7 +28,12 @@ Conclusion = Literal["success", "failure"]  # never neutral (spec §5, fail-clos
 
 
 class GitHubError(Exception):
-    """GitHub refused or answered out of shape."""
+    """GitHub refused or answered out of shape. `status` is the HTTP status when GitHub
+    answered one, so a caller never has to read it back out of the message."""
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +146,7 @@ class GitHubApp:
         json_body: dict[str, Any] | None = None,
         accept: str = JSON,
         authenticated: bool = True,
-        raw: bool = False,
+        raw: bool | Literal["bytes"] = False,
     ) -> Any:
         sent = {"Accept": accept, "X-GitHub-Api-Version": API_VERSION, **(headers or {})}
         if authenticated:
@@ -156,7 +163,12 @@ class GitHubApp:
                 detail = str(response.json().get("message", ""))
             except ValueError:
                 pass
-            raise GitHubError(f"{method} {path}: {response.status_code} {detail}".rstrip())
+            raise GitHubError(
+                f"{method} {path}: {response.status_code} {detail}".rstrip(),
+                status=response.status_code,
+            )
+        if raw == "bytes":
+            return response.content
         if raw:
             return response.text
         if response.status_code == 204 or not response.content:
@@ -238,6 +250,30 @@ class GitHubApp:
             "GET", f"/repos/{repository}/pulls/{number}/commits", params={"per_page": "100"}
         )
         return [str(item["commit"]["message"]) for item in data]
+
+    def file_at(self, repository: str, path: str, ref: str) -> str | None:
+        """One file's text at a commit, None when the path does not exist there (absence is
+        evidence, not a failure). Content a judge cannot read — over `MAX_RESPONSE_BYTES`, not
+        UTF-8 text, or a path that is not a file — raises `GitHubError` with the reason."""
+        try:
+            content = self._request(
+                "GET",
+                f"/repos/{repository}/contents/{quote(path, safe='/')}",
+                params={"ref": ref},
+                accept=RAW,
+                raw="bytes",
+            )
+        except GitHubError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise GitHubError(f"{path} at {ref[:12]} is not text") from exc
+        if "\x00" in text:
+            raise GitHubError(f"{path} at {ref[:12]} is not text")
+        return text
 
     # -- checks and reviews --------------------------------------------------------------
 
