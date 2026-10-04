@@ -253,12 +253,8 @@ def _rule(
     finding: str = "F-7-1",
     decision: str = "rename it",
     confirm: str = "F-7-1",
-    tty: bool = True,
-    monkeypatch=None,
     extra=(),
 ):
-    if monkeypatch is not None:
-        monkeypatch.setattr("rail.commands.reviewer._interactive", lambda: tty)
     args = [
         "reviewer",
         "rule",
@@ -279,10 +275,17 @@ def _rule(
     return CliRunner().invoke(main, args, input=f"{confirm}\n")
 
 
+@pytest.fixture
+def at_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ruling is typed by the operator: the terminal predicate says so."""
+    monkeypatch.setattr("rail.actor.stdin_is_tty", lambda: True)
+
+
+@pytest.mark.usefixtures("at_a_terminal")
 def test_rule_writes_one_ruling_after_typed_confirmation(tmp_path: Path, monkeypatch) -> None:
     repo, config = _awaiting_repo(tmp_path)
     monkeypatch.delenv("CI", raising=False)
-    out = _rule(config, monkeypatch=monkeypatch)
+    out = _rule(config)
     assert out.exit_code == 0, out.output
     rulings = FileLedger(repo / RECEIPTS_DIR).list(
         "red-alpha", attestation=AttestationKind.REVIEW_RULING
@@ -298,23 +301,24 @@ def test_rule_writes_one_ruling_after_typed_confirmation(tmp_path: Path, monkeyp
         ({"finding": "F-7-9"}, False, "not an open blocker awaiting a ruling"),
         ({"decision": " "}, False, "decision"),
         ({"confirm": "F-7-2"}, False, "confirmation"),
-        ({"tty": False}, False, "terminal"),
         ({}, True, "CI"),
     ],
 )
+@pytest.mark.usefixtures("at_a_terminal")
 def test_rule_refuses_without_writing(tmp_path: Path, monkeypatch, kwargs, env_ci, needle) -> None:
     repo, config = _awaiting_repo(tmp_path)
     if env_ci:
         monkeypatch.setenv("CI", "true")
     else:
         monkeypatch.delenv("CI", raising=False)
-    out = _rule(config, monkeypatch=monkeypatch, **kwargs)
+    out = _rule(config, **kwargs)
     assert out.exit_code == 2 and needle in out.output
     assert not FileLedger(repo / RECEIPTS_DIR).list(
         "red-alpha", attestation=AttestationKind.REVIEW_RULING
     )
 
 
+@pytest.mark.usefixtures("at_a_terminal")
 def test_rule_writes_a_review_ruling_in_brain_mode(tmp_path: Path, monkeypatch) -> None:
     """The command's ledger comes from `open_ledger`, brain included (spec 2026-09-25, D9):
     it never assumes the file ledger."""
@@ -362,7 +366,6 @@ def test_rule_writes_a_review_ruling_in_brain_mode(tmp_path: Path, monkeypatch) 
     )
     config.chmod(0o600)
 
-    monkeypatch.setattr("rail.commands.reviewer._interactive", lambda: True)
     monkeypatch.setattr("rail.commands.reviewer.open_ledger", lambda *_a, **_k: ledger)
     monkeypatch.delenv("CI", raising=False)
     out = CliRunner().invoke(

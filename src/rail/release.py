@@ -330,7 +330,7 @@ def attest(ledger: Ledger, plan: ReleasePlan, digest: str, *, issuer: str) -> Re
 
 
 def release(
-    repo: Path, version: str, *, run: Runner = subprocess.run, issuer: str = "operator"
+    repo: Path, version: str, *, issuer: str, run: Runner = subprocess.run
 ) -> ReleaseOutcome:
     ledger = open_ledger(repo)
     plan = preflight(repo, version, ledger=ledger, run=run)

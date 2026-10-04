@@ -9,6 +9,7 @@ or a typed parameter (`build.commit_window`).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +133,25 @@ def effective(repo: Path, key: str) -> tuple[Any, str | None]:
 
 
 PRIVATE_DOCS_ROOT = "private_docs_root"  # the `skipped` value of a gate whose root is absent
+
+ACTOR_VARIABLE = "RAIL_ACTOR"
+# a harness that names itself without a table entry: `AI_AGENT=<value>` gives `agent:<value>`
+AGENT_NAME_VARIABLE = "AI_AGENT"
+
+
+@dataclass(frozen=True)
+class HarnessMarker:
+    harness: str  # lowercase [a-z0-9-]+, the <harness> of the label
+    presence: tuple[str, ...]  # any of these variables, non-empty, marks the harness
+    session: str | None  # the variable carrying its session id
+
+
+# measured on this host (spec 2026-10-03-actor-identity §2); a harness is added once measured
+AGENT_MARKERS: tuple[HarnessMarker, ...] = (
+    HarnessMarker(
+        "claude-code", ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID"), "CLAUDE_CODE_SESSION_ID"
+    ),
+)
 
 
 def docs_root(repo: Path) -> tuple[str, str | None]:

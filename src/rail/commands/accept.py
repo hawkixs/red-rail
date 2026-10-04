@@ -10,6 +10,7 @@ import click
 from pydantic import ValidationError
 
 from rail import gitrepo
+from rail.commands._actor import no_issuer_option, resolve_or_exit
 from rail.commands._options import json_option, repo_option
 from rail.commands.attest import echo_record
 from rail.ledger import AttestationKind, LedgerError, open_ledger
@@ -19,10 +20,11 @@ from rail.model import load_rail_config
 @click.command("accept")
 @repo_option
 @click.option("--rationale", required=True, help="Why the delivery is accepted (recorded).")
-@click.option("--issuer", default="operator", show_default=True, help="X-Brain-Agent label.")
+@no_issuer_option
 @json_option
-def command(repo: Path, rationale: str, issuer: str, as_json: bool) -> None:
+def command(repo: Path, rationale: str, as_json: bool) -> None:
     """Accept the integrated delivery (stage 10): `fulfilled` in the ledger."""
+    issuer = resolve_or_exit()
     try:
         project = load_rail_config(repo).project
         ledger = open_ledger(repo)

@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 from pydantic import ValidationError
 
+from rail.commands._actor import no_issuer_option, resolve_or_exit
 from rail.commands._options import json_option, repo_option
 from rail.commands.deploy import report
 from rail.deploy import DeployError, Locked, flow
@@ -19,10 +20,11 @@ from rail.model import load_rail_config
 @click.command("drill")
 @repo_option
 @click.option("--yes", is_flag=True, help="Skip the confirmation.")
-@click.option("--issuer", default="operator", show_default=True)
+@no_issuer_option
 @json_option
-def command(repo: Path, yes: bool, issuer: str, as_json: bool) -> None:
+def command(repo: Path, yes: bool, as_json: bool) -> None:
     """Roll back to the previous artefact, measure the recovery, roll forward — a drill."""
+    issuer = resolve_or_exit()
     try:
         cfg = load_rail_config(repo)
         ledger = open_ledger(repo)

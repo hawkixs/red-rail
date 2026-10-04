@@ -5,6 +5,7 @@ while it builds its remote script. Every flow builds the scripts it is about to 
 first side effect, so such a refusal leaves no trace: no ssh, no attestation, no incident, no
 rollback. Addresses are RFC 5737 documentation addresses only."""
 
+import inspect
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -145,7 +146,13 @@ def test_a_refused_release_is_neither_an_incident_nor_a_rollback(
     before = _history(case)
     host = systemd_case.RecordingHost()
     with pytest.raises(DeployError, match=case.refusal):
-        flow.forward(case.repo, load_rail_config(case.repo), _ledger(case), target=case.build(host))
+        flow.forward(
+            case.repo,
+            load_rail_config(case.repo),
+            _ledger(case),
+            issuer="operator",
+            target=case.build(host),
+        )
     assert _ssh(host) == [], "nothing may reach the machine"
     assert _history(case) == before, "a refusal writes nothing to the ledger"
 
@@ -157,7 +164,13 @@ def test_a_refused_first_release_leaves_no_open_incident(tmp_path: Path, shape: 
     _released(case, _artefact(case, "0.1.0", case.bad, D1))
     host = systemd_case.RecordingHost()
     with pytest.raises(DeployError, match=case.refusal):
-        flow.forward(case.repo, load_rail_config(case.repo), _ledger(case), target=case.build(host))
+        flow.forward(
+            case.repo,
+            load_rail_config(case.repo),
+            _ledger(case),
+            issuer="operator",
+            target=case.build(host),
+        )
     assert _ssh(host) == []
     assert _history(case) == ["released"]
 
@@ -173,7 +186,11 @@ def test_a_rollback_to_a_refused_artefact_records_nothing(tmp_path: Path, shape:
     host = systemd_case.RecordingHost()
     with pytest.raises(DeployError, match=case.refusal):
         flow.rollback(
-            case.repo, load_rail_config(case.repo), _ledger(case), target=case.build(host)
+            case.repo,
+            load_rail_config(case.repo),
+            _ledger(case),
+            issuer="operator",
+            target=case.build(host),
         )
     assert _ssh(host) == []
     assert _history(case) == before
@@ -196,7 +213,13 @@ def test_a_drill_that_would_apply_a_refused_artefact_never_starts(
     before = _history(case)
     host = systemd_case.RecordingHost()
     with pytest.raises(DeployError, match=case.refusal):
-        flow.drill(case.repo, load_rail_config(case.repo), _ledger(case), target=case.build(host))
+        flow.drill(
+            case.repo,
+            load_rail_config(case.repo),
+            _ledger(case),
+            issuer="operator",
+            target=case.build(host),
+        )
     assert _ssh(host) == []
     assert _history(case) == before
 
@@ -215,7 +238,11 @@ def test_a_failed_verification_whose_rollback_is_also_refused_leaves_an_open_inc
     before = _history(case)
     host = systemd_case.RecordingHost()
     outcome = flow.forward(
-        case.repo, load_rail_config(case.repo), _ledger(case), target=case.build(host)
+        case.repo,
+        load_rail_config(case.repo),
+        _ledger(case),
+        issuer="operator",
+        target=case.build(host),
     )
     assert len(_ssh(host)) == 1, "only the new release may reach the machine"
     assert _history(case) == [*before, "incident_detected"]
@@ -243,3 +270,8 @@ def test_a_private_target_that_does_not_name_its_ssh_host_is_refused(
     with pytest.raises(DeployError, match="deploy.ssh_host"):
         case.build(host)
     assert _ssh(host) == []
+
+
+@pytest.mark.parametrize("fn", [flow.forward, flow.rollback, flow.drill])
+def test_no_flow_falls_back_to_an_issuer(fn) -> None:
+    assert inspect.signature(fn).parameters["issuer"].default is inspect.Parameter.empty

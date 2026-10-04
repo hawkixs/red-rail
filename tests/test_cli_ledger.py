@@ -145,7 +145,10 @@ def test_contract_set_needs_a_deliverable_when_no_github_remote(tmp_path: Path) 
     assert out.exit_code == 0, out.output
 
 
-def test_attest_writes_a_receipt_with_typed_data(tmp_path: Path) -> None:
+def test_attest_writes_a_receipt_with_typed_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAIL_ACTOR", "agent:test")
     repo = _repo(tmp_path)
     head = git(repo, "rev-parse", "HEAD")
     out = CliRunner().invoke(
@@ -165,13 +168,12 @@ def test_attest_writes_a_receipt_with_typed_data(tmp_path: Path) -> None:
             "drill=false",
             "--data",
             "attempts=2",
-            "--issuer",
-            "op",
             "--json",
         ],
     )
     assert out.exit_code == 0, out.output
     record = json.loads(out.output)
+    assert record["issuer"] == "agent:test"
     assert record["payload"] == {
         "kind": "released",
         "data": {

@@ -12,6 +12,7 @@ from pathlib import Path
 import click
 from pydantic import ValidationError
 
+from rail.commands._actor import no_issuer_option, resolve_or_exit
 from rail.commands._options import json_option, repo_option
 from rail.deploy import DeployError, Locked, flow
 from rail.ledger import LedgerError, open_ledger
@@ -54,7 +55,7 @@ def report(outcome: flow.Outcome, as_json: bool) -> None:
 @click.option("--rollback", is_flag=True, help="Put the previous deployed artefact back.")
 @click.option("--plan", "dry_run", is_flag=True, help="Print the steps, run nothing.")
 @click.option("--yes", is_flag=True, help="Skip the confirmation.")
-@click.option("--issuer", default="operator", show_default=True)
+@no_issuer_option
 @json_option
 def command(
     repo: Path,
@@ -62,7 +63,6 @@ def command(
     rollback: bool,
     dry_run: bool,
     yes: bool,
-    issuer: str,
     as_json: bool,
 ) -> None:
     """Deploy the newest release to the manifest's target, or roll back to the previous one."""
@@ -71,6 +71,8 @@ def command(
             "--rollback puts the previous deployed artefact back; "
             "--version applies to a forward deployment"
         )
+    # before any ledger read: --plan attests nothing and needs no actor
+    issuer = None if dry_run else resolve_or_exit()
     try:
         cfg = load_rail_config(repo)
         ledger = open_ledger(repo)

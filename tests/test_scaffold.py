@@ -499,6 +499,17 @@ def test_verify_scores_the_bootstrap_floor_regardless_of_the_declared_tier(
     assert stages == {Stage.HYGIENE, Stage.INTENT, Stage.DESIGN}
 
 
+def test_the_birth_contract_is_issued_by_a_valid_service_actor(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    from rail.scaffold import record_contract, write_bootstrap_spec
+
+    project = _project(template_dir, tmp_path / "red-probe")
+    render(project)
+    write_bootstrap_spec(project)
+    assert record_contract(project, clock=CLOCK).issuer == "service:rail-new"
+
+
 def test_render_prod_python_on_the_brain_ledger(template_dir: Path, tmp_path: Path) -> None:
     ticket = "04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f"
     dest = render(
@@ -662,6 +673,7 @@ def test_the_resume_command_records_exactly_the_birth_contract(
 
     argv = shlex.split(resume_contract_command(project))
     assert argv[:3] == ["rail", "contract", "set"]
+    assert "--issuer" not in argv
     out = CliRunner().invoke(main, [*argv[1:], "--yes"])
     assert out.exit_code == 0, out.output
 

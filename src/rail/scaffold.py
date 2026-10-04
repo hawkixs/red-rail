@@ -281,7 +281,7 @@ def record_contract(
         project.slug,
         contract,
         reason="bootstrap",
-        issuer="rail new",
+        issuer="service:rail-new",
         idempotency_key=f"contract:{project.slug}:1",
     )
 
@@ -390,7 +390,7 @@ def resume_contract_command(project: NewProject) -> str:
             args += ["--allowed-reviewer", reviewer]
         args += ["--required-approvals", str(deliverable.review.required_approvals)]
     args += ["--priority", str(contract.priority), "--acceptance-mode", contract.acceptance_mode]
-    args += ["--reason", "bootstrap", "--issuer", "rail new", "--key", f"contract:{project.slug}:1"]
+    args += ["--reason", "bootstrap", "--key", f"contract:{project.slug}:1"]
     return shlex.join(args)
 
 
