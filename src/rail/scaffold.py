@@ -452,9 +452,11 @@ def _switchable(answers: dict[str, Any], repo: Path, stack: Stack) -> None:
             f"--stack switches only out of docs (this project is {current}): python↔go and "
             "go→rust leave build files only a diff review would catch"
         )
-    refusal = _refusal_at_prod(stack.value, manifest.get("tier"))
-    if refusal:
-        raise ScaffoldError(refusal)
+    # copier renders the tier of the answers file, so a prod in either place refuses
+    for tier in (manifest.get("tier"), answers.get("tier")):
+        refusal = _refusal_at_prod(stack.value, tier)
+        if refusal:
+            raise ScaffoldError(refusal)
 
 
 def upgrade(

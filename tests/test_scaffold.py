@@ -1827,6 +1827,22 @@ def test_upgrade_refuses_answers_holding_a_stack_with_no_prod_template(
         upgrade(repo, update=_never, resolve=lambda t, **k: "c" * 40)
 
 
+@pytest.mark.parametrize("stack", [Stack.RUST, Stack.TYPESCRIPT])
+def test_upgrade_out_of_docs_refuses_when_the_answers_file_says_prod(
+    tmp_path: Path, stack: Stack
+) -> None:
+    """Copier renders the tier of the answers file, not of rail.yaml: a docs project whose
+    answers say prod must not switch to a stack with no prod template."""
+    repo = _answered(
+        tmp_path / "red-life",
+        stack="docs",
+        tier="prod",
+        manifest="rail: 1\nproject: red-life\nbrain_key: red-life\ntier: dev\nstack: docs\n",
+    )
+    with pytest.raises(ScaffoldError, match=f"{stack.value} at tier prod"):
+        upgrade(repo, stack=stack, update=_never, resolve=lambda t, **k: "c" * 40)
+
+
 @pytest.mark.parametrize(
     ("manifest", "message"),
     [
