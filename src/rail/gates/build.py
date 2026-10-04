@@ -25,20 +25,26 @@ CONVENTIONAL = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]+\))?!?: \S")
 _EMOJI_PARTS = frozenset({"So", "Sk", "Mn", "Me", "Cf"})
 
 
-# The lockfile a stack's lint gate requires committed. `make sync` writes it, so a project's
-# birth syncs exactly the stacks listed here (`rail.scaffold`) and checks the lock is there.
-LOCKFILES: dict[Stack, str] = {
+# What a stack's lint gate requires that only `make sync` writes: a lockfile (rust, typescript)
+# or the `tool` directives in go.mod (go). A project's birth syncs exactly the stacks listed
+# here (`rail.scaffold`) and checks `unsynced` is empty — one source, owned by the gate.
+_LOCKFILES: dict[Stack, str] = {
     Stack.RUST: "Cargo.lock",
     Stack.TYPESCRIPT: "package-lock.json",
 }
+SYNCED_STACKS: frozenset[Stack] = frozenset(_LOCKFILES) | {Stack.GO}
 
 
-def lock_missing(repo: Path, stack: Stack) -> str | None:
-    """Why `repo` lacks the lock its stack's lint gate requires; None when it has it, or when
-    the stack has no lock gate."""
-    lock = LOCKFILES.get(stack)
+def unsynced(repo: Path, stack: Stack) -> str | None:
+    """Why `repo` lacks what its stack's lint gate requires from `make sync`; None when it has
+    it, or when the stack asks nothing of the sync."""
+    lock = _LOCKFILES.get(stack)
     if lock is not None and not (repo / lock).is_file():
         return f"{lock} is missing: run `make sync`, then commit it"
+    if stack is Stack.GO:
+        go_mod = repo / "go.mod"
+        if go_mod.is_file():
+            return _undeclared_go_tools(go_mod.read_text())
     return None
 
 
@@ -234,6 +240,19 @@ def tool_directives(go_mod: str) -> set[str]:
     return packages
 
 
+def _undeclared_go_tools(go_mod: str) -> str | None:
+    """What `go.mod` lacks of the pinned analysers, with the command that adds them; None when
+    every one is declared."""
+    declared = tool_directives(go_mod)
+    undeclared = [(name, package) for name, package in GO_TOOLS if package not in declared]
+    if not undeclared:
+        return None
+    return (
+        f"go.mod declares no tool directive for {', '.join(n for n, _ in undeclared)} "
+        f"(`go get -tool {' '.join(p for _, p in undeclared)}`)"
+    )
+
+
 def _go_profile(repo: Path) -> GateResult:
     """The Go profile as a pure read: `go.mod` DECLARES the analysers, the task runner
     CALLS them, CI executes it. `go vet` and `gofmt` need no directive — they ship with the
@@ -241,16 +260,8 @@ def _go_profile(repo: Path) -> GateResult:
     go_mod = repo / "go.mod"
     if not go_mod.is_file():
         return GateResult(Stage.BUILD, "lint", False, "go.mod is missing")
-    declared = tool_directives(go_mod.read_text())
-    undeclared = [name for name, package in GO_TOOLS if package not in declared]
-    if undeclared:
-        return GateResult(
-            Stage.BUILD,
-            "lint",
-            False,
-            f"go.mod declares no tool directive for {', '.join(undeclared)} "
-            f"(`go get -tool {' '.join(p for n, p in GO_TOOLS if n in undeclared)}`)",
-        )
+    if (undeclared := unsynced(repo, Stack.GO)) is not None:
+        return GateResult(Stage.BUILD, "lint", False, undeclared)
     makefile = repo / "Makefile"
     if not makefile.is_file():
         return GateResult(Stage.BUILD, "lint", False, "Makefile is missing")
@@ -342,7 +353,7 @@ def _rust_profile(repo: Path) -> GateResult:
         return fail(f"rust-toolchain.toml components lack {', '.join(missing)}")
     if not (repo / "Cargo.toml").is_file():
         return fail("Cargo.toml is missing")
-    if (missing_lock := lock_missing(repo, Stack.RUST)) is not None:
+    if (missing_lock := unsynced(repo, Stack.RUST)) is not None:
         return fail(missing_lock)
     deny = _toml(repo / "deny.toml")
     if isinstance(deny, str):
@@ -459,7 +470,7 @@ def _typescript_profile(repo: Path) -> GateResult:
                 f"package.json devDependencies {name} is {version!r}, not an exact version "
                 "(X.Y.Z): no caret, no tilde, no range"
             )
-    if (missing_lock := lock_missing(repo, Stack.TYPESCRIPT)) is not None:
+    if (missing_lock := unsynced(repo, Stack.TYPESCRIPT)) is not None:
         return fail(missing_lock)
     for name in ("biome.json", "tsconfig.json"):
         if not (repo / name).is_file():

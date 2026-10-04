@@ -343,15 +343,32 @@ def test_new_project_passes_bootstrap_without_remotes(template_dir: Path, tmp_pa
     assert out.exit_code == 0, out.output
 
 
-def _syncing(calls: list[list[str]], *, writes: str | None, status: int = 0, stderr: str = ""):
-    """A runner standing in for `make sync`: it records the call, and writes `writes` (the lock
-    the real recipe would) into the tree it runs in. Nothing here runs npm or cargo."""
+GO_TOOL_BLOCK = (
+    "\ntool (\n\thonnef.co/go/tools/cmd/staticcheck\n\tgolang.org/x/vuln/cmd/govulncheck\n)\n"
+)
+
+
+def _syncing(
+    calls: list[list[str]],
+    *,
+    writes: str | None,
+    status: int = 0,
+    stderr: str = "",
+    go_tools: bool = False,
+):
+    """A runner standing in for `make sync`: it records the call (and its cwd), and writes what
+    the real recipe would into the tree it runs in — the lock `writes`, and with `go_tools` the
+    `tool` directives `go get -tool` adds to go.mod. Nothing here runs npm, cargo or go."""
 
     def run(args, **kwargs):
         calls.append(list(args))
         if args == ["make", "sync"]:
-            if writes and status == 0:
-                (Path(kwargs["cwd"]) / writes).write_text("{}\n")
+            if status == 0:
+                if writes:
+                    (Path(kwargs["cwd"]) / writes).write_text("{}\n")
+                if go_tools:
+                    with (Path(kwargs["cwd"]) / "go.mod").open("a") as go_mod:
+                        go_mod.write(GO_TOOL_BLOCK)
             return subprocess.CompletedProcess(args, status, stdout="", stderr=stderr)
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
@@ -401,8 +418,52 @@ def test_a_birth_of_a_lock_bearing_stack_commits_the_lock_it_syncs(
     ]
 
 
-@pytest.mark.parametrize("stack", [Stack.PYTHON, Stack.GO, Stack.DOCS])
-def test_a_stack_without_a_lock_gate_runs_no_sync(
+def test_a_go_birth_commits_the_tool_directives_its_sync_writes(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """build.lint wants the `tool` directives in go.mod and only `make sync` (`go get -tool`)
+    writes them: a Go birth that skipped the sync published a tree red on build.lint (ticket
+    feb9d18b)."""
+    calls: list[list[str]] = []
+    project = _project(
+        template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.GO
+    )
+    seen: list[str] = []
+
+    def run(args, **kwargs):
+        seen.append(str(kwargs.get("cwd")))
+        return _syncing(calls, writes=None, go_tools=True)(args, **kwargs)
+
+    new_project(project, publish=False, clock=CLOCK, run=run, resolve=_pin)
+
+    assert calls == [["make", "sync"]] and seen == [str(project.dest)]
+    committed = subprocess.run(
+        ["git", "-C", str(project.dest), "show", "HEAD:go.mod"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "honnef.co/go/tools/cmd/staticcheck" in committed
+    assert gitrepo.recent_subjects(project.dest, 5) == [
+        "chore: bootstrap red-throwaway with the ReD rail"
+    ]
+
+
+def test_a_go_sync_that_leaves_no_tool_directive_fails_the_birth_like_the_gate_would(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+    project = _project(
+        template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.GO
+    )
+    with pytest.raises(ScaffoldError, match=r"build\.lint: go\.mod declares no tool directive"):
+        new_project(
+            project, publish=False, clock=CLOCK, run=_syncing(calls, writes=None), resolve=_pin
+        )
+
+
+@pytest.mark.parametrize("stack", [Stack.PYTHON, Stack.DOCS])
+def test_a_stack_without_a_synced_requirement_runs_no_sync(
     template_dir: Path, tmp_path: Path, stack: Stack
 ) -> None:
     calls: list[list[str]] = []
@@ -453,15 +514,22 @@ def test_a_host_without_make_refuses_the_birth_by_name(template_dir: Path, tmp_p
         new_project(project, publish=False, clock=CLOCK, run=no_make, resolve=_pin)
 
 
-def test_the_lock_bearing_stacks_are_the_ones_the_lint_gate_demands_a_lock_of(
+def test_the_synced_stacks_are_the_ones_the_lint_gate_demands_a_sync_of(
     template_dir: Path, tmp_path: Path
 ) -> None:
-    """One list, owned by the gate: every stack in it fails build.lint without its lock, and the
-    birth syncs exactly those."""
+    """One list, owned by the gate: every stack in it fails build.lint on a fresh tree until
+    its sync has run, and the birth syncs exactly those."""
     from rail.gates import build
 
-    assert set(build.LOCKFILES) == {Stack.RUST, Stack.TYPESCRIPT}
-    for stack, lock in build.LOCKFILES.items():
+    assert build.SYNCED_STACKS == {Stack.RUST, Stack.TYPESCRIPT, Stack.GO}
+    for stack in (Stack.PYTHON, Stack.DOCS):
+        dest = render(_project(template_dir, tmp_path / f"red-{stack.value}", stack=stack))
+        assert build.unsynced(dest, stack) is None
+    reasons = {
+        Stack.RUST: "Cargo.lock is missing: run `make sync`, then commit it",
+        Stack.TYPESCRIPT: "package-lock.json is missing: run `make sync`, then commit it",
+    }
+    for stack, reason in reasons.items():
         dest = render(
             _project(
                 template_dir,
@@ -470,11 +538,15 @@ def test_the_lock_bearing_stacks_are_the_ones_the_lint_gate_demands_a_lock_of(
                 slug=f"red-{stack.value}",
             )
         )
-        assert (
-            build.lock_missing(dest, stack) == f"{lock} is missing: run `make sync`, then commit it"
-        )
-        (dest / lock).write_text("{}\n")
-        assert build.lock_missing(dest, stack) is None
+        assert build.unsynced(dest, stack) == reason
+        (dest / reason.split()[0]).write_text("{}\n")
+        assert build.unsynced(dest, stack) is None
+    go = render(_project(template_dir, tmp_path / "red-go", stack=Stack.GO, slug="red-go"))
+    reason = build.unsynced(go, Stack.GO)
+    assert reason is not None and "staticcheck, govulncheck" in reason and "go get -tool" in reason
+    with (go / "go.mod").open("a") as go_mod:
+        go_mod.write(GO_TOOL_BLOCK)
+    assert build.unsynced(go, Stack.GO) is None
 
 
 def test_new_project_reports_failing_gates(template_dir: Path, tmp_path: Path) -> None:
