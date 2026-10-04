@@ -9,14 +9,20 @@ from click.testing import CliRunner
 from rail.brain.client import BrainClient
 from rail.cli import main
 from rail.commands import accept, attest, bind, contract
+from rail.commands import release as release_command
 from rail.commands._actor import no_issuer_option, resolve_or_exit
-from rail.ledger import AttestationKind
+from rail.deploy import flow
+from rail.ledger import RECEIPTS_DIR, AttestationKind
 from rail.ledger.brain import BrainLedger
 from rail.ledger.file import FileLedger, receipt_filename
 from rail.ledger.spool import spool_directory
 from tests.fake_brain import FakeBrain
 from tests.helpers import conforming_tree, git
+from tests.test_cli_deploy import D1, D2, FakeTarget
+from tests.test_cli_deploy import _repo as deploy_repo_with
 from tests.test_ledger_brain import CONTRACT, T0, _clock
+from tests.test_release import FakeHost
+from tests.test_release import _repo as release_repo
 
 
 @click.command()
@@ -143,3 +149,130 @@ def test_attest_from_keeps_the_receipts_own_issuer(
     )
     assert out.exit_code == 0, out.output
     assert world.brain.attestations[-1]["issuer_identity"] == "service:old"
+
+
+# release, deploy and drill: the host gestures of stages 7 to 9 (a file ledger, a faked host)
+
+
+@pytest.fixture
+def faked(monkeypatch: pytest.MonkeyPatch) -> FakeTarget:
+    fake = FakeTarget()
+    monkeypatch.setattr(flow, "make_target", lambda repo, cfg, **kwargs: fake)
+    return fake
+
+
+def _unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RAIL_ACTOR")
+    monkeypatch.setattr("rail.actor._stdin_is_tty", lambda: False)
+
+
+def _release_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, FakeHost]:
+    host = FakeHost()
+    monkeypatch.setattr(release_command, "RUN", host)
+    return release_repo(tmp_path), host
+
+
+def _issuers(repo: Path) -> set[str]:
+    return {r.issuer for r in FileLedger(repo / RECEIPTS_DIR).list("red-probe", kind=None)}
+
+
+def test_release_plan_and_deploy_plan_need_no_actor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, faked: FakeTarget
+) -> None:
+    repo, _ = _release_world(tmp_path / "release", monkeypatch)
+    _unresolvable(monkeypatch)
+    out = CliRunner().invoke(main, ["release", "--repo", str(repo), "--version", "0.1.0", "--plan"])
+    assert out.exit_code == 0, out.output
+    deploy_repo = deploy_repo_with(tmp_path / "deploy", ("0.1.0", D1))
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(deploy_repo), "--plan"])
+    assert out.exit_code == 0, out.output
+
+
+def test_release_without_an_actor_exits_2_before_any_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, host = _release_world(tmp_path, monkeypatch)
+    before = _issuers(repo)
+    _unresolvable(monkeypatch)
+    out = CliRunner().invoke(
+        main, ["release", "--repo", str(repo), "--version", "0.1.0", "--yes", "--json"]
+    )
+    assert out.exit_code == 2 and "RAIL_ACTOR" in out.output
+    assert not any(c[0] == "docker" or "push" in c for c in host.calls)
+    assert _issuers(repo) == before
+    assert not list(spool_directory("red-probe").glob("*"))
+
+
+@pytest.mark.parametrize("flags", [[], ["--rollback"]])
+def test_deploy_without_an_actor_exits_2_before_any_effect(
+    flags: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, faked: FakeTarget
+) -> None:
+    repo = deploy_repo_with(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    if flags:
+        runner = CliRunner()
+        for version in ("0.1.0", "0.1.1"):
+            args = ["deploy", "--repo", str(repo), "--version", version, "--yes"]
+            assert runner.invoke(main, args).exit_code == 0
+    applied, before = list(faked.applied), _issuers(repo)
+    receipts = sorted((repo / RECEIPTS_DIR).glob("*.json"))
+    _unresolvable(monkeypatch)
+    out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), *flags, "--yes"])
+    assert out.exit_code == 2 and "RAIL_ACTOR" in out.output
+    assert faked.applied == applied and _issuers(repo) == before
+    assert sorted((repo / RECEIPTS_DIR).glob("*.json")) == receipts
+    assert not list(spool_directory("red-probe").glob("*"))
+
+
+def test_drill_without_an_actor_exits_2_before_any_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, faked: FakeTarget
+) -> None:
+    repo = deploy_repo_with(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    runner = CliRunner()
+    for version in ("0.1.0", "0.1.1"):
+        args = ["deploy", "--repo", str(repo), "--version", version, "--yes"]
+        assert runner.invoke(main, args).exit_code == 0
+    applied = list(faked.applied)
+    receipts = sorted((repo / RECEIPTS_DIR).glob("*.json"))
+    _unresolvable(monkeypatch)
+    out = runner.invoke(main, ["drill", "--repo", str(repo), "--yes"])
+    assert out.exit_code == 2 and "RAIL_ACTOR" in out.output
+    assert faked.applied == applied
+    assert sorted((repo / RECEIPTS_DIR).glob("*.json")) == receipts
+
+
+def test_release_deploy_rollback_and_drill_record_the_resolved_actor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, faked: FakeTarget
+) -> None:
+    monkeypatch.setenv("RAIL_ACTOR", AGENT)
+    repo, _ = _release_world(tmp_path / "release", monkeypatch)
+    out = CliRunner().invoke(main, ["release", "--repo", str(repo), "--version", "0.1.0", "--yes"])
+    assert out.exit_code == 0, out.output
+    released = FileLedger(repo / RECEIPTS_DIR).list("red-probe", kind=None)[-1]
+    assert released.attestation is AttestationKind.RELEASED and released.issuer == AGENT
+
+    deploy_repo = deploy_repo_with(tmp_path / "deploy", ("0.1.0", D1), ("0.1.1", D2))
+    runner = CliRunner()
+    for args in (
+        ["--version", "0.1.0"],
+        [],
+        ["--rollback"],
+    ):
+        assert (
+            runner.invoke(main, ["deploy", "--repo", str(deploy_repo), *args, "--yes"]).exit_code
+            == 0
+        )
+    assert runner.invoke(main, ["deploy", "--repo", str(deploy_repo), "--yes"]).exit_code == 0
+    assert runner.invoke(main, ["drill", "--repo", str(deploy_repo), "--yes"]).exit_code == 0
+    written = [
+        r
+        for r in FileLedger(deploy_repo / RECEIPTS_DIR).list("red-probe", kind=None)
+        if r.attestation is not AttestationKind.RELEASED
+    ]
+    assert len(written) >= 10 and {r.issuer for r in written} == {AGENT}
+
+
+@pytest.mark.parametrize("command", [["release", "--version", "0.1.0"], ["deploy"], ["drill"]])
+def test_issuer_is_refused_by_release_deploy_and_drill(command: list[str], tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-probe", "prod")
+    out = CliRunner().invoke(main, [*command, "--repo", str(repo), "--issuer", "x"])
+    assert out.exit_code == 2 and "RAIL_ACTOR" in out.output

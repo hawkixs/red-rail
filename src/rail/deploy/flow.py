@@ -216,7 +216,7 @@ def forward(
     ledger: Ledger,
     *,
     version: str | None = None,
-    issuer: str = "operator",
+    issuer: str,
     target: Target | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> Outcome:
@@ -325,7 +325,7 @@ def rollback(
     cfg: RailConfig,
     ledger: Ledger,
     *,
-    issuer: str = "operator",
+    issuer: str,
     target: Target | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> Outcome:
@@ -396,7 +396,7 @@ def drill(
     cfg: RailConfig,
     ledger: Ledger,
     *,
-    issuer: str = "operator",
+    issuer: str,
     target: Target | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> Outcome:
