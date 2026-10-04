@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from rail import gitrepo
+from rail import gitrepo, remotes, scaffold
 from rail.brain.client import BrainClient
 from rail.cli import main
 from rail.commands.new import BRAIN_KEY
@@ -159,6 +159,13 @@ CI_CHECK = {"context": "rail / make ci + rail check", "app_id": 101}
 REVIEW_CHECK = {"context": "red-rail/review", "app_id": 202}
 
 
+@pytest.fixture(autouse=True)
+def _no_host_reviewer_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The reviewer App's id is read from the host's reviewer config: a test that does not
+    declare one sees none, never the developer's own `~/.config/red-rail/reviewer.yaml`."""
+    monkeypatch.setattr(remotes, "REVIEWER_CONFIG", tmp_path / "no-host" / "reviewer.yaml")
+
+
 def _github(calls: list[list[str]], bodies: list[dict], *, refuse: str | None = None):
     """A fake host: GitHub does not know the repository yet, knows the Apps by slug, and takes
     the branch protection put on `main` — or refuses `refuse`: the App lookup or the
@@ -241,6 +248,36 @@ def test_new_project_protects_main_with_the_checks_of_its_tier(
             "required_pull_request_reviews": None,
             "restrictions": None,
         }
+    ]
+
+
+def test_a_birth_pins_the_review_check_to_a_private_reviewer_app(
+    template_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reviewer App is private: GitHub has no public page for it, so its id comes from the
+    host's reviewer config and `gh api apps/<reviewer>` is never asked (ticket 3623548f)."""
+    config = tmp_path / "reviewer.yaml"
+    config.write_text("app_id: 303\ninstallation_id: 4\nprivate_key_file: /nowhere/key.pem\n")
+    config.chmod(0o600)
+    monkeypatch.setattr(remotes, "REVIEWER_CONFIG", config)
+    calls: list[list[str]] = []
+    bodies: list[dict] = []
+    assert scaffold.REVIEW_CHECK.app_slug == remotes.REVIEWER_APP_SLUG
+
+    new_project(
+        _project(template_dir, tmp_path / "red-probe", tier=Tier.DEV),
+        publish=True,
+        clock=CLOCK,
+        run=_github(calls, bodies),
+        resolve=_pin,
+    )
+
+    assert [c[2] for c in calls if c[:2] == ["gh", "api"] and c[2].startswith("apps/")] == [
+        "apps/github-actions"
+    ]
+    assert bodies[0]["required_status_checks"]["checks"] == [
+        {**CI_CHECK},
+        {"context": "red-rail/review", "app_id": 303},
     ]
 
 
