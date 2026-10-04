@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from rail import gitrepo, monitor
-from rail.gates import Stage
+from rail.brain.client import BrainClient
+from rail.gates import Stage, evidence
 from rail.gates.evidence import (
     GATES,
     carry_forward,
@@ -19,9 +20,11 @@ from rail.gates.evidence import (
     verdict,
     visible,
 )
-from rail.ledger import RECEIPTS_DIR, AttestationKind
+from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
+from rail.ledger.brain import BrainLedger
 from rail.ledger.file import FileLedger
 from rail.monitor import AgentView, Container
+from tests.fake_brain import FakeBrain
 from tests.helpers import commit_all, conforming_tree, git
 
 T0 = datetime(2026, 9, 15, 8, 0, tzinfo=UTC)
@@ -233,6 +236,64 @@ def test_integrated_is_the_newest_receipt_on_history(tmp_path: Path) -> None:
     _attest(ledger, AttestationKind.INTEGRATED, "i2", sha=_commit_on_another_line(repo))
     result = integrated(repo)
     assert result.passed and f"for {head[:12]}" in result.details, result
+
+
+_CONTRACT = Contract(
+    objective="o",
+    deliverables=[
+        Deliverable(key="main", repository="hawkixs/red-beta", no_checks_reason="fixture: no check")
+    ],
+)
+
+
+def _brain_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """`red-beta` under `ledger: brain` (fake, in memory) with the contract set; the gates read
+    that ledger. Returns the ticket, the fake, the ledger and HEAD's sha."""
+    repo = conforming_tree(tmp_path, "red-beta", "dev")
+    brain = FakeBrain(agent="op")
+    ticket = brain.add_ticket("red", "red-beta")
+    brain.register_repository("red-beta", 4243, "hawkixs/red-beta")
+    ledger = BrainLedger(
+        BrainClient.in_memory(brain, agent="op"),
+        ticket=ticket,
+        project="red-beta",
+        spool_dir=tmp_path / "spool",
+        repository_id=lambda slug: 4243,
+    )
+    ledger.contract_set("red-beta", _CONTRACT, reason="r", issuer="op", idempotency_key="c1")
+    monkeypatch.setattr(evidence, "open_ledger", lambda repo: ledger)
+    return ticket, brain, ledger, gitrepo.head_sha(repo)
+
+
+def test_a_superseded_integration_receipt_still_places_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ticket d096f911: under `ledger: brain`, binding or integrating another pull request makes
+    brain supersede the current integration receipt. Main's receipt is then a superseded one,
+    and the gate still finds it on HEAD's history."""
+    ticket, brain, _, head = _brain_ledger(tmp_path, monkeypatch)
+    repo = tmp_path / "projects" / "red-beta"
+    brain.integrate(ticket, head, issued_at=T0)
+    assert integrated(repo).passed
+    brain.integrate(ticket, _commit_on_another_line(repo), issued_at=T0 + timedelta(minutes=5))
+    result = integrated(repo)
+    assert result.passed and f"for {head[:12]} at distance 0" in result.details, result
+
+
+def test_a_receipt_superseded_by_a_new_contract_revision_does_not_place_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-closed: an integration receipt of an earlier contract revision proves nothing for
+    the contract that holds now, even when its sha is on HEAD's history."""
+    ticket, brain, ledger, head = _brain_ledger(tmp_path, monkeypatch)
+    repo = tmp_path / "projects" / "red-beta"
+    brain.integrate(ticket, head, issued_at=T0)
+    assert integrated(repo).passed
+    amended = _CONTRACT.model_copy(update={"objective": "o, amended"})
+    ledger.contract_set("red-beta", amended, reason="r", issuer="op", idempotency_key="c2")
+    brain.integrate(ticket, _commit_on_another_line(repo), issued_at=T0 + timedelta(minutes=5))
+    result = integrated(repo)
+    assert not result.passed and "not on HEAD's history" in result.details, result
 
 
 def test_a_record_without_sha_fails_closed_even_over_an_older_one_on_history(
