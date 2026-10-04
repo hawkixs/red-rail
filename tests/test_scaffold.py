@@ -976,7 +976,7 @@ STACK_GATES = {
     Stack.PYTHON: "`uv run pytest -q`",
     Stack.GO: "`go test -race -count=1 ./...`",
     Stack.RUST: "`cargo test --workspace --locked`",
-    Stack.TYPESCRIPT: "`node_modules/.bin/claude plugin test .`",
+    Stack.TYPESCRIPT: "`node_modules/.bin/claude plugin test plugin`",
     Stack.DOCS: "no stack command of its own",
 }
 # D9's sections and D10's rows, in the order AGENTS.md must hold them
@@ -1092,7 +1092,7 @@ GITIGNORED = {
     ],
     Stack.GO: ["bin/"],
     Stack.RUST: ["target/", ".cargo-tools/"],
-    Stack.TYPESCRIPT: ["node_modules/", ".claude-plugin/types/"],
+    Stack.TYPESCRIPT: ["node_modules/", "plugin/.claude-plugin/types/"],
     Stack.DOCS: [],
 }
 
@@ -1589,18 +1589,24 @@ def test_render_typescript_bootstrap(template_dir: Path, tmp_path: Path) -> None
         )
     )
 
-    plugin = json.loads((dest / ".claude-plugin" / "plugin.json").read_text())
+    plugin_root = dest / "plugin"
+    plugin = json.loads((plugin_root / ".claude-plugin" / "plugin.json").read_text())
     assert plugin["name"] == "red-throwaway" and plugin["version"] == "0.1.0"
     assert plugin["description"] == "A disposable HTTP probe."
     assert plugin["author"] == {"name": "hawkixs"}
-    assert json.loads((dest / "hooks" / "hooks.json").read_text()) == {"modules": ["./register.ts"]}
-    register = (dest / "hooks" / "register.ts").read_text()
+    assert json.loads((plugin_root / "hooks" / "hooks.json").read_text()) == {
+        "modules": ["./register.ts"]
+    }
+    register = (plugin_root / "hooks" / "register.ts").read_text()
     assert sorted(re.findall(r"^import .* from '([^']+)'$", register, re.MULTILINE)) == [
         "../src/core.ts",
         "claude-code",
     ]
     assert "red-throwaway-hello" in register
-    assert "claude-code/testing" in (dest / "src" / "core.test.ts").read_text()
+    assert "claude-code/testing" in (plugin_root / "src" / "core.test.ts").read_text()
+    for old in (".claude-plugin", "hooks", "src"):
+        assert not (dest / old).exists(), old
+    assert (dest / "CLAUDE.md").is_file() and not (plugin_root / "CLAUDE.md").exists()
 
     package = json.loads((dest / "package.json").read_text())
     assert package["name"] == "red-throwaway"
@@ -1609,23 +1615,31 @@ def test_render_typescript_bootstrap(template_dir: Path, tmp_path: Path) -> None
     assert package["devDependencies"] == TYPESCRIPT_PINS
     assert (dest / ".node-version").read_text().strip() == TYPESCRIPT_NODE
     tsconfig = json.loads((dest / "tsconfig.json").read_text())
-    assert tsconfig["include"] == ["vendor/claude-code", "hooks", "src"]
+    assert tsconfig["include"] == ["vendor/claude-code", "plugin/hooks", "plugin/src"]
     assert "paths" not in tsconfig["compilerOptions"]
     assert tsconfig["compilerOptions"]["noEmit"] is True
     biome = json.loads((dest / "biome.json").read_text())
-    assert "!vendor" in biome["files"]["includes"]
+    assert biome["files"]["includes"] == [
+        "**",
+        "!node_modules",
+        "!vendor",
+        "!plugin/.claude-plugin/types",
+        "!.claude",
+        "!docs",
+    ]
 
     assert not (dest / "package-lock.json").exists() and not (dest / "vendor").exists()
     assert not (dest / "pyproject.toml").exists() and not (dest / "go.mod").exists()
     assert not (dest / "Cargo.toml").exists()
 
     ignored = (dest / ".gitignore").read_text().splitlines()
-    assert "node_modules/" in ignored and ".claude-plugin/types/" in ignored
+    assert "node_modules/" in ignored and "plugin/.claude-plugin/types/" in ignored
     assert not any("package-lock" in line or "vendor" in line for line in ignored)
 
     claude = (dest / "CLAUDE.md").read_text()
     structure = claude.split("## Structure", 1)[1]
     for entry in (
+        "plugin/",
         ".claude-plugin/plugin.json",
         "hooks/",
         "src/",
@@ -1646,8 +1660,8 @@ def test_render_typescript_bootstrap(template_dir: Path, tmp_path: Path) -> None
         _dry_run(dest, "ci", "RAIL_FLAGS=--ci"),
         "node_modules/.bin/biome ci .",
         "node_modules/.bin/tsc --noEmit",
-        "node_modules/.bin/claude plugin test .",
-        "node_modules/.bin/claude plugin validate --strict .",
+        "node_modules/.bin/claude plugin test plugin",
+        "node_modules/.bin/claude plugin validate --strict plugin",
         "rail check --ci",
     )
     _after(
@@ -1702,9 +1716,9 @@ def test_typescript_make_types_copies_the_core_file_only(
     )
     missing = _make(dest, "types")
     assert missing.returncode != 0
-    assert ".claude-plugin/types/claude-code/index.d.ts" in missing.stdout + missing.stderr
+    assert "plugin/.claude-plugin/types/claude-code/index.d.ts" in missing.stdout + missing.stderr
 
-    types = dest / ".claude-plugin" / "types"
+    types = dest / "plugin" / ".claude-plugin" / "types"
     (types / "claude-code").mkdir(parents=True)
     (types / "claude-code" / "index.d.ts").write_text("// Written by Claude Code 2.1.289.\nx\n")
     (types / "claude-code-mcp").mkdir()
@@ -1717,21 +1731,29 @@ def test_typescript_make_types_copies_the_core_file_only(
     assert not (dest / "vendor" / "claude-code-mcp").exists()
 
 
-@pytest.mark.parametrize("slug", ["red-x", f"red-{_LONG_KEBAB}"], ids=["short", "long"])
+_LONGER_KEBAB = "abcde-" * 10 + "abcdef"  # 66 characters, so "red-" + this is 70
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["red-x", f"red-{_LONG_KEBAB}", f"red-{_LONGER_KEBAB}"],
+    ids=["short", "long", "longer"],
+)
 def test_typescript_files_fit_biome_width_at_any_slug_length(
     template_dir: Path, tmp_path: Path, slug: str
 ) -> None:
     """`biome ci` reformats a line past 100 columns, and a fresh scaffold must pass `make lint`
-    whatever its name: the slug appears in one constant, never in a call (Review Focus 1). This
+    whatever its name: the slug appears only in the two constants `COMMAND` and `NAME`, never in a
+    call (Review Focus 1). This
     test does not run Node; the host verification runs `biome ci` on a long-slug render."""
     dest = render(_project(template_dir, tmp_path / slug, slug=slug, stack=Stack.TYPESCRIPT))
     for relative in (
-        "hooks/register.ts",
-        "hooks/hooks.json",
-        "src/core.ts",
-        "src/core.test.ts",
+        "plugin/hooks/register.ts",
+        "plugin/hooks/hooks.json",
+        "plugin/src/core.ts",
+        "plugin/src/core.test.ts",
         "package.json",
-        ".claude-plugin/plugin.json",
+        "plugin/.claude-plugin/plugin.json",
         "tsconfig.json",
         "biome.json",
     ):
@@ -1901,7 +1923,7 @@ def test_upgrade_switches_docs_to_typescript(template_dir: Path, tmp_path: Path)
     assert exception["reason"].strip()
     ci = dest / ".github" / "workflows" / "continuous-integration.yml"
     assert "stack: typescript" in ci.read_text()
-    assert (dest / ".claude-plugin" / "plugin.json").is_file()
+    assert (dest / "plugin" / ".claude-plugin" / "plugin.json").is_file()
     assert (dest / "package.json").is_file() and (dest / ".node-version").is_file()
 
 

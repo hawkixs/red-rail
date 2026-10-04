@@ -2,6 +2,7 @@ import type { Register } from 'claude-code'
 import { greeting } from '../src/core.ts'
 
 const COMMAND = '{{ project }}-hello'
+const NAME = '{{ project }}'
 
 let calls = 0
 
@@ -12,6 +13,6 @@ export const register: Register = (on) => {
   })
   on('command.run', { command: COMMAND }, async () => {
     calls += 1
-    return { text: greeting('{{ project }}', calls) }
+    return { text: greeting(NAME, calls) }
   })
 }

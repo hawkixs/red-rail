@@ -582,16 +582,23 @@ def _ts_project(root: Path) -> Path:
 
 def test_typescript_tests_are_found(tmp_path: Path) -> None:
     repo = _ts_project(tmp_path / "red-cockpit")
-    (repo / "src" / "view.test.tsx").write_text("")
-    (repo / "src" / "deep" / "nested").mkdir(parents=True)
-    (repo / "src" / "deep" / "nested" / "x.test.ts").write_text("")
+    (repo / "plugin" / "src" / "view.test.tsx").write_text("")
+    (repo / "plugin" / "src" / "deep" / "nested").mkdir(parents=True)
+    (repo / "plugin" / "src" / "deep" / "nested" / "x.test.ts").write_text("")
     found = build_gates._typescript_tests(repo)
     assert {p.name for p in found} == {"core.test.ts", "view.test.tsx", "x.test.ts"}
     assert build_gates._typescript_test_profile(repo).passed
 
 
 @pytest.mark.parametrize(
-    "where", ["node_modules/pkg", "vendor/claude-code", ".claude-plugin/types", ".git/hooks"]
+    "where",
+    [
+        "node_modules/pkg",
+        "vendor/claude-code",
+        ".claude-plugin/types",
+        "plugin/.claude-plugin/types",
+        ".git/hooks",
+    ],
 )
 def test_a_test_under_installed_or_vendored_code_is_not_counted(tmp_path: Path, where: str) -> None:
     repo = init_repo(tmp_path / "red-cockpit")
@@ -651,7 +658,10 @@ def test_typescript_lint_passes_and_names_the_skipped_typecheck(tmp_path: Path) 
         (lambda d: (d / "package-lock.json").unlink(), "package-lock.json"),
         (lambda d: (d / "biome.json").unlink(), "biome.json"),
         (lambda d: (d / "tsconfig.json").unlink(), "tsconfig.json"),
-        (lambda d: (d / ".claude-plugin" / "plugin.json").write_text('{"name": "x"}\n'), "author"),
+        (
+            lambda d: (d / "plugin/.claude-plugin/plugin.json").write_text('{"name": "x"}\n'),
+            "author",
+        ),
         (
             lambda d: _replace(d / "Makefile", "\t$(BIN)/biome ci .", "\t$(BIN)/biome format ."),
             "biome ci",
@@ -665,8 +675,8 @@ def test_typescript_lint_passes_and_names_the_skipped_typecheck(tmp_path: Path) 
         (
             lambda d: _replace(
                 d / "Makefile",
-                "\t$(BIN)/claude plugin validate --strict .",
-                "\t# $(BIN)/claude plugin validate --strict .",
+                "\t$(BIN)/claude plugin validate --strict plugin",
+                "\t# $(BIN)/claude plugin validate --strict plugin",
             ),
             "claude plugin validate",
         ),

@@ -106,8 +106,8 @@ TYPESCRIPT_MAKEFILE = (
     "sync:\n\t$(NPM) $(INSTALL) --ignore-scripts\n\t$(NPM) rebuild @anthropic-ai/claude-code\n"
     "lint:\n\t$(BIN)/biome ci .\n"
     "typecheck:\n\t$(BIN)/tsc --noEmit\n"
-    "test:\n\t$(BIN)/claude plugin test .\n"
-    "validate:\n\t$(BIN)/claude plugin validate --strict .\n"
+    "test:\n\t$(BIN)/claude plugin test plugin\n"
+    "validate:\n\t$(BIN)/claude plugin validate --strict plugin\n"
     "check:\n\trail check\nci: lint typecheck test validate check\n"
 )
 
@@ -134,14 +134,15 @@ def write_typescript_files(repo: Path) -> None:
     (repo / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
     (repo / "biome.json").write_text("{}\n")
     (repo / "tsconfig.json").write_text("{}\n")
-    (repo / ".claude-plugin").mkdir(exist_ok=True)
-    (repo / ".claude-plugin" / "plugin.json").write_text(
+    plugin = repo / "plugin"
+    (plugin / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (plugin / ".claude-plugin" / "plugin.json").write_text(
         json.dumps({"name": repo.name, "version": "0.1.0", "author": {"name": "hawkixs"}}) + "\n"
     )
-    (repo / "hooks").mkdir(exist_ok=True)
-    (repo / "hooks" / "hooks.json").write_text('{"modules": ["./register.ts"]}\n')
-    (repo / "src").mkdir(exist_ok=True)
-    (repo / "src" / "core.test.ts").write_text("// a test\n")
+    (plugin / "hooks").mkdir(exist_ok=True)
+    (plugin / "hooks" / "hooks.json").write_text('{"modules": ["./register.ts"]}\n')
+    (plugin / "src").mkdir(exist_ok=True)
+    (plugin / "src" / "core.test.ts").write_text("// a test\n")
     (repo / "Makefile").write_text(TYPESCRIPT_MAKEFILE)
 
 

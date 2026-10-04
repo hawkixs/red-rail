@@ -102,9 +102,10 @@ make check     # the rail gates against this repository
 ├── src/main.rs
 └── tests/
 {%- elif stack == 'typescript' %}
-├── .claude-plugin/plugin.json
-├── hooks/             # hooks.json and the module it names
-├── src/               # pure logic and its *.test.ts files
+├── plugin/            # the plugin root: what `claude plugin validate` and `test` are run on
+│   ├── .claude-plugin/plugin.json
+│   ├── hooks/         # hooks.json and the module it names
+│   └── src/           # pure logic and its *.test.ts files
 ├── package.json       # exact devDependencies: typescript, Biome, claude
 ├── package-lock.json  # written by `make sync`, committed
 ├── .node-version      # the one Node pin

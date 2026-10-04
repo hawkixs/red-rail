@@ -111,22 +111,22 @@ lint:
 ## Type check against the engine's types, once this project has copied them (`make types`).
 ## Until then the skip is named, never silent.
 typecheck:
-	@if [ -f vendor/claude-code/index.d.ts ]; then $(BIN)/tsc --noEmit; else echo "typecheck: SKIPPED, vendor/claude-code is absent (load the plugin in a Claude Code session, then run make types)"; fi
+	@if [ -f vendor/claude-code/index.d.ts ]; then $(BIN)/tsc --noEmit; else echo "typecheck: SKIPPED, vendor/claude-code is absent (load the plugin (plugin/) in a Claude Code session, then run make types)"; fi
 
 ## Run the plugin's tests with the engine's own runner
 test:
-	$(BIN)/claude plugin test .
+	$(BIN)/claude plugin test plugin
 
 ## What the engine accepts of the manifest and the hooks, warnings included
 validate:
-	$(BIN)/claude plugin validate --strict .
+	$(BIN)/claude plugin validate --strict plugin
 
 ## Copy the engine's types out of the folder the engine ignores, into the repository. Only the
 ## core file: its sibling for MCP tools lists what is connected on one machine.
 types:
-	@test -f .claude-plugin/types/claude-code/index.d.ts || { echo "no .claude-plugin/types/claude-code/index.d.ts: load this plugin in a Claude Code session of the pinned version, which writes it"; exit 1; }
+	@test -f plugin/.claude-plugin/types/claude-code/index.d.ts || { echo "no plugin/.claude-plugin/types/claude-code/index.d.ts: load this plugin in a Claude Code session of the pinned version, which writes it"; exit 1; }
 	mkdir -p vendor/claude-code
-	cp .claude-plugin/types/claude-code/index.d.ts vendor/claude-code/index.d.ts
+	cp plugin/.claude-plugin/types/claude-code/index.d.ts vendor/claude-code/index.d.ts
 {% elif stack == 'docs' -%}
 ## Nothing to install for a documentation project
 sync:

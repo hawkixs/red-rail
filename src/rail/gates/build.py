@@ -359,12 +359,12 @@ TYPESCRIPT_CALLS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     (
         "claude plugin test",
         re.compile(r"\bclaude\s+plugin\s+test\b"),
-        "$(BIN)/claude plugin test .",
+        "$(BIN)/claude plugin test plugin",
     ),
     (
         "claude plugin validate --strict",
         re.compile(r"\bclaude\s+plugin\s+validate\b[^\n]*\s--strict\b"),
-        "$(BIN)/claude plugin validate --strict .",
+        "$(BIN)/claude plugin validate --strict plugin",
     ),
     (
         "an install with --ignore-scripts",
@@ -443,15 +443,15 @@ def _typescript_profile(repo: Path) -> GateResult:
     for name in ("biome.json", "tsconfig.json"):
         if not (repo / name).is_file():
             return fail(f"{name} is missing")
-    plugin = _json(repo / ".claude-plugin" / "plugin.json")
+    plugin = _json(repo / "plugin" / ".claude-plugin" / "plugin.json")
     if isinstance(plugin, str):
         return fail(plugin)
     if not plugin.get("name"):
-        return fail(".claude-plugin/plugin.json has no name")
+        return fail("plugin/.claude-plugin/plugin.json has no name")
     if not plugin.get("author"):
         return fail(
-            ".claude-plugin/plugin.json declares no author: `claude plugin validate --strict` "
-            "fails without one"
+            "plugin/.claude-plugin/plugin.json declares no author: `claude plugin validate "
+            "--strict` fails without one"
         )
     makefile = repo / "Makefile"
     if not makefile.is_file():
