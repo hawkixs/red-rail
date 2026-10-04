@@ -43,6 +43,15 @@ Read on the host, not assumed. The implementer re-reads the three versions the d
 - `$(NPX)` of the spec's first draft is `$(BIN)/` (spec commit `a14cfc1`); `Bash(npx:*)` is not allowed in `settings.json`.
 - The command the template registers is `<project>-hello`, kept in one constant (`COMMAND`) so no slug length can push a line past Biome's width of 100.
 
+## Correction after the proof (2026-10-04, Task 7)
+
+Tasks 1 to 5 were built as written and reviewed. The proof of Task 6 on a real scaffold found two defects no static test could see, and the operator chose the fix:
+
+- `make validate` (`claude plugin validate --strict`) failed on every scaffold: the rail's root `CLAUDE.md` is a warning when the repository root is the plugin root. The plugin now lives in `plugin/` (`plugin/.claude-plugin/`, `plugin/hooks/`, `plugin/src/`); `package.json`, `tsconfig.json`, `biome.json`, `.node-version`, the Makefile and `vendor/` stay at the root. `test` runs `claude plugin test plugin`, `validate` runs `claude plugin validate --strict plugin`; the engine writes its types to `plugin/.claude-plugin/types/`, which `make types` copies to `vendor/claude-code/index.d.ts`.
+- `biome ci .` failed on the rail's own files (`.claude/settings.json`, `docs/receipts/*.json`): `biome.json` now excludes `.claude` and `docs`.
+
+Every path in Tasks 2 and 3 below that names `.claude-plugin/`, `hooks/` or `src/` for the plugin is read as under `plugin/` from here on; Task 7 applies it to the code and the tests. The spec is amended accordingly (decisions 2, 4, 5, 6, 9 and criteria 1, 9).
+
 ## Review Focus
 
 Failure modes the spec implies and no task's happy path exercises, most likely first. Each has its test in the task named.

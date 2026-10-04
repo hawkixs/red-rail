@@ -10,8 +10,9 @@ Operator decisions behind this spec, taken on 2026-10-03 with the operator drivi
 directly: the `spec` method; the stack takes priority over the autonomy batch; `claude` is an
 exact devDependency run in CI; the tier is capped at `dev` (`bootstrap` and `dev` only); and the
 design below (A–D: model and template, build gate, CI, ledger and upgrade), approved on
-2026-10-04, including that the engine's types are not shipped in the public template. Merge rule
-`39f7ea9f` does not change.
+2026-10-04, including that the engine's types are not shipped in the public template. The plugin
+lives in `plugin/`, not at the repository root: the operator chose it on 2026-10-04 after the proof
+on a real scaffold (Problem, last bullet). Merge rule `39f7ea9f` does not change.
 
 It builds on the rust stack (`docs/specs/2026-09-24-rust-stack.md`) and reuses its mechanisms:
 the `Stack` enum and copier choice, the refusal at `tier: prod`, the `TEST_PROFILES` and
@@ -43,8 +44,15 @@ the `Stack` enum and copier choice, the refusal at `tier: prod`, the `TEST_PROFI
   `*.test.ts`.
 - **CI can install Go and Rust only.** `rail-ci.yml` has no Node path and its `stack` input says
   `python | go | rust | docs`.
-- **A reviewer would be handed 21,000 generated lines** the first time a project vendors the
+- **A reviewer would be handed 15,000 generated lines** the first time a project vendors the
   types, unless the project declares them.
+- **A plugin at the repository root cannot pass `--strict` on the rail.** Measured on a scaffold
+  (2026-10-04, claude 2.1.289): the `CLAUDE.md` the rail requires at the root is reported as "not
+  loaded as project context" as soon as the repository root is the plugin root, and `--strict`
+  turns that warning into a failure, on every project born of the rail. The same root also holds
+  `docs/receipts/*.json` and `rail.yaml`, which are not the plugin's. So the plugin lives in a
+  subdirectory, `plugin/`: `claude plugin validate --strict plugin` passes and `claude plugin test
+  plugin` runs its test, with `CLAUDE.md`, `rail.yaml` and `docs/` outside it.
 
 ## Decisions
 
@@ -73,17 +81,24 @@ Each decision says what, why, what it costs if wrong, and which files it touches
    - Files: `src/rail/model.py`, `src/rail/scaffold.py`, `copier.yml`, `tests/combinations.py`.
 
 2. **The files follow the conditional-path pattern, derived from the reference plugin red-cockpit
-   built.** Under `template/project/`, each file named `{% if stack == 'typescript' %}…{% endif %}`:
-   - `.claude-plugin/plugin.json`: `name` = the project, `version` `0.1.0`, `description`, and an
+   built, and the plugin lives in `plugin/`.** Under `template/project/`, each file named
+   `{% if stack == 'typescript' %}…{% endif %}`; the plugin's own files sit under a conditional
+   `plugin/` directory, the project's tooling at the root:
+   - `plugin/.claude-plugin/plugin.json`: `name` = the project, `version` `0.1.0`, `description`, and an
      `author` (`{"name": "hawkixs"}`), because `claude plugin validate` warns without one and the
      template validates with `--strict`.
-   - `hooks/hooks.json`: `{"modules":["./register.ts"]}`; `hooks/register.ts` registers one
-     command, `<project>-hello`, importing `greeting` from `../src/core.ts` and the `Register` type
-     from `claude-code`.
-   - `src/core.ts`: pure logic, no engine import. `src/core.test.ts`: imports `test` and `expect`
-     from `claude-code/testing`.
+   - `plugin/hooks/hooks.json`: `{"modules":["./register.ts"]}`; `plugin/hooks/register.ts`
+     registers one command, `<project>-hello`, importing `greeting` from `../src/core.ts` and the
+     `Register` type from `claude-code`. The slug appears in two string constants only, `COMMAND`
+     (a literal: the engine's validator resolves literal constants) and `NAME`, so no slug length
+     can push a line past Biome's width.
+   - `plugin/src/core.ts`: pure logic, no engine import. `plugin/src/core.test.ts`: imports `test`
+     and `expect` from `claude-code/testing`.
    - `package.json`: `private: true`, `type: module`, no runtime dependency, three devDependencies
-     at exact versions (decision 3). `tsconfig.json`, `biome.json`, `.node-version`.
+     at exact versions (decision 3). `tsconfig.json`, `biome.json`, `.node-version`: all at the root.
+   - `biome.json` reads only what the project authors: it excludes `node_modules`, `vendor`,
+     `plugin/.claude-plugin/types`, `.claude` and `docs` (the rail's `settings.json` and the
+     append-only `docs/receipts/*.json` are not Biome-formatted, and a receipt cannot be edited).
    - No `package-lock.json` (decision 3) and no `vendor/` (decision 4).
    - Why: the fixture is the one plugin measured to pass `validate` and `plugin test`. The template
      starts from what is known to work.
@@ -120,13 +135,14 @@ Each decision says what, why, what it costs if wrong, and which files it touches
    does, `tsc` is a named SKIP.**
    - Why not ship them: the types are Anthropic's; whether a public Apache-2.0 template may
      redistribute them is unverified, and the engine itself marks them non-committable.
-   - The project's own copy: a session in the plugin folder writes `.claude-plugin/types/` (or runs
-     `/plugin-types`); `make types` then copies `.claude-plugin/types/claude-code/index.d.ts` to
+   - The project's own copy: a session in the plugin folder, `plugin/`, writes
+     `plugin/.claude-plugin/types/` (or runs `/plugin-types`); `make types` then copies
+     `plugin/.claude-plugin/types/claude-code/index.d.ts` to
      `vendor/claude-code/index.d.ts` (committed, a path the engine does not ignore) and fails with
      that instruction when the source file is absent. Only the core file is copied:
      `claude-code-mcp/` lists the MCP tools connected on one machine and stays out of the repository.
    - `tsconfig.json` is the one the engine documents for a hooks module, with `include` of
-     `vendor/claude-code`, `hooks` and `src`: the file declares the modules `claude-code` and
+     `vendor/claude-code`, `plugin/hooks` and `plugin/src`: the file declares the modules `claude-code` and
      `claude-code/testing` ambiently, so no `paths` mapping is needed (measured with `tsc` 7.0.2).
    - `make typecheck` runs `tsc --noEmit` when `vendor/claude-code/index.d.ts` exists. When it does
      not, it prints one line, `typecheck: SKIPPED, vendor/claude-code is absent (run /plugin-types, then
@@ -136,7 +152,7 @@ Each decision says what, why, what it costs if wrong, and which files it touches
      change what runs. Decision 9 binds the copy to the pin.
    - The rendered `rail.yaml` declares `gates: review.ignored_globs: ["vendor/claude-code/**"]` with
      a reason ("generated engine types, copied by `make types`, not authored"). Without it the
-     reviewer would send 21,000 lines to a judge. `package-lock.json` is already ignored by the
+     reviewer would send 15,000 lines to a judge. `package-lock.json` is already ignored by the
      reviewer's own list. Biome and the test counter skip `vendor/`.
    - Cost if wrong: red-cockpit has no type check until its first `make types`. The alternative
      (ship the types) waits on a licence answer nobody here can give.
@@ -148,8 +164,8 @@ Each decision says what, why, what it costs if wrong, and which files it touches
      `make NPM=<wrapper> ci` runs every target through a container (as `GO` and `CARGO` do).
    - `sync`: `$(NPM) $(INSTALL) --ignore-scripts`, then `$(NPM) rebuild @anthropic-ai/claude-code`
      (decision 3). `lint`: `$(BIN)/biome ci .` (formatting and
-     lints, no writes). `typecheck`: decision 4. `test`: `$(BIN)/claude plugin test .`.
-     `validate`: `$(BIN)/claude plugin validate --strict .`. `types`: decision 4.
+     lints, no writes). `typecheck`: decision 4. `test`: `$(BIN)/claude plugin test plugin`.
+     `validate`: `$(BIN)/claude plugin validate --strict plugin`. `types`: decision 4.
    - `ci: lint typecheck test validate check`, so `rail check` runs last. `.PHONY` gains
      `typecheck validate types` for typescript.
    - Cost if wrong: the exact `plugin test` arguments differ from what is written here; the plan
@@ -158,13 +174,13 @@ Each decision says what, why, what it costs if wrong, and which files it touches
 6. **Every stack chain names typescript.** The six marked chains (`Makefile.jinja`,
    `.gitignore.jinja`, `.claude/settings.json.jinja`, the `stack` and `structure` chains of
    `CLAUDE.md.jinja` and the `gates` chain of `AGENTS.md.jinja`) get an explicit typescript branch.
-   - `.gitignore`: `node_modules/`, `.claude-plugin/types/`. Never `package-lock.json`, never
+   - `.gitignore`: `node_modules/`, `plugin/.claude-plugin/types/`. Never `package-lock.json`, never
      `vendor/`.
    - `settings.json`: `Bash(npm:*)`, as Go has `Bash(go:*)`; nothing calls `npx`. Not `Bash(claude:*)`:
      the engine is reached through `make`.
    - `CLAUDE.md` § Stack: a Claude Code plugin, TypeScript, Node pinned by `.node-version`, Biome,
      `tsc --noEmit` against the vendored types, `claude plugin test` and `validate --strict`.
-     § Structure: `.claude-plugin/plugin.json`, `hooks/`, `src/`, `package.json`,
+     § Structure: `plugin/` (`.claude-plugin/plugin.json`, `hooks/`, `src/`), `package.json`,
      `package-lock.json` ("written by `make sync`, committed"), `.node-version`, `vendor/claude-code/`
      ("copied by `make types`"). `AGENTS.md` § Gates: `make sync` first, then `make ci`; the types
      step is `/plugin-types` then `make types`.
@@ -205,8 +221,8 @@ Each decision says what, why, what it costs if wrong, and which files it touches
      - `.node-version` is an exact `X.Y.Z`;
      - `package.json` parses and its three devDependencies are exact versions;
      - `package-lock.json` is present (presence only: that it is committed is CI's `npm ci`);
-     - `biome.json` and `tsconfig.json` are present, `.claude-plugin/plugin.json` parses with a
-       `name` and an `author`;
+     - `biome.json` and `tsconfig.json` are present, `plugin/.claude-plugin/plugin.json` parses
+       with a `name` and an `author`;
      - the Makefile's live recipe lines (`_recipe_lines`) call `biome ci`, `tsc --noEmit`,
        `claude plugin test`, `claude plugin validate --strict` and `install` with
        `--ignore-scripts` and `rebuild @anthropic-ai/claude-code`;
@@ -271,13 +287,14 @@ Each step is test-first, and each one is a commit.
 Tests in red-rail. All are static; none needs Node, except criteria 9 and 10.
 
 1. `test_render_typescript_bootstrap` renders `typescript`/`bootstrap`/`file` and asserts:
-   - `plugin.json` parses: `name == project`, a `version`, an `author`; `hooks.json` lists
-     `./register.ts`; `register.ts` imports only `../src/core.ts` and `claude-code`;
+   - `plugin/.claude-plugin/plugin.json` parses: `name == project`, a `version`, an `author`;
+     `plugin/hooks/hooks.json` lists `./register.ts`; `register.ts` imports only `../src/core.ts`
+     and `claude-code`;
    - `package.json`: `private`, `type == "module"`, no `dependencies`, the three devDependencies
-     exact; `.node-version` is `X.Y.Z`; `tsconfig.json` includes `vendor/claude-code`, `hooks` and
-     `src`;
+     exact; `.node-version` is `X.Y.Z`; `tsconfig.json` includes `vendor/claude-code`, `plugin/hooks` and
+     `plugin/src`; `biome.json` excludes `.claude` and `docs`;
    - no `package-lock.json`, no `vendor/`, no `pyproject.toml`, `go.mod` or `Cargo.toml`;
-   - `.gitignore` has `node_modules/` and `.claude-plugin/types/` and no lockfile entry;
+   - `.gitignore` has `node_modules/` and `plugin/.claude-plugin/types/` and no lockfile entry;
      `settings.json` parses and allows `Bash(npm:*)`, absent from the other stacks;
    - `rail.yaml` declares `review.ignored_globs` with `vendor/claude-code/**` and a reason;
    - `CLAUDE.md` § Stack and § Structure and `AGENTS.md` § Gates carry the decision 6 content;
@@ -291,7 +308,7 @@ Tests in red-rail. All are static; none needs Node, except criteria 9 and 10.
    `AGENTS.md` invariance, the allowed-skills test and the address test.
 3. In `tests/test_gates_build.py`:
    - `test_every_stack_has_a_build_profile` and the no-profile FAIL still hold with five stacks;
-   - `test_typescript_tests_are_found` (`src/core.test.ts`, a `.test.tsx`, a nested one);
+   - `test_typescript_tests_are_found` (`plugin/src/core.test.ts`, a `.test.tsx`, a nested one);
      `test_a_test_under_node_modules_or_vendor_is_not_counted`; `test_typescript_repo_with_only_go_tests_fails`;
    - `test_undeclared_stack_reports_typescript_tests` (the decision 8 text);
    - `test_typescript_lint_passes_on_the_rendered_tree` (a placeholder lock written);
@@ -320,9 +337,10 @@ Tests in red-rail. All are static; none needs Node, except criteria 9 and 10.
 On the host, before merge:
 
 9. **Measured, not assumed.** On a throwaway render at `dev`: `make sync` writes a lock and leaves
-   `claude` runnable from `node_modules/.bin` (the rebuild of decision 3); `make lint test validate` exits 0 and `rail check --ci
+   `claude` runnable from `node_modules/.bin` (the rebuild of decision 3); `make lint test validate` exits 0 (`biome ci` reads no receipt, `validate
+   --strict plugin` passes with the root `CLAUDE.md` outside the plugin) and `rail check --ci
    build --json` reports PASS for `build.tests` and `build.lint` with the SKIPPED observation;
-   after the engine writes `.claude-plugin/types/` and `make types` copies it, `make typecheck`
+   after the engine writes `plugin/.claude-plugin/types/` and `make types` copies it, `make typecheck`
    exits 0 and the gate compares the versions; a second `make sync INSTALL=ci` after deleting the lock fails. The trees are deleted.
 10. **The ticket's "in CI", before the tag.** A throwaway private repository rendered with
     `--template-ref <head SHA>` and its lock committed: its `rail-ci` run is green twice (cold, then
