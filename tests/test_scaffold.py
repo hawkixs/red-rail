@@ -1353,6 +1353,14 @@ def test_the_copier_validator_says_what_rail_new_says() -> None:
     assert RUST_PROD_REFUSAL in (ROOT / "copier.yml").read_text()
 
 
+def test_not_at_prod_holds_each_refusal_once() -> None:
+    """One table says which stacks have no prod template: `answers`, the stack switch and the
+    answers-file check all read it (spec 2026-10-04-typescript-stack, decision 1)."""
+    from rail.scaffold import NOT_AT_PROD, RUST_PROD_REFUSAL
+
+    assert NOT_AT_PROD == {Stack.RUST: RUST_PROD_REFUSAL}
+
+
 @pytest.mark.parametrize("combo", COMBINATIONS, ids=[c.label for c in COMBINATIONS])
 def test_every_rendered_settings_file_parses_and_allows_cargo_for_rust_only(
     renders: dict[Combo, Path], combo: Combo
