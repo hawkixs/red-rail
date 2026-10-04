@@ -387,7 +387,9 @@ def _json(path: Path) -> dict | str:
         data = json.loads(path.read_text())
     except FileNotFoundError:
         return f"{path.name} is missing"
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except RecursionError:
+        return f"{path.name} does not parse: nested too deeply"
+    except (OSError, ValueError) as exc:  # JSON and Unicode errors, the 4300-digit integer limit
         return f"{path.name} does not parse: {exc}"
     return data if isinstance(data, dict) else f"{path.name} is not a JSON object"
 

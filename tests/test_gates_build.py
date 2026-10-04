@@ -668,8 +668,17 @@ def test_typescript_lint_fails_and_names_what_is_missing(
         "{\n",
         '{"devDependencies": ["typescript"]}\n',
         '{"devDependencies": {"typescript": 7}}\n',
+        "[" * 100000,
+        '{"devDependencies": {"typescript": ' + "9" * 5000 + "}}",
     ],
-    ids=["a-list", "unparsable", "dev-dependencies-a-list", "version-not-a-string"],
+    ids=[
+        "a-list",
+        "unparsable",
+        "dev-dependencies-a-list",
+        "version-not-a-string",
+        "nested-too-deeply",
+        "integer-too-long",
+    ],
 )
 def test_typescript_lint_fails_on_a_malformed_package_json_and_does_not_raise(
     tmp_path: Path, package_text: str
