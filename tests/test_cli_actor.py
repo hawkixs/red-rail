@@ -45,8 +45,9 @@ def test_a_refusal_exits_2_and_names_the_fix(monkeypatch: pytest.MonkeyPatch) ->
     assert out.exit_code == 2 and "RAIL_ACTOR=agent:<name>" in out.output
 
 
-def test_issuer_is_a_usage_error_naming_the_variable() -> None:
-    out = CliRunner().invoke(probe, ["--issuer", "operator"])
+@pytest.mark.parametrize("args", [["--issuer", "operator"], ["--issuer"]])
+def test_issuer_is_a_usage_error_naming_the_variable(args: list[str]) -> None:
+    out = CliRunner().invoke(probe, args)
     assert out.exit_code == 2 and "RAIL_ACTOR" in out.output
 
 
@@ -118,7 +119,7 @@ def test_a_gesture_without_an_actor_exits_2_before_any_effect(
 ) -> None:
     world = _world(tmp_path, monkeypatch)
     monkeypatch.delenv("RAIL_ACTOR")
-    monkeypatch.setattr("rail.actor._stdin_is_tty", lambda: False)
+    monkeypatch.setattr("rail.actor.stdin_is_tty", lambda: False)
     calls = len(world.brain.calls)
     out = CliRunner().invoke(main, [*GESTURES[gesture], "--repo", str(world.repo)])
     assert out.exit_code == 2 and "RAIL_ACTOR" in out.output
@@ -165,7 +166,7 @@ def faked(monkeypatch: pytest.MonkeyPatch) -> FakeTarget:
 
 def _unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RAIL_ACTOR")
-    monkeypatch.setattr("rail.actor._stdin_is_tty", lambda: False)
+    monkeypatch.setattr("rail.actor.stdin_is_tty", lambda: False)
 
 
 def _release_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, FakeHost]:
@@ -315,7 +316,7 @@ def test_a_ruling_is_refused_for_an_agent_behind_a_pseudo_terminal(
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.delenv("RAIL_ACTOR")
     monkeypatch.setenv("CLAUDECODE", "1")
-    monkeypatch.setattr("rail.actor._stdin_is_tty", lambda: True)
+    monkeypatch.setattr("rail.actor.stdin_is_tty", lambda: True)
     repo, rule = _rule_world(tmp_path)
     receipts = sorted((repo / RECEIPTS_DIR).glob("*.json"))
     out = rule()
@@ -329,7 +330,7 @@ def test_a_ruling_is_refused_when_the_actor_cannot_be_told(
 ) -> None:
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.delenv("RAIL_ACTOR")
-    monkeypatch.setattr("rail.actor._stdin_is_tty", lambda: False)
+    monkeypatch.setattr("rail.actor.stdin_is_tty", lambda: False)
     repo, rule = _rule_world(tmp_path)
     out = rule()
     assert out.exit_code == 2 and "cannot tell who runs" in out.output
@@ -345,10 +346,26 @@ def test_a_ruling_is_refused_for_a_service(tmp_path: Path, monkeypatch: pytest.M
     assert not _rulings(repo)
 
 
+def test_a_ruling_is_refused_when_the_operator_label_is_piped_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RAIL_ACTOR=operator inherited by an unmarked harness, no terminal: not a typed gesture."""
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("RAIL_ACTOR", "operator")
+    monkeypatch.setattr("rail.actor.stdin_is_tty", lambda: False)
+    repo, rule = _rule_world(tmp_path)
+    receipts = sorted((repo / RECEIPTS_DIR).glob("*.json"))
+    out = rule()
+    assert out.exit_code == 2 and "typed at a terminal" in out.output
+    assert sorted((repo / RECEIPTS_DIR).glob("*.json")) == receipts and not _rulings(repo)
+    assert not list(spool_directory("red-alpha").glob("*"))
+
+
 def test_a_ruling_is_attested_as_the_operator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr("rail.actor.stdin_is_tty", lambda: True)
     repo, rule = _rule_world(tmp_path)
     out = rule()
     assert out.exit_code == 0, out.output

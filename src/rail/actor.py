@@ -79,7 +79,7 @@ def resolve_actor(environ: Mapping[str, str], stdin_is_tty: bool) -> Actor:
     )
 
 
-def _stdin_is_tty() -> bool:
+def stdin_is_tty() -> bool:
     """A detached process has no stdin, or a closed one: that is no terminal, not a crash."""
     try:
         return sys.stdin.isatty()
@@ -88,4 +88,4 @@ def _stdin_is_tty() -> bool:
 
 
 def current_actor() -> Actor:
-    return resolve_actor(os.environ, _stdin_is_tty())
+    return resolve_actor(os.environ, stdin_is_tty())

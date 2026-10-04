@@ -23,7 +23,13 @@ def no_issuer_option(func: Callable[..., Any]) -> Callable[..., Any]:
     """`--issuer` stays declared, hidden, so that using it fails loudly instead of being
     taken for an unknown option or silently ignored."""
     return click.option(
-        "--issuer", hidden=True, is_eager=True, expose_value=False, callback=_issuer_is_gone
+        "--issuer",
+        hidden=True,
+        is_eager=True,
+        expose_value=False,
+        is_flag=False,
+        flag_value="",
+        callback=_issuer_is_gone,
     )(func)
 
 

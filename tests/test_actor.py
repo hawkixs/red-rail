@@ -1,6 +1,8 @@
+import io
+
 import pytest
 
-from rail.actor import Actor, ActorKind, ActorRefused, current_actor, resolve_actor
+from rail.actor import Actor, ActorKind, ActorRefused, current_actor, resolve_actor, stdin_is_tty
 
 SESSION = "e7fb11aa-215b-5ca3-82df-65e4c7a9650d"
 
@@ -98,3 +100,24 @@ def test_a_detached_process_can_still_declare_a_service(
     monkeypatch.setattr("rail.actor.sys.stdin", None)
     monkeypatch.setenv("RAIL_ACTOR", "service:x")
     assert current_actor() == Actor(ActorKind.SERVICE, "service:x")
+
+
+def test_a_specific_marker_wins_over_the_generic_agent_variable() -> None:
+    env = {
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_SESSION_ID": SESSION,
+        "AI_AGENT": "claude-code_2-1-286_agent",
+    }
+    assert resolve(env).label == f"agent:claude-code:{SESSION}"
+
+
+def test_a_session_outside_the_grammar_is_made_safe() -> None:
+    env = {"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "a b/c"}
+    assert resolve(env).label == "agent:claude-code:a-b-c"
+
+
+def test_a_closed_stdin_is_no_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed = io.StringIO()
+    closed.close()
+    monkeypatch.setattr("sys.stdin", closed)
+    assert stdin_is_tty() is False

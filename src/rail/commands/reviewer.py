@@ -208,6 +208,7 @@ def rule(
     config_path: Path | None, repository: str, pr: int, finding: str, ruling: str, decision: str
 ) -> None:
     """Rule on one open blocker after round 3 (spec 2026-09-25, D9). Operator only, host only."""
+    from rail.actor import stdin_is_tty
     from rail.contract_guard import Unwritable, refuse_unwritable
     from rail.ledger import AttestationKind, Unattested
     from rail.model import load_rail_config
@@ -219,6 +220,8 @@ def rule(
     actor = resolve_or_exit()
     if actor != "operator":
         raise click.UsageError(f"a ruling is the operator's gesture, not {actor}'s")
+    if not stdin_is_tty():
+        raise click.UsageError("a ruling is the operator's gesture, typed at a terminal")
     text = decision.strip()
     if not text or len(text) > 2000:
         raise click.UsageError("--decision must hold 1 to 2000 characters")

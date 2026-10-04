@@ -2,14 +2,13 @@ import re
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "rail"
-DEFAULTED = re.compile(r"issuer\s*(?::\s*str)?\s*=\s*[\"']operator[\"']")
+DEFAULTED = re.compile(r"issuer[^=\n]*=\s*[\"']operator[\"']")
 
 
 def test_no_command_or_flow_defaults_an_issuer_to_the_operator() -> None:
     hits = [
         f"{p.relative_to(SRC)}:{n}"
-        for folder in ("commands", "deploy")
-        for p in (SRC / folder).rglob("*.py")
+        for p in SRC.rglob("*.py")
         for n, line in enumerate(p.read_text().splitlines(), 1)
         if DEFAULTED.search(line)
     ]
