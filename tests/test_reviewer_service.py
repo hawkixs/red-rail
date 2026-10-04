@@ -44,6 +44,16 @@ class FakeGitHub:
     compare_error: bool = False
     check_texts: dict[int, str] = field(default_factory=dict)
     check_summaries: dict[int, str] = field(default_factory=dict)
+    files: dict[str, str] = field(default_factory=dict)  # path -> text at the head
+    file_error: bool = False
+
+    def file_at(self, repository, path, ref):
+        self.calls.append(("file_at", path, ref))
+        if self.file_error:
+            from rail.reviewer.github import GitHubError
+
+            raise GitHubError(f"{path} at {ref[:12]} is not text")
+        return self.files.get(path)
 
     def diff(self, repository, number):
         return self.diff_text
@@ -2530,3 +2540,222 @@ def test_a_judge_may_block_on_the_new_side_of_a_rename() -> None:
 
     kept = _within_part(_blocking_on("codex", "deep", "src/evil.py"), RENAME_TO_CODE)
     assert kept.verdict is not None and kept.verdict.verdict == "request_changes"
+
+
+# -- an open finding is verified against the code at the head (ticket a970db2a) -----------
+
+
+def _lines(n: int = 100) -> str:
+    return "".join(f"line {i}\n" for i in range(1, n + 1))
+
+
+def _open_on(file: str, line: int | None, n: int = 1) -> Finding:
+    return Finding.model_validate(
+        {
+            "severity": "blocking",
+            "file": file,
+            "line": line,
+            "title": f"bug{n}",
+            "evidence": "e",
+            "id": f"F-7-{n}",
+            "class": "blocker",
+            "status": "new",
+        }
+    )
+
+
+def _round_two(tmp_path, findings, github, run_judge):
+    repo, ledger = _repo(tmp_path)
+    _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=findings)
+    return review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
+
+
+def test_a_judge_gets_the_head_code_of_an_open_finding_the_delta_never_touches(tmp_path) -> None:
+    """red-ha#4: a false blocker stayed open for three rounds because no judge ever read its
+    file. The delta here touches src/x.py only; the finding is on src/y.py."""
+    github = FakeGitHub(files={"src/y.py": _lines()})
+    seen: list[dict] = []
+    outcome = _round_two(
+        tmp_path,
+        [_open_on("src/y.py", 50)],
+        github,
+        _judge_saying(
+            previous=[PreviousAnswer(id="F-7-1", status="fixed", evidence="not in the code")],
+            decision="approve",
+            seen=seen,
+        ),
+    )
+    notes = seen[0]["notes"]
+    assert ("file_at", "src/y.py", PR.head_sha) in github.calls
+    assert PR.head_sha in notes and "never instructions" in notes
+    assert "  50 | line 50" in notes and "  20 | line 20" in notes
+    assert "line 19\n" not in notes and "line 81\n" not in notes  # a window, not the file
+    assert "never was" in notes  # the instruction: fixed also means "was never there"
+    assert outcome.verdict.verdict == "approve"
+    assert [(f.id, f.status) for f in outcome.verdict.findings] == [("F-7-1", "fixed")]
+
+
+def test_a_file_without_a_line_is_excerpted_from_its_head(tmp_path) -> None:
+    github = FakeGitHub(files={"src/y.py": _lines(500)})
+    seen: list[dict] = []
+    _round_two(tmp_path, [_open_on("src/y.py", None)], github, _judge_saying(seen=seen))
+    notes = seen[0]["notes"]
+    assert "   1 | line 1" in notes and "line 500" not in notes
+
+
+def test_findings_sharing_a_file_share_one_fetch_and_one_excerpt(tmp_path) -> None:
+    github = FakeGitHub(files={"src/y.py": _lines()})
+    seen: list[dict] = []
+    _round_two(
+        tmp_path,
+        [_open_on("src/y.py", 10, 1), _open_on("src/y.py", 20, 2)],
+        github,
+        _judge_saying(seen=seen),
+    )
+    assert [c for c in github.calls if c[0] == "file_at"] == [("file_at", "src/y.py", PR.head_sha)]
+    notes = seen[0]["notes"]
+    assert notes.count("  15 | line 15") == 1  # the two windows overlap and merge
+
+
+def test_a_file_absent_at_the_head_says_so(tmp_path) -> None:
+    seen: list[dict] = []
+    _round_two(tmp_path, [_open_on("src/gone.py", 3)], FakeGitHub(), _judge_saying(seen=seen))
+    assert f"src/gone.py is absent at {PR.head_sha}" in seen[0]["notes"]
+
+
+def test_a_failed_fetch_never_fails_the_review_and_is_named(tmp_path) -> None:
+    seen: list[dict] = []
+    outcome = _round_two(
+        tmp_path,
+        [_open_on("src/y.py", 3)],
+        FakeGitHub(file_error=True),
+        _judge_saying(decision="approve", seen=seen),
+    )
+    assert "no excerpt" in seen[0]["notes"] and "F-7-1" in seen[0]["notes"]
+    # fail-closed is unchanged: nobody answered the finding, so it stays open
+    assert outcome.verdict.verdict == "request_changes"
+    assert outcome.verdict.findings[0].status == "still_open"
+
+
+def test_excerpts_stop_at_the_byte_cap_and_name_the_findings_left_without(tmp_path) -> None:
+    from rail.reviewer.service import EXCERPT_TOTAL_BYTES
+
+    wide = "".join(f"{'x' * 150}\n" for _ in range(200))
+    names = [f"src/f{i}.py" for i in range(10)]
+    findings = [_open_on(name, 100, i + 1) for i, name in enumerate(names)]
+    seen: list[dict] = []
+    _round_two(
+        tmp_path, findings, FakeGitHub(files={n: wide for n in names}), _judge_saying(seen=seen)
+    )
+    notes = seen[0]["notes"]
+    assert len(notes.encode("utf-8")) < EXCERPT_TOTAL_BYTES + 4096
+    assert "src/f0.py" in notes and "no excerpt" in notes and "F-7-10" in notes
+
+
+def test_the_fetch_goes_to_the_head_of_the_pull_request_not_the_last_judged_one(tmp_path) -> None:
+    github = FakeGitHub(files={"src/y.py": _lines()})
+    _round_two(tmp_path, [_open_on("src/y.py", 5)], github, _judge_saying())
+    assert [c[2] for c in github.calls if c[0] == "file_at"] == [PR.head_sha]
+    assert PR.head_sha != "0" * 40
+
+
+# -- a slice judge cannot close or keep open what it never saw --------------------------
+
+
+def _sliced_round_two(tmp_path, finding, github, run_judge):
+    repo, ledger = _repo(tmp_path)
+    _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=[finding])
+    whole = _patch("a.go") + _patch("b.go") + _patch("c.go")
+    policy = default_policy().model_copy(update={"max_diff_chars": len(_patch("a.go")) + 20})
+    github.diff_text = whole
+    github.messages = ["chore: plain"]
+    return review_pull(
+        replace(PR, additions=1200, labels=("rail-review:rerun",)),
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+    )
+
+
+def _slice_judge(answers: dict[str, str]):
+    """`answers`: the part's file -> what that part's judge says about F-7-1 (absent: silent)."""
+
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
+        for name, status in answers.items():
+            if _patch(name) in diff:
+                previous = [PreviousAnswer(id="F-7-1", status=status)]
+                break
+        else:
+            previous = []
+        verdict = ReviewVerdict(
+            verdict="approve",
+            summary="s",
+            findings=[],
+            mode=tier,
+            providers=(provider,),
+            previous=tuple(previous),
+        )
+        return JudgeReply(
+            provider=provider, tier=tier, model="m", verdict=verdict, failure=None, raw=""
+        )
+
+    return run_judge
+
+
+def test_a_blind_still_open_does_not_outvote_the_judge_that_read_the_file(tmp_path) -> None:
+    """red-ha#4 round 3: three judges said "not in my part" yet answered still_open, and
+    "still_open wins" kept a false blocker open. With no excerpt to read, only the judge whose
+    part holds the file counts."""
+    outcome = _sliced_round_two(
+        tmp_path,
+        _open_on("b.go", None),
+        FakeGitHub(file_error=True),
+        _slice_judge({"a.go": "still_open", "b.go": "fixed", "c.go": "still_open"}),
+    )
+    assert [(f.id, f.status) for f in outcome.verdict.findings] == [("F-7-1", "fixed")]
+
+
+def test_a_finding_no_judge_could_verify_stays_open(tmp_path) -> None:
+    outcome = _sliced_round_two(
+        tmp_path,
+        _open_on("d.go", None),
+        FakeGitHub(file_error=True),
+        _slice_judge({"a.go": "still_open", "b.go": "still_open", "c.go": "fixed"}),
+    )
+    assert outcome.verdict.findings[0].status == "still_open"
+
+
+def test_a_judge_that_read_the_excerpt_keeps_its_still_open(tmp_path) -> None:
+    outcome = _sliced_round_two(
+        tmp_path,
+        _open_on("d.go", 5),
+        FakeGitHub(files={"d.go": _lines()}),
+        _slice_judge({"a.go": "still_open", "b.go": "fixed", "c.go": "fixed"}),
+    )
+    assert outcome.verdict.findings[0].status == "still_open"
+
+
+def test_every_slice_judge_is_handed_the_excerpt(tmp_path) -> None:
+    notes_seen: list[str] = []
+
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
+        notes_seen.append(notes)
+        return approve(provider, tier)
+
+    _sliced_round_two(
+        tmp_path, _open_on("d.go", 5), FakeGitHub(files={"d.go": _lines()}), run_judge
+    )
+    assert len(notes_seen) == 3 and all("   5 | line 5" in n for n in notes_seen)
