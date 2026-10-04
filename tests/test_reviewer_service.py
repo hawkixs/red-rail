@@ -2586,7 +2586,7 @@ def _round_two(tmp_path, findings, github, run_judge, *, in_pr=True):
 def test_a_judge_gets_the_head_code_of_an_open_finding_the_delta_never_touches(tmp_path) -> None:
     """red-ha#4: a false blocker stayed open for three rounds because no judge ever read its
     file. The delta here touches src/x.py only; the finding is on src/y.py."""
-    github = FakeGitHub(files={"src/y.py": _lines()})
+    github = FakeGitHub(files={"src/y.py": _lines(2000)})
     seen: list[dict] = []
     outcome = _round_two(
         tmp_path,
@@ -2609,7 +2609,7 @@ def test_a_judge_gets_the_head_code_of_an_open_finding_the_delta_never_touches(t
 
 
 def test_a_file_without_a_line_is_excerpted_from_its_head(tmp_path) -> None:
-    github = FakeGitHub(files={"src/y.py": _lines(500)})
+    github = FakeGitHub(files={"src/y.py": _lines(2000)})
     seen: list[dict] = []
     _round_two(tmp_path, [_open_on("src/y.py", None)], github, _judge_saying(seen=seen))
     notes = seen[0]["notes"]
@@ -2617,7 +2617,7 @@ def test_a_file_without_a_line_is_excerpted_from_its_head(tmp_path) -> None:
 
 
 def test_findings_sharing_a_file_share_one_fetch_and_one_excerpt(tmp_path) -> None:
-    github = FakeGitHub(files={"src/y.py": _lines()})
+    github = FakeGitHub(files={"src/y.py": _lines(2000)})
     seen: list[dict] = []
     _round_two(
         tmp_path,
@@ -2794,3 +2794,38 @@ def test_a_file_of_the_whole_diff_is_fetched_though_the_delta_skips_it(tmp_path)
     github = FakeGitHub(files={"src/proofs.py": _lines()})
     _round_two(tmp_path, [_open_on("src/proofs.py", 5)], github, _judge_saying())
     assert ("file_at", "src/proofs.py", PR.head_sha) in github.calls
+
+
+# -- a partial excerpt never proves a finding fixed by absence (security) -----------------
+
+
+def test_a_small_file_is_sent_whole_and_labelled_so(tmp_path) -> None:
+    seen: list[dict] = []
+    _round_two(
+        tmp_path,
+        [_open_on("src/y.py", 50)],
+        FakeGitHub(files={"src/y.py": _lines(100)}),
+        _judge_saying(seen=seen),
+    )
+    notes = seen[0]["notes"]
+    assert f"src/y.py at {PR.head_sha} (whole file, 100 lines)" in notes
+    assert "(partial" not in notes
+    assert "   1 | line 1\n" in notes and " 100 | line 100" in notes
+
+
+def test_a_large_file_is_partial_and_absence_from_it_is_not_evidence(tmp_path) -> None:
+    """The author moves the defect from line 100 to line 400: a window around line 100 shows
+    nothing, and "the defect is not in that code" must not close the blocker."""
+    seen: list[dict] = []
+    _round_two(
+        tmp_path,
+        [_open_on("src/y.py", 100)],
+        FakeGitHub(files={"src/y.py": _lines(2000)}),
+        _judge_saying(seen=seen),
+    )
+    notes = seen[0]["notes"]
+    assert "partial: lines 70-130 of 2000" in notes
+    assert "line 400\n" not in notes  # the defect is outside the window
+    assert "whole file" in notes  # the instruction names the only case where absence counts
+    assert "is not evidence" in notes and "not show the rest of the file" in notes
+    assert "fixed" in notes.split("whole file")[1]

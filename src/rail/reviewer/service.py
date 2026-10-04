@@ -292,13 +292,15 @@ def _notes(pr: PullRequest, previous: Record, *, github: GitHubLike) -> str:
 # Earlier findings are verified against the code at the pull request's head, not against the
 # diff a judge happens to read: a finding on a file no delta or part touches could otherwise
 # never be answered (red-ha#4). The windows are lines either side of the finding's line (the
-# head of the file when it names none); one excerpt per file, windows merged; a line is cut
+# head of the file when it names none) when the file exceeds EXCERPT_FILE_BYTES, the whole file
+# otherwise; one excerpt per file, windows merged; a line is cut
 # at EXCERPT_LINE_CHARS; all excerpts together stay under EXCERPT_TOTAL_BYTES, and a finding
 # left without one is named, never dropped.
 EXCERPT_WINDOW = 30
 EXCERPT_HEAD_LINES = 60
 EXCERPT_LINE_CHARS = 200
 EXCERPT_TOTAL_BYTES = 32 * 1024
+EXCERPT_FILE_BYTES = 12 * 1024  # a file at most this large is sent whole, windows above it
 
 
 def _windows(lines: Iterable[int | None]) -> list[tuple[int, int]]:
@@ -315,19 +317,31 @@ def _windows(lines: Iterable[int | None]) -> list[tuple[int, int]]:
     return merged
 
 
+def _numbered(rows: list[str], lo: int, hi: int) -> list[str]:
+    return [f"{n:>4} | {rows[n - 1][:EXCERPT_LINE_CHARS]}" for n in range(lo, hi + 1)]
+
+
 def _excerpt(path: str, text: str, spans: list[tuple[int, int]], sha: str) -> str:
-    """Numbered lines. Every line carries its `NNNN | ` prefix, so nothing inside the file can
-    pass for a heading or an instruction of this section."""
+    """Numbered lines, the whole file when it fits `EXCERPT_FILE_BYTES` and the windows
+    otherwise, and labelled either way: a window around an old line number can miss code the
+    author moved, so only a whole file may prove a defect absent. Every line carries its
+    `NNNN | ` prefix, so nothing inside the file can pass for a heading or an instruction."""
     rows = text.splitlines()
-    out = [f"{path} at {sha} ({len(rows)} lines):"]
+    whole = _numbered(rows, 1, len(rows))
+    if sum(len(line.encode("utf-8")) + 1 for line in whole) <= EXCERPT_FILE_BYTES and all(
+        len(row) <= EXCERPT_LINE_CHARS for row in rows
+    ):
+        return "\n".join([f"{path} at {sha} (whole file, {len(rows)} lines):", *whole])
+    shown = [(lo, min(hi, len(rows))) for lo, hi in spans if lo <= min(hi, len(rows))]
+    label = ", ".join(f"{lo}-{hi}" for lo, hi in shown) or "none"
+    out = [f"{path} at {sha} (partial: lines {label} of {len(rows)}; the rest is NOT shown):"]
     for lo, hi in spans:
-        hi = min(hi, len(rows))
-        if lo > hi:
+        if lo > min(hi, len(rows)):
             out.append(f"  (lines {lo}+ are beyond the end of the file)")
             continue
         if len(out) > 1:
             out.append("  ...")
-        out.extend(f"{n:>4} | {rows[n - 1][:EXCERPT_LINE_CHARS]}" for n in range(lo, hi + 1))
+        out.extend(_numbered(rows, lo, min(hi, len(rows))))
     return "\n".join(out)
 
 
@@ -404,11 +418,16 @@ def _context(state: rounds.LoopState, *, cf_open: list[str], cf_addressed: list[
             lines.append(f"- {f.id} [{f.klass}] {f.status} {where} — {f.title}: {f.evidence}")
         lines.append(
             'Verify each earlier finding against the current code quoted under "Current code at '
-            'head" below, whatever the diff you read shows: answer "fixed" when the defect is '
-            'not in that code (including when it never was there), and "still_open" only when '
-            "the quoted code still shows it, quoting the line in your evidence. A finding "
-            'listed under "No excerpt" cannot be verified from a file you were not given: '
-            "answer it only if the diff you read shows it."
+            'head" below, whatever the diff you read shows; the code may have moved since the '
+            'finding, so its line number is only a hint. Answer "fixed" only when the quoted '
+            "block is labelled whole file and the defect is not in it (including when it never "
+            "was there), or when the quoted lines themselves show the finding wrong or fixed, "
+            "and then quote them in your evidence. A block labelled partial does not show the "
+            "rest of the file: a defect that does not appear in it is not evidence, so answer "
+            'from the diff you read, or "still_open". Answer "still_open" when the quoted code '
+            'still shows the defect, quoting the line. A finding listed under "No excerpt" '
+            "cannot be verified from a file you were not given: answer it only if the diff you "
+            "read shows it."
         )
     if state.rulings:
         lines.append("")
