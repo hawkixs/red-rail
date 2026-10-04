@@ -593,20 +593,25 @@ def test_typescript_tests_are_found(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "where",
     [
+        "scripts",
         "node_modules/pkg",
         "vendor/claude-code",
-        ".claude-plugin/types",
+        ".claude/worktrees/x/plugin/src",
+        "plugin/node_modules/pkg",
         "plugin/.claude-plugin/types",
         ".git/hooks",
     ],
 )
-def test_a_test_under_installed_or_vendored_code_is_not_counted(tmp_path: Path, where: str) -> None:
+def test_a_test_outside_the_plugin_or_in_its_installed_code_is_not_counted(
+    tmp_path: Path, where: str
+) -> None:
+    """Only `plugin/` is what `claude plugin test plugin` runs (spec decision 8)."""
     repo = init_repo(tmp_path / "red-cockpit")
     (repo / where).mkdir(parents=True, exist_ok=True)
     (repo / where / "a.test.ts").write_text("")
     assert build_gates._typescript_tests(repo) == []
     result = build_gates._typescript_test_profile(repo)
-    assert not result.passed and "*.test.ts" in result.details
+    assert not result.passed and "plugin/**/*.test.ts" in result.details
 
 
 def test_a_typescript_repo_with_only_go_tests_fails(tmp_path: Path) -> None:
@@ -620,7 +625,8 @@ def test_undeclared_stack_reports_typescript_tests(tmp_path: Path) -> None:
         "no test file found (tests/test_*.py, *_test.go), none in tests/*.rs, none in *.test.ts"
         in has_tests(tmp_path).details
     )
-    (tmp_path / "core.test.ts").write_text("")
+    (tmp_path / "plugin" / "src").mkdir(parents=True)
+    (tmp_path / "plugin" / "src" / "core.test.ts").write_text("")
     assert (
         "0 test file(s) (tests/test_*.py), 0 (*_test.go), 0 (tests/*.rs), 1 (*.test.ts)"
         in has_tests(tmp_path).details
@@ -632,6 +638,12 @@ def test_typescript_lint_passes_and_names_the_skipped_typecheck(tmp_path: Path) 
     assert result.passed, result.details
     assert "tsc: SKIPPED (vendor/claude-code absent)" in result.details
     assert "24.21.0" in result.details
+
+
+def _the_flag_on_another_call(repo: Path) -> None:
+    """The install loses its flag while another call carries it: the flag must be on npm's."""
+    _replace(repo / "Makefile", "$(NPM) $(INSTALL) --ignore-scripts", "$(NPM) $(INSTALL)")
+    _replace(repo / "Makefile", "\t$(BIN)/biome ci .\n", "\t$(BIN)/biome ci . --ignore-scripts\n")
 
 
 @pytest.mark.parametrize(
@@ -673,6 +685,29 @@ def test_typescript_lint_passes_and_names_the_skipped_typecheck(tmp_path: Path) 
         ),
         (lambda d: _replace(d / "Makefile", " --strict", ""), "--strict"),
         (
+            lambda d: _replace(d / "Makefile", "claude plugin test plugin", "claude plugin test ."),
+            "claude plugin test",
+        ),
+        (
+            lambda d: _replace(d / "Makefile", "validate --strict plugin", "validate --strict ."),
+            "claude plugin validate",
+        ),
+        (
+            lambda d: _replace(
+                d / "Makefile", "$(NPM) $(INSTALL) --ignore-scripts", "$(NPM) $(INSTALL)"
+            ),
+            "--ignore-scripts",
+        ),
+        (_the_flag_on_another_call, "--ignore-scripts"),
+        (
+            lambda d: _replace(
+                d / "Makefile",
+                "\t$(NPM) rebuild @anthropic-ai/claude-code\n",
+                "\t$(NPM) rebuild @anthropic-ai/claude-code\n\t$(NPM) rebuild\n",
+            ),
+            "rebuild",
+        ),
+        (
             lambda d: _replace(
                 d / "Makefile",
                 "\t$(BIN)/claude plugin validate --strict plugin",
@@ -701,6 +736,11 @@ def test_typescript_lint_passes_and_names_the_skipped_typecheck(tmp_path: Path) 
         "tsc-without-noemit",
         "plugin-test-replaced",
         "validate-not-strict",
+        "plugin-test-on-dot",
+        "validate-on-dot",
+        "install-without-the-flag",
+        "flag-on-another-call",
+        "bare-rebuild",
         "validate-commented-out",
         "install-with-scripts",
         "no-rebuild",
@@ -791,3 +831,10 @@ def test_vendored_types_with_crlf_still_match(tmp_path: Path) -> None:
     repo = _ts_project(tmp_path / "red-cockpit")
     _vendor(repo, f"// Written by Claude Code {TYPESCRIPT_PIN}.\r\nx\r\n".encode())
     assert build_gates._typescript_profile(repo).passed
+
+
+def test_conforming_tree_for_typescript_passes_the_registered_profiles(tmp_path: Path) -> None:
+    """The profiles are reached through the manifest's `stack`, not by calling them directly."""
+    repo = conforming_tree(tmp_path / "x", "red-cockpit", "dev", stack="typescript")
+    assert has_tests(repo).passed, has_tests(repo).details
+    assert lint(repo).passed, lint(repo).details

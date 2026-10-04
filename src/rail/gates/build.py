@@ -55,16 +55,18 @@ def _rust_tests(repo: Path) -> list[Path]:
     return found
 
 
-_NOT_THE_TYPESCRIPT_PROJECT = {".git", "node_modules", "vendor", ".claude-plugin"}
+_NOT_THE_PLUGIN_TESTS = {"node_modules", ".claude-plugin"}
 
 
 def _typescript_tests(repo: Path) -> list[Path]:
-    """What `claude plugin test` runs, `*.test.ts` and `*.test.tsx`, outside installed and vendored
-    code and the engine's own `.claude-plugin/types` (spec 2026-10-04-typescript-stack, decision 8).
-    The walk prunes those directories instead of reading them: node_modules can be large."""
+    """What `claude plugin test plugin` runs: `*.test.ts` and `*.test.tsx` under `plugin/` only,
+    skipping installed code and the engine's own `.claude-plugin/types` there (spec
+    2026-10-04-typescript-stack, decision 8). A test elsewhere, or in a worktree kept under
+    `.claude/worktrees/`, is not the plugin's. The walk prunes instead of reading: node_modules
+    can be large."""
     found: list[Path] = []
-    for root, dirs, files in os.walk(repo):
-        dirs[:] = [d for d in dirs if d not in _NOT_THE_TYPESCRIPT_PROJECT]
+    for root, dirs, files in os.walk(repo / "plugin"):
+        dirs[:] = [d for d in dirs if d not in _NOT_THE_PLUGIN_TESTS]
         found += [Path(root) / f for f in files if f.endswith((".test.ts", ".test.tsx"))]
     return sorted(found)
 
@@ -98,7 +100,7 @@ def _rust_test_profile(repo: Path) -> GateResult:
 
 
 def _typescript_test_profile(repo: Path) -> GateResult:
-    return _counted(_typescript_tests(repo), "*.test.ts")
+    return _counted(_typescript_tests(repo), "plugin/**/*.test.ts")
 
 
 def _docs_test_profile(repo: Path) -> GateResult:
@@ -358,17 +360,19 @@ TYPESCRIPT_CALLS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("tsc --noEmit", re.compile(r"\btsc\b[^\n]*\s--noEmit\b"), "$(BIN)/tsc --noEmit"),
     (
         "claude plugin test",
-        re.compile(r"\bclaude\s+plugin\s+test\b"),
+        re.compile(r"\bclaude\s+plugin\s+test\s+(?:\./)?plugin/?(?=\s|$)"),
         "$(BIN)/claude plugin test plugin",
     ),
     (
         "claude plugin validate --strict",
-        re.compile(r"\bclaude\s+plugin\s+validate\b[^\n]*\s--strict\b"),
+        re.compile(r"\bclaude\s+plugin\s+validate\s+--strict\s+(?:\./)?plugin/?(?=\s|$)"),
         "$(BIN)/claude plugin validate --strict plugin",
     ),
     (
         "an install with --ignore-scripts",
-        re.compile(r"(?:\binstall\b|\$\(INSTALL\)|\bci\b)[^\n]*\s--ignore-scripts\b"),
+        re.compile(
+            r"(?:\$\(NPM\)|\bnpm)\s+(?:install|ci|\$\(INSTALL\))(?=\s)[^\n]*\s--ignore-scripts\b"
+        ),
         "$(NPM) $(INSTALL) --ignore-scripts",
     ),
     (
@@ -464,6 +468,14 @@ def _typescript_profile(repo: Path) -> GateResult:
     for what, pattern, remedy in TYPESCRIPT_CALLS:
         if not pattern.search(runner):
             return fail(f"the Makefile never runs {what} (`{remedy}`)")
+    if any(
+        re.search(r"\brebuild\b", line) and CLAUDE_PACKAGE not in line
+        for line in runner.splitlines()
+    ):
+        return fail(
+            f"a Makefile rebuild names no package (`$(NPM) rebuild {CLAUDE_PACKAGE}`): a bare "
+            "rebuild runs every package's install script"
+        )
     pin = dev[CLAUDE_PACKAGE]
     types = repo / TYPES_FILE
     if not types.is_file():
