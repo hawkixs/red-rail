@@ -353,21 +353,44 @@ def new_project(
     mirror = parameter(project.dest, "hygiene.mirror_host")  # GitHub only unless declared
     if publish:
         remotes.publish(project.dest, project.slug, project.description, mirror=mirror, run=run)
+    refusal: LedgerError | None = None
+    recorded = project.ledger is LedgerBackend.FILE  # committed with the bootstrap commit
     try:
         if project.ledger is LedgerBackend.BRAIN:
             # brain enriches the deliverable from its repository registry: the repository
             # exists first, so the contract is set only once it is published
             try:
                 record_contract(project, clock=clock, client=client)
+                recorded = True
             except LedgerError as exc:
-                raise ScaffoldError(_interrupted_birth(project, exc, published=publish)) from exc
+                refusal = exc
     finally:
         if publish:
             # last, once every direct push of `rail new` is done: from here main takes pull
             # requests. In a `finally` (b185c51d): a published repository whose birth stopped
-            # half-way must not be left with a main open to direct pushes
-            remotes.protect_main(project.slug, protected_checks(project), run=run)
+            # half-way must not be left with a main open to direct pushes. A failure here says
+            # where the contract stands too, so it never hides that outcome (ticket 3623548f)
+            try:
+                remotes.protect_main(project.slug, protected_checks(project), run=run)
+            except remotes.RemoteError as exc:
+                outcome = _contract_outcome(project, recorded=recorded, refusal=refusal)
+                raise remotes.RemoteError(f"{exc}\n{outcome}") from exc
+    if refusal is not None:
+        raise ScaffoldError(_interrupted_birth(project, refusal, published=publish)) from refusal
     return results
+
+
+def _contract_outcome(project: NewProject, *, recorded: bool, refusal: LedgerError | None) -> str:
+    """Where the delivery contract stands when main could not be protected: recorded, refused
+    (with its reason and the resume steps) or never reached (the birth stopped before it)."""
+    if recorded:
+        return "the delivery contract was recorded"
+    if refusal is not None:
+        return _interrupted_birth(project, refusal, published=True, protected=False)
+    return (
+        "the delivery contract was not reached: the birth stopped before it was recorded. To "
+        f"record it once the repository is registered:\n  {resume_contract_command(project)}"
+    )
 
 
 def resume_contract_command(project: NewProject) -> str:
@@ -394,12 +417,15 @@ def resume_contract_command(project: NewProject) -> str:
     return shlex.join(args)
 
 
-def _interrupted_birth(project: NewProject, exc: LedgerError, *, published: bool) -> str:
+def _interrupted_birth(
+    project: NewProject, exc: LedgerError, *, published: bool, protected: bool = True
+) -> str:
     """What a brain-ledger birth that stopped at the contract says: where things stand and
     the three steps that finish it. A repository `rail new` has just created is never in
     brain's registry yet (runbook 434dc417 builds it from GitHub), hence `unknown_repository`."""
+    standing = "protected" if protected else "NOT protected"
     where = (
-        f"{remotes.CANONICAL_OWNER}/{project.slug} is published and main is protected"
+        f"{remotes.CANONICAL_OWNER}/{project.slug} is published and main is {standing}"
         if published
         else f"the tree under {project.dest} is committed (nothing published)"
     )

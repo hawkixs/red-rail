@@ -682,6 +682,67 @@ def test_an_unregistered_repository_still_gets_main_protected_and_the_resume_ste
     assert "mirror receipt" not in message, "no file promise remains once nothing is written"
 
 
+def test_a_refused_protection_after_a_recorded_contract_says_the_contract_is_recorded(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """The protection failure used to replace the contract's outcome: one could not tell whether
+    the contract was recorded, refused or never reached (ticket 3623548f)."""
+    brain, ticket, project = _unregistered_birth(template_dir, tmp_path, Tier.DEV)
+    brain.register_repository("red-probe", 4242, "hawkixs/red-probe")
+    with pytest.raises(RemoteError) as refused:
+        new_project(
+            project,
+            clock=CLOCK,
+            client=BrainClient.in_memory(brain, agent="rail new"),
+            run=_github([], [], refuse="protection"),
+            resolve=_pin,
+        )
+    message = str(refused.value)
+    assert "main is NOT protected" in message and "HTTP 403" in message
+    assert "the delivery contract was recorded" in message
+    assert brain.tickets[ticket].revisions
+
+
+def test_a_refused_protection_after_a_refused_contract_says_both_and_how_to_resume(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    brain, ticket, project = _unregistered_birth(template_dir, tmp_path, Tier.DEV)
+    with pytest.raises(RemoteError) as refused:
+        new_project(
+            project,
+            clock=CLOCK,
+            client=BrainClient.in_memory(brain, agent="rail new"),
+            run=_github([], [], refuse="protection"),
+            resolve=_pin,
+        )
+    message = str(refused.value)
+    assert "main is NOT protected" in message and "HTTP 403" in message
+    assert "unknown_repository" in message and "the delivery contract was not recorded" in message
+    assert "434dc417" in message and "--key contract:red-probe:1" in message
+    assert "main is protected" not in message, "the protection did not happen: never say it did"
+    assert not brain.tickets[ticket].revisions
+
+
+def test_a_refused_protection_before_the_contract_was_reached_says_so(
+    template_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An error that is neither a ledger refusal nor a success leaves the contract unreached; the
+    protection is still attempted, and when it fails too the message gives the resume command."""
+    brain, ticket, project = _unregistered_birth(template_dir, tmp_path, Tier.DEV)
+
+    def unreachable(*args: object, **kwargs: object) -> None:
+        raise ConnectionError("brain is down")
+
+    monkeypatch.setattr(scaffold, "record_contract", unreachable)
+    with pytest.raises(RemoteError) as refused:
+        new_project(project, clock=CLOCK, run=_github([], [], refuse="protection"), resolve=_pin)
+    message = str(refused.value)
+    assert "main is NOT protected" in message
+    assert "the delivery contract was not reached" in message
+    assert "rail contract set" in message and "--key contract:red-probe:1" in message
+    assert isinstance(refused.value.__cause__, RemoteError)
+
+
 @pytest.mark.parametrize("tier", [Tier.BOOTSTRAP, Tier.PROD])
 def test_the_resume_command_records_exactly_the_birth_contract(
     template_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tier: Tier
