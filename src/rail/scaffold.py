@@ -18,7 +18,7 @@ import yaml
 
 from rail import remotes
 from rail.gates import GateResult, Stage, run_gates
-from rail.gates.build import LOCKFILES, lock_missing
+from rail.gates.build import SYNCED_STACKS, unsynced
 from rail.ledger import (
     Contract,
     Deliverable,
@@ -324,11 +324,11 @@ def init_git(project: NewProject) -> str:
 SYNC_TAIL_LINES = 10
 
 
-def sync_locks(project: NewProject, *, run: remotes.Runner = subprocess.run) -> None:
-    """Run the generated tree's own `make sync` where the stack's lint gate requires a lockfile
-    that only the sync writes, so the lock is part of the bootstrap commit. Fail-closed, and
-    before anything is committed or published."""
-    if project.stack not in LOCKFILES:
+def sync_tree(project: NewProject, *, run: remotes.Runner = subprocess.run) -> None:
+    """Run the generated tree's own `make sync` where the stack's lint gate requires something
+    that only the sync writes (a lockfile, the Go `tool` directives), so it is part of the
+    bootstrap commit. Fail-closed, and before anything is committed or published."""
+    if project.stack not in SYNCED_STACKS:
         return
     try:
         done = run(
@@ -339,17 +339,17 @@ def sync_locks(project: NewProject, *, run: remotes.Runner = subprocess.run) -> 
     if done.returncode != 0:
         tail = "\n".join((done.stderr or done.stdout or "").strip().splitlines()[-SYNC_TAIL_LINES:])
         raise ScaffoldError(
-            f"`make sync` failed in {project.dest} (exit {done.returncode}): the stack needs "
-            f"{LOCKFILES[project.stack]} committed and nothing was published\n{tail}"
+            f"`make sync` failed in {project.dest} (exit {done.returncode}): the stack's lint gate "
+            f"needs what it writes committed, and nothing was published\n{tail}"
         )
 
 
 def verify(project: NewProject) -> list[GateResult]:
     """The floor a fresh tree can pass (hygiene, intent, design) and, for a stack whose lint
-    gate requires a lockfile, that the lock is there — what `rail check` will read next at the
-    declared tier."""
+    gate requires what only `make sync` writes, that it is there — what `rail check` will read
+    next at the declared tier."""
     results = run_gates(project.dest, stages=stages_for(Tier.BOOTSTRAP), ci=True)
-    missing = lock_missing(project.dest, project.stack)
+    missing = unsynced(project.dest, project.stack)
     if missing is not None:
         results.append(GateResult(Stage.BUILD, "lint", False, missing))
     return results
@@ -373,7 +373,7 @@ def new_project(
     write_bootstrap_spec(project)
     if project.ledger is LedgerBackend.FILE:
         record_contract(project, clock=clock, client=client)  # part of the bootstrap commit
-    sync_locks(project, run=run)
+    sync_tree(project, run=run)
     init_git(project)
     results = verify(project)
     failing = [r for r in results if not r.passed]
