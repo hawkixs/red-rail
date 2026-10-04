@@ -12,6 +12,7 @@ from typing import Any
 import click
 from pydantic import ValidationError
 
+from rail.commands._actor import no_issuer_option, resolve_or_exit
 from rail.commands._options import json_option, repo_option
 from rail.ledger import (
     RECEIPTS_DIR,
@@ -71,7 +72,7 @@ def echo_record(record: Record, repo: Path, as_json: bool) -> None:
 @repo_option
 @click.option("--data", "pairs", multiple=True, help="key=value (repeatable).")
 @click.option("--data-json", help="JSON object merged before --data pairs.")
-@click.option("--issuer", default="operator", show_default=True)
+@no_issuer_option
 @click.option(
     "--key",
     "idempotency_key",
@@ -90,12 +91,12 @@ def command(
     repo: Path,
     pairs: tuple[str, ...],
     data_json: str | None,
-    issuer: str,
     idempotency_key: str | None,
     replay: Path | None,
     as_json: bool,
 ) -> None:
     """Record an attestation (released, deployed, rolled_back, …) in the project's ledger."""
+    issuer = resolve_or_exit()
     attestation = AttestationKind(kind)
     if kind == AttestationKind.REVIEW_RULING.value and replay is None:
         # a ruling is the operator's decision on one open blocker (spec 2026-09-25, D9): only

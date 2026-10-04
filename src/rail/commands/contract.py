@@ -12,6 +12,7 @@ import click
 from pydantic import ValidationError
 
 from rail import gitrepo
+from rail.commands._actor import no_issuer_option, resolve_or_exit
 from rail.commands._options import json_option, repo_option
 from rail.commands.attest import echo_record
 from rail.contract_guard import Unwritable, refuse_unwritable
@@ -121,7 +122,7 @@ def command() -> None:
     help="owner/name[:key] (repeatable; default: the GitHub remote, key `main`).",
 )
 @click.option("--reason", required=True, help="Why this contract (or this amendment) exists.")
-@click.option("--issuer", default="operator", show_default=True)
+@no_issuer_option
 @click.option("--key", "idempotency_key", help="Idempotency key (default: contract:<project>:<n>).")
 @click.option(
     "--required-check",
@@ -162,7 +163,6 @@ def set_(
     constraints: tuple[str, ...],
     deliverables: tuple[str, ...],
     reason: str,
-    issuer: str,
     idempotency_key: str | None,
     required_checks: tuple[str, ...],
     no_checks_reason: str | None,
@@ -174,6 +174,7 @@ def set_(
     as_json: bool,
 ) -> None:
     """Create or amend the project's delivery contract in the ledger."""
+    issuer = resolve_or_exit()
     checks = [parse_required_check(spec) for spec in required_checks]
     # blank is absent: `--no-checks-reason "   "` satisfied the guard by truthiness alone and
     # stored a reason that explains nothing, in an append-only ledger. Normalising here also

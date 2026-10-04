@@ -12,6 +12,7 @@ from pathlib import Path
 import click
 from pydantic import ValidationError
 
+from rail.commands._actor import no_issuer_option, resolve_or_exit
 from rail.commands._options import json_option, repo_option
 from rail.commands.attest import echo_record
 from rail.commands.contract import canonical_slug
@@ -42,10 +43,11 @@ def head_sha_of(slug: str, number: int) -> str:
 @repo_option
 @click.option("--pr", "number", type=click.IntRange(min=1), required=True, help="PR number.")
 @click.option("--head", "head_sha", default=None, help="The PR head (default: asked to GitHub).")
-@click.option("--issuer", default="operator", show_default=True)
+@no_issuer_option
 @json_option
-def command(repo: Path, number: int, head_sha: str | None, issuer: str, as_json: bool) -> None:
+def command(repo: Path, number: int, head_sha: str | None, as_json: bool) -> None:
     """Bind pull request N of this repository to the delivery contract (at its opening)."""
+    issuer = resolve_or_exit()
     try:
         project = load_rail_config(repo).project
         slug = canonical_slug(repo)

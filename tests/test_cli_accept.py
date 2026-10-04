@@ -70,6 +70,7 @@ def test_accept_on_the_brain_ledger_is_the_requesters_call(
     out = CliRunner().invoke(main, ["accept", "--repo", str(repo), "--rationale", "too early"])
     assert out.exit_code == 1 and "not integrated" in out.output
     brain.integrate(ticket, git(repo, "rev-parse", "HEAD"), issued_at=T0)
+    monkeypatch.setenv("RAIL_ACTOR", "service:test")
     out = CliRunner().invoke(
         main,
         [
@@ -78,8 +79,6 @@ def test_accept_on_the_brain_ledger_is_the_requesters_call(
             str(repo),
             "--rationale",
             "the probe answers",
-            "--issuer",
-            "red-root",
         ],
     )
     assert out.exit_code == 0, out.output
