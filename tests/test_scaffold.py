@@ -358,6 +358,24 @@ def _syncing(calls: list[list[str]], *, writes: str | None, status: int = 0, std
     return run
 
 
+def test_the_typescript_template_leaves_rail_cis_checkout_alone(
+    template_dir: Path, tmp_path: Path
+) -> None:
+    """rail-ci checks red-rail out into `.rail/` inside the workspace, and `biome ci .` lints
+    what git does not ignore: every typescript birth failed its first CI on `.rail/**.json` and
+    `.rail/workflows/pre-review.js`. Biome follows `.gitignore` (the variant a judge could not
+    call a false blocker, red-cockpit), and `.gitignore` names `.rail/` (ticket 3623548f)."""
+    dest = render(
+        _project(
+            template_dir, tmp_path / "red-throwaway", slug="red-throwaway", stack=Stack.TYPESCRIPT
+        )
+    )
+    biome = json.loads((dest / "biome.json").read_text())
+    assert biome["vcs"] == {"enabled": True, "clientKind": "git", "useIgnoreFile": True}
+    assert ".rail/" in (dest / ".gitignore").read_text().splitlines()
+    assert not any(".rail" in entry for entry in biome["files"]["includes"]), "no `!.rail` include"
+
+
 @pytest.mark.parametrize(
     ("stack", "lock"),
     [(Stack.RUST, "Cargo.lock"), (Stack.TYPESCRIPT, "package-lock.json")],
@@ -1319,7 +1337,7 @@ GITIGNORED = {
     ],
     Stack.GO: ["bin/"],
     Stack.RUST: ["target/", ".cargo-tools/"],
-    Stack.TYPESCRIPT: ["node_modules/", "plugin/.claude-plugin/types/"],
+    Stack.TYPESCRIPT: ["node_modules/", "plugin/.claude-plugin/types/", ".rail/"],
     Stack.DOCS: [],
 }
 
