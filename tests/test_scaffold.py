@@ -662,6 +662,7 @@ def test_the_resume_command_records_exactly_the_birth_contract(
 
     argv = shlex.split(resume_contract_command(project))
     assert argv[:3] == ["rail", "contract", "set"]
+    assert "--issuer" not in argv
     out = CliRunner().invoke(main, [*argv[1:], "--yes"])
     assert out.exit_code == 0, out.output
 
