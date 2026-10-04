@@ -254,7 +254,17 @@ class GitHubApp:
     def file_at(self, repository: str, path: str, ref: str) -> str | None:
         """One file's text at a commit, None when the path does not exist there (absence is
         evidence, not a failure). Content a judge cannot read — over `MAX_RESPONSE_BYTES`, not
-        UTF-8 text, or a path that is not a file — raises `GitHubError` with the reason."""
+        UTF-8 text, or a path that is not a file — raises `GitHubError` with the reason.
+
+        `path` is built from a judge's words, which the author's diff can steer, and it goes
+        into the API path next to the App's token: anything that is not a plain relative file
+        path (empty or absolute, a `.` or `..` or empty segment, a backslash, `?`, `#`, a
+        control character) is refused before any request."""
+        segments = path.split("/")
+        if any(s in ("", ".", "..") for s in segments) or any(
+            c in "\\?#" or ord(c) < 32 or ord(c) == 127 for c in path
+        ):
+            raise GitHubError(f"refused path {path!r}: not a plain relative file path")
         try:
             content = self._request(
                 "GET",

@@ -329,3 +329,32 @@ def test_file_at_refuses_what_a_judge_cannot_read() -> None:
     denied = _contents_app(lambda r: httpx.Response(403, json={"message": "no"}))
     with pytest.raises(GitHubError, match="403"):
         denied.file_at("hawkixs/red-rail", "a.py", "c" * 40)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "",
+        "/etc/passwd",
+        "../../other-repo/contents/x",
+        "src/../../x",
+        "src/./a.py",
+        "src//a.py",
+        "src/",
+        "src\\a.py",
+        "a\x00b",
+        "a\nb",
+        "a?ref=main",
+        "a#b",
+    ],
+)
+def test_file_at_refuses_a_path_that_could_leave_the_file(path: str) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"x")
+
+    with pytest.raises(GitHubError, match="refused path"):
+        _contents_app(handler).file_at("hawkixs/red-rail", path, "c" * 40)
+    assert seen == []

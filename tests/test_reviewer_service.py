@@ -2564,9 +2564,15 @@ def _open_on(file: str, line: int | None, n: int = 1) -> Finding:
     )
 
 
-def _round_two(tmp_path, findings, github, run_judge):
+def _round_two(tmp_path, findings, github, run_judge, *, in_pr=True):
+    """The pull request's whole diff holds src/x.py (the delta's file) and, unless `in_pr` is
+    False, every file an earlier finding names: the delta never touches them."""
     repo, ledger = _repo(tmp_path)
     _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=findings)
+    named = {f.file for f in findings} if in_pr else set()
+    github.diff_text = DIFF + "".join(
+        f"diff --git a/{n} b/{n}\n+x\n" for n in sorted(named) if n != "src/x.py"
+    )
     return review_pull(
         PR,
         github=github,
@@ -2726,12 +2732,12 @@ def test_a_blind_still_open_does_not_outvote_the_judge_that_read_the_file(tmp_pa
     assert [(f.id, f.status) for f in outcome.verdict.findings] == [("F-7-1", "fixed")]
 
 
-def test_a_finding_no_judge_could_verify_stays_open(tmp_path) -> None:
+def test_a_finding_the_judge_that_read_its_file_left_unanswered_stays_open(tmp_path) -> None:
     outcome = _sliced_round_two(
         tmp_path,
-        _open_on("d.go", None),
+        _open_on("b.go", None),
         FakeGitHub(file_error=True),
-        _slice_judge({"a.go": "still_open", "b.go": "still_open", "c.go": "fixed"}),
+        _slice_judge({"a.go": "still_open", "c.go": "fixed"}),
     )
     assert outcome.verdict.findings[0].status == "still_open"
 
@@ -2739,8 +2745,8 @@ def test_a_finding_no_judge_could_verify_stays_open(tmp_path) -> None:
 def test_a_judge_that_read_the_excerpt_keeps_its_still_open(tmp_path) -> None:
     outcome = _sliced_round_two(
         tmp_path,
-        _open_on("d.go", 5),
-        FakeGitHub(files={"d.go": _lines()}),
+        _open_on("b.go", 5),
+        FakeGitHub(files={"b.go": _lines()}),
         _slice_judge({"a.go": "still_open", "b.go": "fixed", "c.go": "fixed"}),
     )
     assert outcome.verdict.findings[0].status == "still_open"
@@ -2756,6 +2762,35 @@ def test_every_slice_judge_is_handed_the_excerpt(tmp_path) -> None:
         return approve(provider, tier)
 
     _sliced_round_two(
-        tmp_path, _open_on("d.go", 5), FakeGitHub(files={"d.go": _lines()}), run_judge
+        tmp_path, _open_on("b.go", 5), FakeGitHub(files={"b.go": _lines()}), run_judge
     )
     assert len(notes_seen) == 3 and all("   5 | line 5" in n for n in notes_seen)
+
+
+# -- a crafted path never reaches the API (security) -------------------------------------
+
+
+def test_a_finding_on_a_path_outside_the_pull_request_is_never_fetched(tmp_path) -> None:
+    """`finding.file` is a judge's words, steerable by the author's diff: only the files of the
+    pull request's own diff may be fetched with the App's token."""
+    github = FakeGitHub(files={"../../other-repo/contents/x": "secret", "src/x.py": _lines()})
+    seen: list[dict] = []
+    _round_two(
+        tmp_path,
+        [_open_on("../../other-repo/contents/x", 3, 1), _open_on("docs/elsewhere.md", 3, 2)],
+        github,
+        _judge_saying(seen=seen),
+        in_pr=False,
+    )
+    assert not [c for c in github.calls if c[0] == "file_at"]
+    notes = seen[0]["notes"]
+    assert "secret" not in notes
+    assert "F-7-1" in notes and "F-7-2" in notes
+    assert notes.count("not a file of this pull request") == 2
+
+
+def test_a_file_of_the_whole_diff_is_fetched_though_the_delta_skips_it(tmp_path) -> None:
+    """red-ha#4: the file was in the pull request, only not in round 2's delta."""
+    github = FakeGitHub(files={"src/proofs.py": _lines()})
+    _round_two(tmp_path, [_open_on("src/proofs.py", 5)], github, _judge_saying())
+    assert ("file_at", "src/proofs.py", PR.head_sha) in github.calls

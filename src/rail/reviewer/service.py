@@ -5,7 +5,7 @@ one review. Fail-closed: no verdict → failure + REQUEST_CHANGES, never neutral
 from __future__ import annotations
 
 import fnmatch
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -332,11 +332,19 @@ def _excerpt(path: str, text: str, spans: list[tuple[int, int]], sha: str) -> st
 
 
 def _head_excerpts(
-    findings: Iterable[Finding], *, pr: PullRequest, github: GitHubLike
+    findings: Iterable[Finding],
+    *,
+    pr: PullRequest,
+    github: GitHubLike,
+    pr_files: Collection[str],
 ) -> tuple[str, dict[str, str]]:
     """The current code of every open earlier finding, at the pull request's head, as data for
     the judges; and the findings (id -> file) no excerpt could be made for. A fetch failure
-    never fails the review: the finding is named, and no answer keeps it open as before."""
+    never fails the review: the finding is named, and no answer keeps it open as before.
+
+    Only a file of the pull request's own diff (`pr_files`, the WHOLE diff, not a delta) is
+    fetched: a finding's file is a judge's word, steerable by the author, and the fetch carries
+    the App's token (it could otherwise be pointed at another repository's file)."""
     by_file: dict[str, list[Finding]] = {}
     for f in findings:
         if f.status in ("new", "still_open"):
@@ -350,7 +358,9 @@ def _head_excerpts(
     for path, group in by_file.items():
         reason = ""
         block = ""
-        if used >= EXCERPT_TOTAL_BYTES:
+        if path not in pr_files:
+            reason = "not a file of this pull request"
+        elif used >= EXCERPT_TOTAL_BYTES:
             reason = "the excerpt budget is spent"
         else:
             try:
@@ -968,7 +978,9 @@ def _review_started(
         notes = ""
     blind: dict[str, str] = {}
     if context_state.findings:
-        excerpts, blind = _head_excerpts(context_state.findings, pr=pr, github=github)
+        excerpts, blind = _head_excerpts(
+            context_state.findings, pr=pr, github=github, pr_files=set(_files(whole))
+        )
         if excerpts:
             notes = f"{notes}\n\n{excerpts}".strip()
     if delta is not None and _DELTA_NOTE not in notes:
