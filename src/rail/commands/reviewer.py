@@ -217,7 +217,7 @@ def rule(
     if os.environ.get("CI"):
         raise click.UsageError("a ruling is the operator's gesture: refused under CI")
     actor = resolve_or_exit()
-    if not actor.startswith("operator"):
+    if actor != "operator":
         raise click.UsageError(f"a ruling is the operator's gesture, not {actor}'s")
     text = decision.strip()
     if not text or len(text) > 2000:
