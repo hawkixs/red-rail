@@ -1769,8 +1769,20 @@ def _never(*args: object, **kwargs: object) -> None:
         ("rust", Stack.DOCS, "dev", "cannot switch to docs"),
         ("docs", Stack.DOCS, "dev", "cannot switch to docs"),
         ("docs", Stack.RUST, "prod", "rust at tier prod is not templated yet"),
+        ("docs", Stack.TYPESCRIPT, "prod", "typescript at tier prod is not templated yet"),
+        ("python", Stack.TYPESCRIPT, "dev", "only out of docs"),
+        ("typescript", Stack.DOCS, "dev", "cannot switch to docs"),
     ],
-    ids=["python-go", "go-rust", "rust-docs", "docs-docs", "docs-rust-at-prod"],
+    ids=[
+        "python-go",
+        "go-rust",
+        "rust-docs",
+        "docs-docs",
+        "docs-rust-at-prod",
+        "docs-typescript-at-prod",
+        "python-typescript",
+        "typescript-docs",
+    ],
 )
 def test_upgrade_refuses_a_transition_not_from_docs(
     tmp_path: Path, current: str, target: Stack, tier: str, message: str
@@ -1782,11 +1794,14 @@ def test_upgrade_refuses_a_transition_not_from_docs(
     assert {p.name: p.read_text() for p in repo.iterdir()} == before
 
 
-def test_upgrade_refuses_answers_holding_rust_at_prod(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stack", ["rust", "typescript"])
+def test_upgrade_refuses_answers_holding_a_stack_with_no_prod_template(
+    tmp_path: Path, stack: str
+) -> None:
     """Copier would drop the invalid answer and, under defaults, re-render the project as python:
     refused with or without --stack."""
-    repo = _answered(tmp_path / "red-life", stack="rust", tier="prod")
-    with pytest.raises(ScaffoldError, match="rust at tier prod"):
+    repo = _answered(tmp_path / "red-life", stack=stack, tier="prod")
+    with pytest.raises(ScaffoldError, match=f"{stack} at tier prod"):
         upgrade(repo, update=_never, resolve=lambda t, **k: "c" * 40)
 
 
@@ -1857,6 +1872,33 @@ def test_upgrade_switches_docs_to_rust(template_dir: Path, tmp_path: Path) -> No
     assert (dest / "Cargo.toml").is_file() and (dest / "rust-toolchain.toml").is_file()
 
 
+def test_upgrade_switches_docs_to_typescript(template_dir: Path, tmp_path: Path) -> None:
+    """Real copier on a tagged throwaway template: the answer, rail.yaml and the CI call all say
+    typescript afterwards, the plugin files exist, and rail.yaml carries the declared exception
+    for the vendored types, written by copier's merge alone."""
+    _tagged_template(template_dir, "v0.1.0")
+    project = _project(
+        template_dir,
+        tmp_path / "red-cockpit",
+        slug="red-cockpit",
+        stack=Stack.DOCS,
+        tier=Tier.DEV,
+        template_ref="v0.1.0",
+    )
+    new_project(project, publish=False, clock=CLOCK, resolve=_pin)
+    _tagged_template(template_dir, "v0.2.0")
+
+    upgrade(project.dest, stack=Stack.TYPESCRIPT, resolve=_pin)
+
+    dest = project.dest
+    assert "stack: typescript" in (dest / ANSWERS_FILE).read_text()
+    assert "stack: typescript" in (dest / "rail.yaml").read_text()
+    ci = dest / ".github" / "workflows" / "continuous-integration.yml"
+    assert "stack: typescript" in ci.read_text()
+    assert (dest / ".claude-plugin" / "plugin.json").is_file()
+    assert (dest / "package.json").is_file() and (dest / ".node-version").is_file()
+
+
 def test_upgrade_to_rust_refuses_a_dirty_tree(template_dir: Path, tmp_path: Path) -> None:
     """Uncommitted changes: copier refuses, and nothing is half-written (Review Focus 4)."""
     _tagged_template(template_dir, "v0.1.0")
@@ -1878,14 +1920,17 @@ def test_upgrade_to_rust_refuses_a_dirty_tree(template_dir: Path, tmp_path: Path
     assert "stack: docs" in (project.dest / "rail.yaml").read_text()
 
 
-def test_cli_upgrade_takes_a_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("stack", [Stack.RUST, Stack.TYPESCRIPT])
+def test_cli_upgrade_takes_a_stack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stack: Stack
+) -> None:
     calls: list[dict] = []
     monkeypatch.setattr(
         "rail.commands.upgrade.upgrade", lambda repo, **kw: calls.append(kw) or "v0.6.0"
     )
-    result = CliRunner().invoke(main, ["upgrade", "--repo", str(tmp_path), "--stack", "rust"])
+    result = CliRunner().invoke(main, ["upgrade", "--repo", str(tmp_path), "--stack", stack.value])
     assert result.exit_code == 0, result.output
-    assert calls == [{"stack": Stack.RUST}]
+    assert calls == [{"stack": stack}]
     assert "make sync" in result.output
 
 
