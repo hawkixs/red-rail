@@ -138,7 +138,9 @@ class FakeBrain:
             "milestone": "integration",
             "contract_revision": len(ticket.revisions),
             "attempt": 1,
-            "contract_digest": "0" * 64,
+            "contract_digest": ticket.revisions[-1]["content_digest"]
+            if ticket.revisions
+            else "0" * 64,
             "delivery_digest": hashlib.sha256(integration_sha.encode()).hexdigest(),
             "issued_at": issued_at.isoformat(),
             "proof": {"artifact_proofs": [{"integration_sha": integration_sha}]},

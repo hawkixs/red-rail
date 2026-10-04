@@ -39,10 +39,6 @@ MILESTONE_ISSUER = "brain-v42"
 REQUESTER = "red"
 PAGE = 100
 HISTORY = 50  # receipts and revisions the delivery view's history page carries (brain's max: 100)
-_MILESTONES = {
-    "integration": AttestationKind.INTEGRATED,
-    "fulfilled": AttestationKind.FULFILLED,
-}
 KNOWN_REFUSALS: frozenset[str] = frozenset(
     {
         "contract_not_found",
@@ -524,32 +520,49 @@ class BrainLedger:
     def _milestone_records(
         self, view: dict[str, Any], attestation: AttestationKind | None
     ) -> list[Record]:
-        """The ticket's current receipts, then the superseded ones its history page holds: a
-        new integration supersedes the current receipt, which stays a fact on its own line of
-        history (ticket d096f911). Each receipt once, by id. Brain pages `history` newest first;
-        past `HISTORY` items (`omitted_count`) the oldest receipts are left out and the page is
-        not followed — the gate wants the most recent receipt on HEAD's lineage, which is near
-        the top."""
+        """The ticket's current receipts, then the superseded integration receipts its history
+        page holds: a new integration supersedes the current receipt, which stays a fact on its
+        own line of history (ticket d096f911). Brain also supersedes for other reasons (an
+        amended or repaired contract), so a superseded receipt counts only when it proves the
+        contract that holds now — same revision AND same content digest — and only for an
+        integration: a superseded fulfilment never speaks, acceptance is the current receipt's.
+        Each receipt once, by id. Brain pages `history` newest first; past `HISTORY` items
+        (`omitted_count`) the oldest are left out and the page is not followed — the gate wants
+        the most recent receipt on HEAD's lineage, which is near the top."""
         found = [
             (view.get("integration_receipt"), AttestationKind.INTEGRATED),
             (view.get("fulfillment_receipt"), AttestationKind.FULFILLED),
-            *(
-                (item["receipt"], _MILESTONES.get(str(item["receipt"].get("milestone"))))
-                for item in (view.get("history") or {}).get("items", [])
-                if item.get("kind") == "receipt" and item.get("receipt")
-            ),
         ]
+        contract = view.get("contract") or {}
+        if attestation in (None, AttestationKind.INTEGRATED):
+            found.extend(
+                (item["receipt"], AttestationKind.INTEGRATED)
+                for item in (view.get("history") or {}).get("items", [])
+                if item.get("kind") == "receipt"
+                and (item.get("receipt") or {}).get("milestone") == "integration"
+                and _proves(item["receipt"], contract)
+            )
         records: dict[str, Record] = {}
         for receipt, kind in found:
             if (
                 not receipt
-                or kind is None
                 or (attestation is not None and attestation is not kind)
                 or str(receipt["id"]) in records
             ):
                 continue
             records[str(receipt["id"])] = self._milestone_record(receipt, kind)
         return list(records.values())
+
+
+def _proves(receipt: dict[str, Any], contract: dict[str, Any]) -> bool:
+    """A receipt of the contract revision that is current: brain's receipt `contract_digest`
+    is the revision's `content_digest`. A missing field never matches."""
+    digest = contract.get("content_digest")
+    return bool(
+        digest
+        and receipt.get("contract_revision") == contract.get("contract_revision")
+        and receipt.get("contract_digest") == digest
+    )
 
 
 def _gh_repository_id(slug: str) -> int:
