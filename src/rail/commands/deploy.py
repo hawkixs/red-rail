@@ -71,6 +71,8 @@ def command(
             "--rollback puts the previous deployed artefact back; "
             "--version applies to a forward deployment"
         )
+    # before any ledger read: --plan attests nothing and needs no actor
+    issuer = None if dry_run else resolve_or_exit()
     try:
         cfg = load_rail_config(repo)
         ledger = open_ledger(repo)
@@ -94,7 +96,6 @@ def command(
                 click.echo(f"  {step.title}")
                 click.echo(f"    $ {' '.join(step.argv)}")
             return
-        issuer = resolve_or_exit()
         if not yes:
             click.confirm(
                 f"{'roll back' if rollback else 'deploy'} {cfg.project} to "

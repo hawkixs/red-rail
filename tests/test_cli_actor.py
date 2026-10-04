@@ -9,6 +9,8 @@ from click.testing import CliRunner
 from rail.brain.client import BrainClient
 from rail.cli import main
 from rail.commands import accept, attest, bind, contract
+from rail.commands import deploy as deploy_command
+from rail.commands import drill as drill_command
 from rail.commands import release as release_command
 from rail.commands._actor import no_issuer_option, resolve_or_exit
 from rail.deploy import flow
@@ -176,6 +178,18 @@ def _issuers(repo: Path) -> set[str]:
     return {r.issuer for r in FileLedger(repo / RECEIPTS_DIR).list("red-probe", kind=None)}
 
 
+class _ForbiddenLedger:
+    """A ledger that fails on first touch: a refused actor must never reach it."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(f"the ledger was touched ({name}) before the actor was resolved")
+
+
+def _forbid_ledger(monkeypatch: pytest.MonkeyPatch, *modules: Any) -> None:
+    for module in modules:
+        monkeypatch.setattr(module, "open_ledger", lambda repo: _ForbiddenLedger())
+
+
 def test_release_plan_and_deploy_plan_need_no_actor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, faked: FakeTarget
 ) -> None:
@@ -194,11 +208,12 @@ def test_release_without_an_actor_exits_2_before_any_effect(
     repo, host = _release_world(tmp_path, monkeypatch)
     before = _issuers(repo)
     _unresolvable(monkeypatch)
+    _forbid_ledger(monkeypatch, release_command)
     out = CliRunner().invoke(
         main, ["release", "--repo", str(repo), "--version", "0.1.0", "--yes", "--json"]
     )
     assert out.exit_code == 2 and "RAIL_ACTOR" in out.output
-    assert not any(c[0] == "docker" or "push" in c for c in host.calls)
+    assert host.calls == [], "not even a fetch or an ls-remote"
     assert _issuers(repo) == before
     assert not list(spool_directory("red-probe").glob("*"))
 
@@ -216,6 +231,7 @@ def test_deploy_without_an_actor_exits_2_before_any_effect(
     applied, before = list(faked.applied), _issuers(repo)
     receipts = sorted((repo / RECEIPTS_DIR).glob("*.json"))
     _unresolvable(monkeypatch)
+    _forbid_ledger(monkeypatch, deploy_command)
     out = CliRunner().invoke(main, ["deploy", "--repo", str(repo), *flags, "--yes"])
     assert out.exit_code == 2 and "RAIL_ACTOR" in out.output
     assert faked.applied == applied and _issuers(repo) == before
@@ -234,10 +250,12 @@ def test_drill_without_an_actor_exits_2_before_any_effect(
     applied = list(faked.applied)
     receipts = sorted((repo / RECEIPTS_DIR).glob("*.json"))
     _unresolvable(monkeypatch)
+    _forbid_ledger(monkeypatch, drill_command)
     out = runner.invoke(main, ["drill", "--repo", str(repo), "--yes"])
     assert out.exit_code == 2 and "RAIL_ACTOR" in out.output
     assert faked.applied == applied
     assert sorted((repo / RECEIPTS_DIR).glob("*.json")) == receipts
+    assert not list(spool_directory("red-probe").glob("*"))
 
 
 def test_release_deploy_rollback_and_drill_record_the_resolved_actor(

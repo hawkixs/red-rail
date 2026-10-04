@@ -29,6 +29,8 @@ RUN = subprocess.run  # module-level so a test can inject a fake host
 @json_option
 def command(repo: Path, version: str, dry_run: bool, yes: bool, as_json: bool) -> None:
     """Tag, build and push the image, attest `released` (prod, from main, after integration)."""
+    # before preflight: it fetches, reads the remote and reads the ledger; --plan attests nothing
+    issuer = None if dry_run else resolve_or_exit()
     try:
         ledger = open_ledger(repo)
         plan = preflight(repo, version, ledger=ledger, run=RUN)
@@ -40,7 +42,6 @@ def command(repo: Path, version: str, dry_run: bool, yes: bool, as_json: bool) -
         for step in plan.steps():
             click.echo(f"  {step}")
         return
-    issuer = resolve_or_exit()
     if not yes:
         click.confirm(
             f"release {plan.project} {plan.version} from {plan.sha[:12]} as {plan.image_tag}?",
