@@ -459,6 +459,13 @@ def _no_judge_summary(failures: list[str], policy: ReviewPolicy) -> str:
     )[:4000]
 
 
+def _light_verdicts(replies: list[JudgeReply]) -> str:
+    """The light verdicts that led to a deep arbitration, named in the summary so a dissent is
+    never erased silently (ticket 4cdeaed9)."""
+    shown = ", ".join(f"{r.provider} {r.verdict.verdict}" for r in replies if r.verdict)
+    return f"light: {shown}" if shown else ""
+
+
 def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdict:
     """`truncated` is only what the caller knows BEFORE judging: a file whose own patch cannot
     be bounded. The judges know the rest — `judge()` bounds its prompt in UTF-8 bytes and
@@ -1081,6 +1088,7 @@ def _review_started(
             )
         merged = _merge(replies, mode, truncated) if any(r.verdict for r in replies) else None
     else:
+        light_note = ""
         if light:
             replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=1, **common)
         else:
@@ -1088,11 +1096,33 @@ def _review_started(
             decisions = {r.verdict.verdict for r in replies if r.verdict}
             escalate = len(decisions) > 1 or any(r.verdict.important for r in replies if r.verdict)
             if escalate:
+                # Ticket 4cdeaed9 (measured on #80): the arbitration is every provider not yet
+                # used, at deep tier — or, when none is left, every provider of the chain. Never
+                # one of the two disputants alone, which used to decide its own disagreement
+                # and erase the other's verdict. The deep verdicts merge (any request_changes
+                # holds) and replace the light ones, which stay named in the summary.
                 used = {r.provider for r in replies}
                 deep_chain = tuple(p for p in chain if p not in used) or chain
-                deep = _judge_chain(pr, diff, policy, deep_chain, tier="deep", wanted=1, **common)
-                replies = deep or replies  # the deep judge's verdict wins
+                deep = _judge_chain(
+                    pr, diff, policy, deep_chain, tier="deep", wanted=len(deep_chain), **common
+                )
+                if deep:
+                    light_note = _light_verdicts(replies)
+                    # a dissenter whose deep run failed keeps its light request_changes in the
+                    # merge: the other disputant never decides alone (fail-closed)
+                    answered = {r.provider for r in deep}
+                    replies = deep + [
+                        r
+                        for r in replies
+                        if r.verdict
+                        and r.verdict.verdict == "request_changes"
+                        and r.provider not in answered
+                    ]
         merged = _merge(replies, mode, truncated) if any(r.verdict for r in replies) else None
+        if merged is not None and light_note:
+            merged = merged.model_copy(
+                update={"summary": f"{merged.summary} | {light_note}"[:4000]}
+            )
 
     if merged is None:
         # No verdict at all: fail closed. An outage is not a judged round (Ruling 32): it is
