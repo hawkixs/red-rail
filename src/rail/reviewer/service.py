@@ -1108,14 +1108,17 @@ def _review_started(
                 )
                 if deep:
                     light_note = _light_verdicts(replies)
-                    # a dissenter whose deep run failed keeps its light request_changes in the
-                    # merge: the other disputant never decides alone (fail-closed)
+                    # a dissenter that was asked to arbitrate and whose deep run failed keeps
+                    # its light request_changes in the merge: the other disputant never decides
+                    # alone (fail-closed). A fresh arbitrator, one that did not judge at light
+                    # tier, is not a disputant: its verdict decides (F-84-1).
                     answered = {r.provider for r in deep}
                     replies = deep + [
                         r
                         for r in replies
                         if r.verdict
                         and r.verdict.verdict == "request_changes"
+                        and r.provider in deep_chain
                         and r.provider not in answered
                     ]
         merged = _merge(replies, mode, truncated) if any(r.verdict for r in replies) else None

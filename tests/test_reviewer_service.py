@@ -320,6 +320,36 @@ def test_a_dissenter_whose_deep_run_fails_keeps_its_light_request_changes(tmp_pa
     assert set(outcome.verdict.providers) == {"agy", "codex"}
 
 
+def test_a_fresh_deep_arbitrator_decides_and_the_light_dissent_stays_named(tmp_path) -> None:
+    """F-84-1: when the arbitrator is a provider that did not judge at light tier, it is not a
+    disputant: its verdict decides, and the light request_changes it overrules is only named in
+    the summary, never carried into the merge."""
+    repo, ledger = _repo(tmp_path)
+    big = replace(PR, additions=900)
+    github = FakeGitHub(messages=["chore: plain"])
+    seen = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+        seen.append((provider, tier))
+        if provider == "agy" and tier == "light":
+            return fail(provider, tier)  # agy is unused at light tier, so it arbitrates fresh
+        return approve(provider, tier) if tier == "deep" else block(provider, tier)
+
+    outcome = review_pull(
+        big,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert ("agy", "deep") in seen and ("codex", "deep") not in seen
+    assert outcome.verdict.verdict == "approve"
+    assert "light: codex request_changes" in outcome.verdict.summary
+
+
 def test_a_failed_judge_walks_the_chain(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
     github = FakeGitHub(messages=["chore: plain"])
