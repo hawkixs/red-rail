@@ -244,3 +244,11 @@ def test_a_timer_unit_section_is_an_allow_list(line: str) -> None:
 )
 def test_a_root_group_is_refused(old: str, new: str, rule: str) -> None:
     assert any(rule in r for r in _declared(SERVICE.replace(old, new)))
+
+
+@pytest.mark.parametrize("groups", ["docker 00", "docker 6", "docker %g", "+0", "docker root"])
+def test_supplementary_groups_are_plain_names_never_root(groups: str) -> None:
+    """A numeric id such as `00` is GID 0 for systemd: only plain names other than root pass
+    (commit security review)."""
+    text = SERVICE.replace("SupplementaryGroups=docker", f"SupplementaryGroups={groups}")
+    assert any("SupplementaryGroups=" in r for r in _declared(text)), _declared(text)

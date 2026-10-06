@@ -106,10 +106,12 @@ def service_refusals(text: str, *, unit: str, current: str, declared: frozenset[
         for value in service.get("Group", [])
         if value in _ROOT_GROUPS or not _USERNAME.fullmatch(value)
     )
+    # a numeric id (`00` is GID 0 for systemd) or a specifier would slip past a name check
     refusals.extend(
-        f"{unit}: SupplementaryGroups= must not add the root group (got {value!r})"
+        f"{unit}: SupplementaryGroups= lists plain group names other than root only (got {word!r})"
         for value in _effective(service.get("SupplementaryGroups", []))
-        if _ROOT_GROUPS & set(value.split())
+        for word in value.split()
+        if word in _ROOT_GROUPS or not _USERNAME.fullmatch(word)
     )
     for value in service.get("RemainAfterExit", []):
         if value.lower() not in ("no", "false", "0", "off"):
