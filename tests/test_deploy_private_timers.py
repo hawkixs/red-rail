@@ -1,8 +1,20 @@
 """Target `private-timers` (spec 2026-10-06-private-timers-target). Documentation addresses only."""
 
-import pytest
+import json
+import subprocess
+from pathlib import Path
 
-from rail.deploy.private_timers import service_refusals, timer_refusals
+import pytest
+from click.testing import CliRunner
+
+from rail.cli import main
+from rail.deploy import Artefact, DeployError, LiveVersion
+from rail.deploy.flow import implementations, make_target
+from rail.deploy.private_timers import PrivateTimers, service_refusals, timer_refusals
+from rail.ledger import RECEIPTS_DIR, AttestationKind
+from rail.ledger.file import FileLedger
+from rail.model import DeployTarget, load_rail_config
+from tests.helpers import commit_all, conforming_tree, write_manifest
 
 CURRENT = "/opt/red-backup/current"
 
@@ -252,3 +264,281 @@ def test_supplementary_groups_are_plain_names_never_root(groups: str) -> None:
     (commit security review)."""
     text = SERVICE.replace("SupplementaryGroups=docker", f"SupplementaryGroups={groups}")
     assert any("SupplementaryGroups=" in r for r in _declared(text)), _declared(text)
+
+
+# -- the target ---------------------------------------------------------------------------
+
+BIND = "192.0.2.10"
+DIGEST = "sha256:" + "c" * 64
+IMAGE = f"ghcr.io/hawkixs/red-backup@{DIGEST}"
+UNITS = ("red-backup.service", "red-backup.timer", "red-backup-alert.service")
+
+
+def _timers_repo(tmp_path: Path, service_text: str = SERVICE) -> Path:
+    repo = conforming_tree(tmp_path, "red-backup", "prod")
+    write_manifest(
+        repo,
+        project="red-backup",
+        tier="prod",
+        gates={"deploy.ssh_host": ("private-1-deploy", "the host's ssh alias for the site")},
+    )
+    with (repo / "rail.yaml").open("a") as manifest:
+        manifest.write(
+            "deploy:\n  target: private-timers\n  site: private-1\n"
+            "  payload: /opt/red-backup\n  units:\n"
+            + "".join(f"    - deploy/systemd/{unit}\n" for unit in UNITS)
+            + "  version_command: [bin/python3, -m, backup, version, --json]\n"
+        )
+    directory = repo / "deploy" / "systemd"
+    directory.mkdir(parents=True)
+    for unit, text in zip(
+        UNITS,
+        (service_text, TIMER, SERVICE.replace("daily run", "alert")),
+        strict=True,
+    ):
+        (directory / unit).write_text(text)
+    commit_all(repo, "feat: the scheduled units")
+    return repo
+
+
+def _host(tmp_path: Path) -> Path:
+    path = tmp_path / "sites.yaml"
+    path.write_text(f'sites:\n  private-1:\n    address: "{BIND}"\n')
+    path.chmod(0o600)
+    return path
+
+
+def _artefact(repo: Path) -> Artefact:
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return Artefact(version="0.1.0", sha=head, digest=DIGEST, image=IMAGE)
+
+
+def _identity(artefact: Artefact) -> dict[str, str]:
+    return {
+        "project": "red-backup",
+        "version": artefact.version,
+        "git_sha": artefact.sha,
+        "image_digest": artefact.digest,
+    }
+
+
+class RecordingHost:
+    def __init__(self, identity: str = "", *, code: int = 0, error: Exception | None = None):
+        self.argv: list[list[str]] = []
+        self.scripts: list[str] = []
+        self.identity, self.code, self.error = identity, code, error
+
+    def __call__(self, args, **kwargs):
+        self.argv.append(list(args))
+        if args[0] == "ssh":
+            script = kwargs["input"]
+            self.scripts.append(script)
+            if "exec ./bin/python3" in script:
+                if self.error is not None:
+                    raise self.error
+                return subprocess.CompletedProcess(
+                    args, self.code, stdout=self.identity, stderr=f"cannot connect to {BIND}"
+                )
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.run(args, **kwargs)
+
+
+def _target(repo: Path, tmp_path: Path, *, run=None) -> PrivateTimers:
+    def no_http(url: str, timeout: float):
+        pytest.fail("private-timers must verify without HTTP")
+
+    return PrivateTimers(
+        repo,
+        load_rail_config(repo),
+        sites=_host(tmp_path),
+        run=run or RecordingHost(),
+        http=no_http,
+    )
+
+
+def _script(tmp_path: Path) -> str:
+    repo = _timers_repo(tmp_path / "repo")
+    return _target(repo, tmp_path).steps(_artefact(repo))[0].stdin or ""
+
+
+def test_the_remote_script_runs_the_spec_sequence_in_order(tmp_path: Path) -> None:
+    script = _script(tmp_path)
+    sequence = [
+        "flock -n 9",
+        "--property=ActiveState",
+        *(f"cat > {unit}" for unit in UNITS),
+        "cat > release.env",
+        f"docker pull --quiet {IMAGE}",
+        f"container=$(docker create {IMAGE} /bin/true)",
+        "docker cp",
+        'ln -sfn "$release" "$root/current"',
+        "sudo -n /usr/bin/systemctl daemon-reload",
+        "--property=FragmentPath",
+        "restart red-backup.timer",
+        "systemctl is-active red-backup.timer",
+        "--property=NextElapseUSecRealtime",
+    ]
+    indexes = [script.index(part) for part in sequence]
+    assert indexes == sorted(set(indexes))
+    for unit in UNITS:
+        assert script.index(f"--property=FragmentPath --value {unit}") < script.index(
+            "restart red-backup.timer"
+        )
+    assert '[ -n "$next" ] && [ "$next" != "n/a" ]' in script
+
+
+def test_a_running_unit_stops_the_script_before_any_change(tmp_path: Path) -> None:
+    script = _script(tmp_path)
+    first_write = script.index("cat >")
+    # a timer is always `active` (waiting): only the services it fires can be mid-run
+    assert "--value red-backup.timer)" not in script.split("cat >", 1)[0]
+    for unit in [u for u in UNITS if u.endswith(".service")]:
+        check = f"state=$(systemctl show --property=ActiveState --value {unit})"
+        start = script.index(check)
+        assert start < first_write
+        block = script[start:first_write].split("\nfi\n", 1)[0]
+        assert '[ "$state" = "active" ]' in block
+        assert '[ "$state" = "activating" ]' in block
+        assert f"{unit} is $state: a run is in progress" in block and "exit 1" in block
+
+
+def test_the_only_privileged_commands_are_daemon_reload_and_one_restart_per_timer(
+    tmp_path: Path,
+) -> None:
+    script = _script(tmp_path)
+    assert [line for line in script.splitlines() if "sudo" in line] == [
+        "sudo -n /usr/bin/systemctl daemon-reload",
+        "sudo -n /usr/bin/systemctl restart red-backup.timer",
+    ]
+    for unit in ("red-backup.service", "red-backup-alert.service"):
+        assert f"restart {unit}" not in script
+
+
+def test_a_redeploy_replaces_the_payload_by_rename(tmp_path: Path) -> None:
+    script = _script(tmp_path)
+    assert 'docker cp "$container:/opt/red-backup/." "$release/.app.new"' in script
+    assert 'docker cp "$container:/opt/red-backup/." "$release/app"' not in script
+    assert 'mv "$release/app" "$release/.app.old"' in script
+    assert 'mv "$release/.app.new" "$release/app"' in script
+    assert script.count('rm -rf "$release/.app.old"') == 2
+
+
+def test_the_container_is_removed_on_every_exit_path(tmp_path: Path) -> None:
+    script = _script(tmp_path)
+    trap = "trap 'docker rm --force \"$container\" >/dev/null 2>&1 || true' EXIT"
+    assert script.index(trap) < script.index("docker cp")
+
+
+def test_a_refused_unit_never_reaches_the_machine(tmp_path: Path) -> None:
+    repo = _timers_repo(tmp_path / "repo", SERVICE.replace("User=red-backup", "User=root"))
+    host = RecordingHost()
+    with pytest.raises(DeployError, match="red-backup.service.*User="):
+        _target(repo, tmp_path, run=host).steps(_artefact(repo))
+    assert not any(args[0] == "ssh" for args in host.argv)
+
+
+def test_the_deployment_is_verified_by_the_release_version_command(tmp_path: Path) -> None:
+    repo = _timers_repo(tmp_path / "repo")
+    artefact = _artefact(repo)
+    host = RecordingHost(json.dumps(_identity(artefact)))
+    target = _target(repo, tmp_path, run=host)
+    assert target.healthcheck is None and target.domain == "private-1"
+    assert target.services == ("red-backup.service", "red-backup-alert.service")
+    assert target.timers == ("red-backup.timer",)
+    assert target.apply(artefact) == LiveVersion(**_identity(artefact))
+    assert len(host.scripts) == 2
+    assert "cd /opt/red-backup/current/app" in host.scripts[1]
+    assert "exec ./bin/python3 -m backup version --json" in host.scripts[1]
+
+
+@pytest.mark.parametrize(
+    ("case", "problem"),
+    [
+        ("not json", "JSON"),
+        ("[]", "object"),
+        *(
+            (f"missing {field}", field)
+            for field in ("project", "version", "git_sha", "image_digest")
+        ),
+        ("bad version", "version"),
+        ("bad git_sha", "git_sha"),
+        ("bad image_digest", "image_digest"),
+    ],
+)
+def test_an_unreadable_identity_fails_the_verification(
+    tmp_path: Path, case: str, problem: str
+) -> None:
+    repo = _timers_repo(tmp_path / "repo")
+    artefact = _artefact(repo)
+    data = _identity(artefact)
+    if case.startswith("missing "):
+        del data[problem]
+    elif case.startswith("bad "):
+        data[problem] = BIND
+    answer = case if case in ("not json", "[]") else json.dumps(data)
+    with pytest.raises(DeployError, match=problem) as caught:
+        _target(repo, tmp_path, run=RecordingHost(answer)).apply(artefact)
+    assert BIND not in str(caught.value)
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "unavailable"])
+def test_a_failed_version_command_is_a_redacted_deploy_error(tmp_path: Path, failure: str) -> None:
+    repo = _timers_repo(tmp_path / "repo")
+    error = {
+        "exit": None,
+        "timeout": subprocess.TimeoutExpired("ssh", 900),
+        "unavailable": OSError(f"cannot connect to {BIND}"),
+    }[failure]
+    host = RecordingHost(code=1 if failure == "exit" else 0, error=error)
+    problem = {"exit": "exit 1", "timeout": "timed out", "unavailable": "ssh"}[failure]
+    with pytest.raises(DeployError, match=problem) as caught:
+        _target(repo, tmp_path, run=host).apply(_artefact(repo))
+    assert BIND not in str(caught.value)
+
+
+def test_the_flows_build_the_timers_target_from_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _timers_repo(tmp_path / "repo")
+    monkeypatch.setenv("RAIL_SITES_FILE", str(_host(tmp_path)))
+    assert isinstance(make_target(repo, load_rail_config(repo)), PrivateTimers)
+    assert set(implementations()) == set(DeployTarget)
+
+
+def test_plan_names_the_site_and_the_version_command(tmp_path: Path) -> None:
+    repo = _timers_repo(tmp_path / "repo")
+    artefact = _artefact(repo)
+    FileLedger(repo / RECEIPTS_DIR).attest(
+        "red-backup",
+        AttestationKind.RELEASED,
+        {
+            "version": artefact.version,
+            "sha": artefact.sha,
+            "digest": artefact.digest,
+            "image": artefact.image,
+            "tag": "v0.1.0",
+        },
+        issuer="op",
+        idempotency_key="released:0.1.0",
+    )
+    out = CliRunner().invoke(
+        main,
+        ["deploy", "--repo", str(repo), "--plan"],
+        env={"RAIL_SITES_FILE": str(_host(tmp_path))},
+    )
+    assert out.exit_code == 0, out.output
+    assert "on private-1" in out.output and "private-1-deploy" in out.output
+    assert "bin/python3 -m backup version --json" in out.output
+    assert "restart red-backup.timer" in out.output
+    assert "GET " not in out.output and BIND not in out.output
+
+
+def test_the_version_command_reads_the_release_environment(tmp_path: Path) -> None:
+    """Over ssh there is no `EnvironmentFile=`: the script loads `release.env` itself, so the
+    command answers the identity the units would see."""
+    repo = _timers_repo(tmp_path)
+    script = _target(repo, tmp_path).version_script()
+    load = "set -a; . /opt/red-backup/current/release.env; set +a"
+    assert load in script and script.index(load) < script.index("exec ./bin/python3")

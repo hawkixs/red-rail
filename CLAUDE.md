@@ -85,7 +85,10 @@ comments, test names. The conversation with the operator stays in French.
   and refused before the first ssh when it would run as root, unbounded or outside the
   release; systemd loads it through a link to `current`, and the script checks, before the
   restart, that it loaded that unit with no drop-in; two fixed sudo commands — spec
-  2026-09-24-private-systemd-target) and `flow.py` (forward / rollback / drill, the target
+  2026-09-24-private-systemd-target), `private_timers.py` (oneshot services and timers with a
+  payload directory copied out of the released image by digest, running units refused before
+  changes, only timers restarted, and identity verified by the release's version command over
+  ssh without HTTP) and `flow.py` (forward / rollback / drill, the target
   chosen from the manifest, and the attestation sequences they write — ADR-0004; each flow
   builds its remote scripts before its first side effect, so a refusal records nothing).
 - `src/rail/ledger/` — the `Ledger` protocol, `FileLedger` (`docs/receipts/*.json`, append-only,

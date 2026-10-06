@@ -42,12 +42,14 @@ def implementations() -> dict[DeployTarget, type]:
     """Every shape the rail can build, by the manifest value that names it."""
     from rail.deploy.private_compose import PrivateCompose
     from rail.deploy.private_systemd import PrivateSystemd
+    from rail.deploy.private_timers import PrivateTimers
     from rail.deploy.vps_traefik import VpsTraefik
 
     return {
         DeployTarget.VPS_TRAEFIK: VpsTraefik,
         DeployTarget.PRIVATE_COMPOSE: PrivateCompose,
         DeployTarget.PRIVATE_SYSTEMD: PrivateSystemd,
+        DeployTarget.PRIVATE_TIMERS: PrivateTimers,
     }
 
 

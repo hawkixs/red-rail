@@ -137,13 +137,16 @@ class RemoteTarget:
         site = cfg.deploy.site
         self.binding = SiteBinding.load(site, sites) if site is not None else None
         self.healthcheck = cfg.deploy.healthcheck
-        if self.binding is not None:
-            self.healthcheck = self.binding.fill(self.healthcheck)
-        # `Field(pattern=r"^https?://")` is match-at-start, so `https://` passes validation:
-        # the host is checked here, before the first ssh, not after the healthcheck timeout
-        self.domain = domain_of(self.healthcheck)
-        if self.binding is not None:
-            self.domain = self.binding.site  # what records and prompts name: never the address
+        if self.healthcheck is None:
+            self.domain = self.binding.site if self.binding else self.params.ssh_host
+        else:
+            if self.binding is not None:
+                self.healthcheck = self.binding.fill(self.healthcheck)
+            # `Field(pattern=r"^https?://")` is match-at-start, so `https://` passes validation:
+            # the host is checked here, before the first ssh, not after the healthcheck timeout
+            self.domain = domain_of(self.healthcheck)
+            if self.binding is not None:
+                self.domain = self.binding.site  # what records and prompts name: never the address
 
     # -- the seams ------------------------------------------------------------------------
 
