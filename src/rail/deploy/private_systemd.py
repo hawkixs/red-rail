@@ -223,7 +223,8 @@ def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> li
     if invisible_refusal is not None:
         return [invisible_refusal]
 
-    service = parse_unit(text).get("Service")
+    sections = parse_unit(text)
+    service = sections.get("Service")
     if service is None:
         return [f"{unit} has no [Service] section"]
 
@@ -296,7 +297,7 @@ def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> li
     for key in _UNIT_ACTIONS:
         refusals.extend(
             f"{unit}: {key}={value} makes systemd act on the host as root; only `none` is allowed"
-            for value in parse_unit(text).get("Unit", {}).get(key, [])
+            for value in sections.get("Unit", {}).get(key, [])
             if value != "none"
         )
 
