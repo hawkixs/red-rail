@@ -8,11 +8,11 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import IPv4Address, IPv6Address, ip_address
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from rail.deploy import DeployError
 from rail.model import ADDRESS_TOKEN, SITE_PATTERN
@@ -22,12 +22,30 @@ DEFAULT_SITES_FILE = "~/.config/red-rail/sites.yaml"
 SITES_FILE_VARIABLE = "RAIL_SITES_FILE"  # names the path; the environment never holds an address
 
 Address = IPv4Address | IPv6Address
+INTERFACE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$"
 
 
 class Site(BaseModel):
+    """`interface` is read only for the `brain` site (the tunnel its address must be routed
+    through); deploy targets ignore it."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     address: Address
+    interface: str | None = Field(default=None, pattern=INTERFACE_PATTERN)
+
+    @field_validator("interface", mode="before")
+    @classmethod
+    def _a_label_not_an_address(cls, value: object) -> object:
+        # an address typed by mistake would be printed by a route refusal; before the name
+        # pattern, so an IPv6 address gets this message too (independent review F-85-2)
+        if isinstance(value, str):
+            try:
+                ip_address(value)
+            except ValueError:
+                return value
+            raise ValueError("an interface is a label (such as wg0), not an address")
+        return value
 
     @field_validator("address", mode="before")
     @classmethod
@@ -80,9 +98,7 @@ def sites_file(environ: Mapping[str, str] | None = None) -> Path:
     return Path(env.get(SITES_FILE_VARIABLE) or DEFAULT_SITES_FILE).expanduser()
 
 
-def load_site(name: str, path: Path | None = None) -> Site:
-    """The site `name` from the host's private sites file. Every failure is a `DeployError`
-    naming the site, the file and the fix; the target calls this before any step is planned."""
+def _read_sites(name: str, path: Path | None) -> tuple[Path, SitesFile]:
     try:
         where = sites_file() if path is None else path
     except RuntimeError as exc:  # `~user` of an unknown user: a refusal, never a crash
@@ -104,9 +120,26 @@ def load_site(name: str, path: Path | None = None) -> Site:
             f"site {name}: {where} is not a valid sites file: not YAML ({type(exc).__name__}) "
             f"— {fix}"
         ) from exc
+    return where, document
+
+
+def declared_site(name: str, path: Path | None = None) -> Site | None:
+    """An absent declaration returns None; an untrusted file still raises `DeployError`, so
+    callers with a default never mistake a broken configuration for an absent site."""
+    _, document = _read_sites(name, path)
+    return document.sites.get(name)
+
+
+def load_site(name: str, path: Path | None = None) -> Site:
+    """The site `name` from the host's private sites file. Every failure is a `DeployError`
+    naming the site, the file and the fix; the target calls this before any step is planned."""
+    where, document = _read_sites(name, path)
     site = document.sites.get(name)
     if site is None:
         known = ", ".join(sorted(document.sites)) or "none"
+        fix = (
+            f'declare it on this host: `sites: {{{name}: {{address: "…"}}}}` in {where}, mode 0600'
+        )
         raise DeployError(f"site {name} is not declared in {where} (known: {known}) — {fix}")
     return site
 

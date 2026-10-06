@@ -100,9 +100,14 @@ comments, test names. The conversation with the operator stays in French.
   derives deterministic keys (`<kind>:<subject>[:<occurrence>]`); `brain_digest` recomputes
   brain's payload digest.
 - `src/rail/brain/` — `client.py` (one synchronous MCP call, stable refusal codes, the
-  `X-Brain-Agent` label sent per call = the record's issuer) and `settings.py` (loopback URL;
+  `X-Brain-Agent` label sent per call = the record's issuer) and `settings.py` (loopback by
+  default, or the host's `brain` site from `sites.yaml`, with its address never shown;
   the bearer is read from a private file only — `RAIL_BRAIN_TOKEN_FILE`, default
   `~/.config/red-rail/brain-token` — never from an environment variable holding the value).
+  A private `brain` site declares its tunnel's `interface`: the bearer travels as plain HTTP and
+  its confidentiality is the tunnel's, so the rail checks the kernel's route before every call
+  and binds the client's sockets to that interface (`SO_BINDTODEVICE`), ignores proxies and
+  never follows redirects.
 - `src/rail/contracts/` — brain-v42's published contracts vendored as data at the tag in
   `pins.py` (`delivery-attestations-v1.0`: 43 finding codes, the attestation API v1.0), frozen
   by `tests/test_boundary.py` (digests in CI, parity with the sibling checkout on the host).

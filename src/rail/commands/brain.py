@@ -27,13 +27,13 @@ def ping(repo: Path, agent: str) -> None:
     try:
         cfg = load_rail_config(repo)
         settings = BrainSettings.from_environment()
-        client = BrainClient.http(settings.url, token=settings.token, agent=agent)
+        client = BrainClient.from_settings(settings, agent=agent)
         page = client.call("brain_delivery_list", {"actor_project": cfg.project, "limit": 1})
     except (PrivateFileError, BrainUnreachable, BrainToolError, OSError, ValueError) as exc:
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc
     total = len(page.get("items", [])) + int(page.get("omitted_count", 0))
     click.echo(
-        f"brain-v42 reachable at {settings.url} as {agent}: "
+        f"brain-v42 reachable at {settings.shown} as {agent}: "
         f"{total} delivery view(s) for {cfg.project}"
     )

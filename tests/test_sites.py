@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from rail.deploy import DeployError
+from rail.deploy import sites as host_sites
 from rail.deploy.sites import SiteBinding, load_site, redact_address, sites_file, substitute_address
 
 V4 = "192.0.2.10"  # RFC 5737 and RFC 3849: documentation addresses only
@@ -22,6 +23,73 @@ def _sites(tmp_path: Path, text: str, mode: int = 0o600) -> Path:
 def test_a_private_file_gives_the_site_its_address(tmp_path: Path) -> None:
     path = _sites(tmp_path, f"sites:\n  private-1:\n    address: {V4}\n")
     assert str(load_site("private-1", path).address) == V4
+    assert load_site("private-1", path).interface is None
+
+
+@pytest.mark.parametrize("interface", ["a", "wg0", "wg-tunnel.1", "wg_private", "a" * 15])
+def test_a_site_accepts_a_linux_interface_name(tmp_path: Path, interface: str) -> None:
+    path = _sites(
+        tmp_path, f'sites:\n  private-1:\n    address: "{V4}"\n    interface: "{interface}"\n'
+    )
+    assert load_site("private-1", path).interface == interface
+    binding = SiteBinding.load("private-1", path)
+    assert binding.fill("http://${BIND_ADDRESS}:9100/health") == f"http://{V4}:9100/health"
+
+
+@pytest.mark.parametrize("interface", [V4, ".".join(["10", "0", "0", "8"])])
+def test_an_address_used_as_an_interface_is_refused_without_echoing_it(
+    tmp_path: Path, interface: str
+) -> None:
+    path = _sites(
+        tmp_path, f'sites:\n  brain:\n    address: "{V6}"\n    interface: "{interface}"\n'
+    )
+    with pytest.raises(DeployError, match="interface.*label") as caught:
+        load_site("brain", path)
+    assert interface not in str(caught.value)
+    assert V6 not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "interface", ["", ".", "..", "a" * 16, "wg/0", "wg 0", "wg\\t0", "wg\\n0", "-wg0", "éth0"]
+)
+def test_an_invalid_interface_is_refused_without_the_site_address(
+    tmp_path: Path, interface: str
+) -> None:
+    path = _sites(
+        tmp_path, f'sites:\n  brain:\n    address: "{V4}"\n    interface: "{interface}"\n'
+    )
+    with pytest.raises(DeployError, match="interface") as caught:
+        load_site("brain", path)
+    assert V4 not in str(caught.value)
+
+
+def test_a_declared_site_can_be_distinguished_from_an_absent_one(tmp_path: Path) -> None:
+    path = _sites(tmp_path, f"sites:\n  brain:\n    address: {V4}\n")
+    site = host_sites.declared_site("brain", path)
+    assert site is not None and str(site.address) == V4
+    assert host_sites.declared_site("other", path) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "mode"),
+    [
+        (f"sites:\n  brain:\n    address: {V4}\n", 0o644),
+        (f'sites:\n  brain:\n    address: "{V4}/24"\n', 0o600),
+        (f'sites:\n  brain:\n    address: "{V4}"\n    broken: [\n', 0o600),
+    ],
+)
+def test_a_declared_site_lookup_still_refuses_an_untrusted_file(
+    tmp_path: Path, text: str, mode: int
+) -> None:
+    path = _sites(tmp_path, text, mode)
+    with pytest.raises(DeployError, match="site brain") as caught:
+        host_sites.declared_site("brain", path)
+    assert V4 not in str(caught.value)
+
+
+def test_a_declared_site_lookup_refuses_a_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(DeployError, match="site brain"):
+        host_sites.declared_site("brain", tmp_path / "absent.yaml")
 
 
 def test_an_ipv6_address_is_accepted(tmp_path: Path) -> None:
@@ -192,3 +260,13 @@ def test_a_binding_fills_urls_and_redacts_with_the_site_name(tmp_path: Path) -> 
     binding = SiteBinding.load("private-1", path)
     assert binding.fill("http://${BIND_ADDRESS}:9100/health") == f"http://{V4}:9100/health"
     assert binding.redact(f"connect to host {V4} port 22") == "connect to host private-1 port 22"
+
+
+def test_an_ipv6_address_used_as_an_interface_is_refused_without_echoing_it(
+    tmp_path: Path,
+) -> None:
+    """Independent review F-85-2: the address check runs before the name pattern."""
+    path = _sites(tmp_path, f'sites:\n  brain:\n    address: "{V6}"\n    interface: "{V6}"\n')
+    with pytest.raises(DeployError, match="interface.*label") as caught:
+        load_site("brain", path)
+    assert V6 not in str(caught.value)
