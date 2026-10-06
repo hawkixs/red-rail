@@ -105,16 +105,18 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
      `+`, `!` or `!!` prefix and no `PermissionsStartOnly=`; no quoting, backslash or `;` that
      would make systemd read another command; no invisible character; `RemainAfterExit=`
      absent or false (a oneshot left `active` is never fired again by its timer, and would
-     block every later deployment); no `AmbientCapabilities=`; in `[Unit]`, `OnFailure=` and
-     `OnSuccess=` name only declared units, and `FailureAction=`, `SuccessAction=`,
-     `StartLimitAction=` and `JobTimeoutAction=` are absent or `none` (PID 1 performs them as
-     root).
+     block every later deployment); no `AmbientCapabilities=`; `Group=` and `SupplementaryGroups=` never root;
+     `[Unit]` is an allow-list: ordering and documentation (`Description=`, `Documentation=`,
+     `After=`, `Before=`), `Wants=`/`Requires=` naming declared units or the host units a run
+     needs (`docker.service`, `network.target`, `network-online.target`), `OnFailure=`/
+     `OnSuccess=` naming declared units, the start limits, and `FailureAction=`,
+     `SuccessAction=`, `StartLimitAction=`, `JobTimeoutAction=` set to `none` (PID 1 performs
+     them as root). Any other key, an alias systemd still reads included, is refused.
    - A timer: a `[Timer]` section with at least one trigger (`OnCalendar=`, `OnBootSec=`,
      `OnUnitActiveSec=`, `OnUnitInactiveSec=`, `OnActiveSec=`, `OnStartupSec=`); no `Unit=` key,
-     so the timer triggers the service of the same name; that service is declared; no key in
-     `[Unit]` that starts, stops or acts on another unit (`Wants=`, `Requires=`, `Requisite=`,
-     `BindsTo=`, `PartOf=`, `Upholds=`, `Conflicts=`, `OnFailure=`, `OnSuccess=` and the
-     propagation keys), since the rail restarts every timer through sudo; no invisible
+     so the timer triggers the service of the same name; that service is declared; `[Unit]` accepts ordering and
+     documentation only (`Description=`, `Documentation=`, `After=`, `Before=`), since the rail
+     restarts every timer through sudo and any dependency would act on the host; no invisible
      character.
    - `deploy.units` declares at least one timer.
 

@@ -200,3 +200,47 @@ def test_a_timer_pulls_no_other_unit(line: str) -> None:
     text = TIMER.replace("Description=ReD Backup - daily run at 03:02", f"Description=x\n{line}")
     refusals = timer_refusals(text, unit="red-backup.timer", declared=DECLARED)
     assert any(line.split("=")[0] + "=" in r for r in refusals), refusals
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "BindTo=reboot.target",  # a legacy alias systemd still reads as BindsTo=
+        "Wants=reboot.target",
+        "Requires=other.service",
+        "PropagatesStopTo=other.service",
+        "JoinsNamespaceOf=other.service",
+        "RequiresMountsFor=/",
+    ],
+)
+def test_a_service_unit_section_is_an_allow_list(line: str) -> None:
+    """An unknown or aliased [Unit] key is refused, never assumed harmless (commit security
+    review): only ordering, documentation, the host units a run depends on and the release's
+    own units are accepted."""
+    text = SERVICE.replace(
+        "Description=ReD Backup - daily run", f"Description=ReD Backup - daily run\n{line}"
+    )
+    assert any(line.split("=")[0] + "=" in r for r in _declared(text)), _declared(text)
+
+
+@pytest.mark.parametrize(
+    "line", ["BindTo=reboot.target", "Before=reboot.target", "Description=x\nUpholds=y.service"]
+)
+def test_a_timer_unit_section_is_an_allow_list(line: str) -> None:
+    text = TIMER.replace("Description=ReD Backup - daily run at 03:02", f"Description=x\n{line}")
+    if line.startswith("Before="):
+        assert timer_refusals(text, unit="red-backup.timer", declared=DECLARED) == []
+    else:
+        assert timer_refusals(text, unit="red-backup.timer", declared=DECLARED)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "rule"),
+    [
+        ("User=red-backup", "User=red-backup\nGroup=root", "Group="),
+        ("User=red-backup", "User=red-backup\nGroup=0", "Group="),
+        ("SupplementaryGroups=docker", "SupplementaryGroups=docker root", "SupplementaryGroups="),
+    ],
+)
+def test_a_root_group_is_refused(old: str, new: str, rule: str) -> None:
+    assert any(rule in r for r in _declared(SERVICE.replace(old, new)))

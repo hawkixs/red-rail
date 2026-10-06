@@ -43,27 +43,22 @@ TIMER_TRIGGERS = (
 )
 
 
-# [Unit] keys that make systemd start, stop or act on another unit. A service may name only
-# units the release delivers in `OnFailure=`/`OnSuccess=`; a timer names none at all, since the
-# rail restarts every timer through sudo and would pull them in at deployment.
-_PULLS = (
-    "Wants",
-    "Requires",
-    "Requisite",
-    "BindsTo",
-    "PartOf",
-    "Upholds",
-    "Conflicts",
-    "OnFailure",
-    "OnSuccess",
-    "PropagatesReloadTo",
-    "ReloadPropagatedFrom",
-    "PropagatesStopTo",
-    "StopPropagatedFrom",
-)
+# `[Unit]` is an ALLOW-list, like every other rule here: an unknown key, or an alias systemd
+# still reads (`BindTo=` for `BindsTo=`), is refused rather than assumed harmless (commit
+# security review). Ordering and documentation are always accepted.
+_ORDERING = ("Description", "Documentation", "After", "Before")
+# A service may depend on the release's own units and on these host units only: what a run
+# needs (the Docker daemon for `docker exec` dumps, the network for remote sources).
+HOST_UNITS = frozenset({"docker.service", "network.target", "network-online.target"})
+_SERVICE_DEPENDS = ("Wants", "Requires")
 _RUNS_DECLARED = ("OnFailure", "OnSuccess")
 # PID 1 performs these as root: anything but `none` reboots, powers off or exits the host.
 _ACTIONS = ("FailureAction", "SuccessAction", "StartLimitAction", "JobTimeoutAction")
+_START_LIMITS = ("StartLimitIntervalSec", "StartLimitBurst")
+_SERVICE_UNIT_KEYS = frozenset(
+    (*_ORDERING, *_SERVICE_DEPENDS, *_RUNS_DECLARED, *_ACTIONS, *_START_LIMITS)
+)
+_ROOT_GROUPS = frozenset({"root", "0"})
 
 
 def _unit_names(values: list[str]) -> list[str]:
@@ -82,6 +77,18 @@ def service_refusals(text: str, *, unit: str, current: str, declared: frozenset[
 
     refusals: list[str] = []
     section = parse_unit(text).get("Unit", {})
+    refusals.extend(
+        f"{unit}: {key}= is not a key this target accepts in [Unit]"
+        for key in section
+        if key not in _SERVICE_UNIT_KEYS
+    )
+    for key in _SERVICE_DEPENDS:
+        refusals.extend(
+            f"{unit}: {key}={name} names a unit that is neither delivered by this release nor "
+            f"one of {', '.join(sorted(HOST_UNITS))}"
+            for name in _unit_names(section.get(key, []))
+            if name not in declared and name not in HOST_UNITS
+        )
     for key in _RUNS_DECLARED:
         refusals.extend(
             f"{unit}: {key}={name} names a unit this release does not deliver"
@@ -94,6 +101,16 @@ def service_refusals(text: str, *, unit: str, current: str, declared: frozenset[
             for value in section.get(key, [])
             if value != "none"
         )
+    refusals.extend(
+        f"{unit}: Group={value} must be a plain group other than root (got {value!r})"
+        for value in service.get("Group", [])
+        if value in _ROOT_GROUPS or not _USERNAME.fullmatch(value)
+    )
+    refusals.extend(
+        f"{unit}: SupplementaryGroups= must not add the root group (got {value!r})"
+        for value in _effective(service.get("SupplementaryGroups", []))
+        if _ROOT_GROUPS & set(value.split())
+    )
     for value in service.get("RemainAfterExit", []):
         if value.lower() not in ("no", "false", "0", "off"):
             refusals.append(
@@ -176,9 +193,10 @@ def timer_refusals(text: str, *, unit: str, declared: frozenset[str]) -> list[st
     refusals: list[str] = []
     section = parse_unit(text).get("Unit", {})
     refusals.extend(
-        f"{unit}: {key}= pulls in another unit when the rail restarts this timer"
-        for key in _PULLS
-        if key in section
+        f"{unit}: {key}= is not accepted in a timer's [Unit]: the rail restarts every timer "
+        "through sudo, so anything but ordering and documentation would act on the host"
+        for key in section
+        if key not in _ORDERING
     )
     if not any(_effective(timer.get(key, [])) for key in TIMER_TRIGGERS):
         refusals.append(f"{unit}: at least one timer trigger must have a non-empty value")
