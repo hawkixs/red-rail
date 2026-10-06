@@ -112,3 +112,21 @@ def test_each_timer_rule_refuses_and_says_which(old: str, new: str, rule: str) -
 
 def test_an_invisible_character_is_refused_alone() -> None:
     assert len(_service(SERVICE.replace("User=red-backup", "User=red​-backup"))) == 1
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        "/opt/red-backup/current/app/../../../../bin/sh",
+        "/opt/red-backup/current/app/./../release.env",
+        "/opt/red-backup/current/app//bin/python3",
+        "/opt/red-backup/current/app/",
+    ],
+)
+def test_a_program_that_leaves_the_payload_by_its_path_is_refused(program: str) -> None:
+    """A prefix test alone admits `app/../..`: systemd runs what the path resolves to (commit
+    security review). The program must be a normalised path strictly inside the payload."""
+    text = SERVICE.replace(
+        "ExecStart=/opt/red-backup/current/app/bin/python3", f"ExecStart={program}", 1
+    )
+    assert any("ExecStart" in r for r in _service(text)), _service(text)

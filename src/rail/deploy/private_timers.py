@@ -4,6 +4,8 @@ The unit syntax is deliberately read through `private_systemd`'s small parser an
 Values the rail cannot establish as safe are refused before any remote operation.
 """
 
+import posixpath
+
 from rail.deploy.private_systemd import (
     _COMMAND_KEYS,
     _DURATION,
@@ -18,6 +20,18 @@ from rail.deploy.private_systemd import (
     _words,
     parse_unit,
 )
+
+
+def _inside(program: str, directory: str) -> bool:
+    """A prefix test alone admits `<app>/../..`, and systemd runs what the path resolves to
+    (commit security review): the program must already be normalised and strictly below the
+    payload directory."""
+    return (
+        program.startswith(directory)
+        and posixpath.normpath(program) == program
+        and len(program) > len(directory)
+    )
+
 
 TIMER_TRIGGERS = (
     "OnCalendar",
@@ -88,7 +102,7 @@ def service_refusals(text: str, *, unit: str, current: str) -> list[str]:
             if _PRIVILEGED & set(_prefix(value)):
                 refusals.append(f"{unit}: {key}={value} runs with full privileges (prefix + or !)")
                 continue
-            if not _program(value).startswith(app):
+            if not _inside(_program(value), app):
                 refusals.append(f"{unit}: {key} must run a program under {app} (got {value!r})")
 
     environment = f"{current}/release.env"
