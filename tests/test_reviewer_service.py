@@ -233,11 +233,121 @@ def test_deep_review_escalates_on_disagreement_and_the_deep_judge_wins(tmp_path:
         run_judge=run_judge,
         root=tmp_path,
     )
-    # unknown producer → claude excluded; the deep judge falls back to the head of the chain
-    assert seen == [("agy", "light"), ("codex", "light"), ("agy", "deep")]
+    # unknown producer → claude excluded; no provider is left unused, so the arbitration is
+    # every provider of the chain at deep tier, never one of the two disputants alone (4cdeaed9)
+    assert seen == [("agy", "light"), ("codex", "light"), ("agy", "deep"), ("codex", "deep")]
     assert outcome.verdict.verdict == "request_changes" and outcome.verdict.mode == "deep"
     assert ("complete", 99, "failure", "request_changes") in github.calls
     assert ("review", 7, "REQUEST_CHANGES") in github.calls
+
+
+def test_a_dissent_is_never_arbitrated_by_one_disputant_alone(tmp_path: Path) -> None:
+    """Ticket 4cdeaed9, measured on red-rail#80: agy approved and codex blocked at light tier;
+    the deep arbitration fell back to agy alone and codex's blocker vanished from the verdict,
+    the check and the attestation. Both providers now judge at deep tier, a request_changes
+    from either holds, and the light verdicts that led there stay in the summary."""
+    repo, ledger = _repo(tmp_path)
+    big = replace(PR, additions=900)
+    github = FakeGitHub(messages=["chore: plain"])
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+        return approve(provider, tier) if provider == "agy" else block(provider, tier)
+
+    outcome = review_pull(
+        big,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    verdict = outcome.verdict
+    assert verdict.verdict == "request_changes"
+    assert set(verdict.providers) == {"agy", "codex"}
+    assert "light: agy approve, codex request_changes" in verdict.summary
+
+
+def test_an_agreeing_deep_arbitration_still_records_the_light_dissent(tmp_path: Path) -> None:
+    repo, ledger = _repo(tmp_path)
+    big = replace(PR, additions=900)
+    github = FakeGitHub(messages=["chore: plain"])
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+        if tier == "deep":
+            return approve(provider, tier)
+        return approve(provider, tier) if provider == "agy" else block(provider, tier)
+
+    outcome = review_pull(
+        big,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert outcome.verdict.verdict == "approve"
+    assert set(outcome.verdict.providers) == {"agy", "codex"}
+    assert "light: agy approve, codex request_changes" in outcome.verdict.summary
+
+
+def test_a_dissenter_whose_deep_run_fails_keeps_its_light_request_changes(tmp_path) -> None:
+    """If the dissenting provider's deep run fails, the other disputant must not decide alone:
+    the dissenter's light request_changes joins the merge (fail-closed)."""
+    repo, ledger = _repo(tmp_path)
+    big = replace(PR, additions=900)
+    github = FakeGitHub(messages=["chore: plain"])
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+        if provider == "codex":
+            return fail(provider, tier) if tier == "deep" else block(provider, tier)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        big,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert outcome.verdict.verdict == "request_changes"
+    assert set(outcome.verdict.providers) == {"agy", "codex"}
+
+
+def test_a_fresh_deep_arbitrator_decides_and_the_light_dissent_stays_named(tmp_path) -> None:
+    """F-84-1: when the arbitrator is a provider that did not judge at light tier, it is not a
+    disputant: its verdict decides, and the light request_changes it overrules is only named in
+    the summary, never carried into the merge."""
+    repo, ledger = _repo(tmp_path)
+    big = replace(PR, additions=900)
+    github = FakeGitHub(messages=["chore: plain"])
+    seen = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+        seen.append((provider, tier))
+        if provider == "agy" and tier == "light":
+            return fail(provider, tier)  # agy is unused at light tier, so it arbitrates fresh
+        return approve(provider, tier) if tier == "deep" else block(provider, tier)
+
+    outcome = review_pull(
+        big,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert ("agy", "deep") in seen and ("codex", "deep") not in seen
+    assert outcome.verdict.verdict == "approve"
+    assert "light: codex request_changes" in outcome.verdict.summary
 
 
 def test_a_failed_judge_walks_the_chain(tmp_path: Path) -> None:
