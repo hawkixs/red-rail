@@ -10,7 +10,13 @@ from click.testing import CliRunner
 from rail.cli import main
 from rail.deploy import Artefact, DeployError, LiveVersion
 from rail.deploy.flow import implementations, make_target
-from rail.deploy.private_timers import PrivateTimers, service_refusals, timer_refusals
+from rail.deploy.private_timers import (
+    IDENTITY_FILE,
+    IDENTITY_MARKER,
+    PrivateTimers,
+    service_refusals,
+    timer_refusals,
+)
 from rail.ledger import RECEIPTS_DIR, AttestationKind
 from rail.ledger.file import FileLedger
 from rail.model import DeployTarget, load_rail_config
@@ -287,7 +293,6 @@ def _timers_repo(tmp_path: Path, service_text: str = SERVICE) -> Path:
             "deploy:\n  target: private-timers\n  site: private-1\n"
             "  payload: /opt/red-backup\n  units:\n"
             + "".join(f"    - deploy/systemd/{unit}\n" for unit in UNITS)
-            + "  version_command: [bin/python3, -m, backup, version, --json]\n"
         )
     directory = repo / "deploy" / "systemd"
     directory.mkdir(parents=True)
@@ -324,6 +329,17 @@ def _identity(artefact: Artefact) -> dict[str, str]:
     }
 
 
+def _answer(identity: dict[str, str] | str, digest: str | None = DIGEST) -> str:
+    """What the identity script prints: the payload's identity file, the marker, release.env."""
+    body = (
+        identity
+        if isinstance(identity, str)
+        else json.dumps({k: v for k, v in identity.items() if k != "image_digest"})
+    )
+    env = "VERSION=0.1.0\n" + (f"IMAGE_DIGEST={digest}\n" if digest is not None else "")
+    return f"{body}\n{IDENTITY_MARKER}\n{env}"
+
+
 class RecordingHost:
     def __init__(self, identity: str = "", *, code: int = 0, error: Exception | None = None):
         self.argv: list[list[str]] = []
@@ -335,7 +351,7 @@ class RecordingHost:
         if args[0] == "ssh":
             script = kwargs["input"]
             self.scripts.append(script)
-            if "exec ./bin/python3" in script:
+            if IDENTITY_FILE in script:
                 if self.error is not None:
                     raise self.error
                 return subprocess.CompletedProcess(
@@ -439,18 +455,21 @@ def test_a_refused_unit_never_reaches_the_machine(tmp_path: Path) -> None:
     assert not any(args[0] == "ssh" for args in host.argv)
 
 
-def test_the_deployment_is_verified_by_the_release_version_command(tmp_path: Path) -> None:
+def test_the_deployment_is_verified_by_reading_the_release_identity(tmp_path: Path) -> None:
+    """Nothing of the release runs outside its units (operator decision 2026-10-06): the rail
+    reads the payload's identity file and the release.env it wrote, and compares."""
     repo = _timers_repo(tmp_path / "repo")
     artefact = _artefact(repo)
-    host = RecordingHost(json.dumps(_identity(artefact)))
+    host = RecordingHost(_answer(_identity(artefact)))
     target = _target(repo, tmp_path, run=host)
     assert target.healthcheck is None and target.domain == "private-1"
     assert target.services == ("red-backup.service", "red-backup-alert.service")
     assert target.timers == ("red-backup.timer",)
     assert target.apply(artefact) == LiveVersion(**_identity(artefact))
     assert len(host.scripts) == 2
-    assert "cd /opt/red-backup/current/app" in host.scripts[1]
-    assert "exec ./bin/python3 -m backup version --json" in host.scripts[1]
+    reading = host.scripts[1]
+    assert f"/opt/red-backup/current/app/{IDENTITY_FILE}" in reading
+    assert "exec" not in reading and "python" not in reading and ". " not in reading
 
 
 @pytest.mark.parametrize(
@@ -458,13 +477,13 @@ def test_the_deployment_is_verified_by_the_release_version_command(tmp_path: Pat
     [
         ("not json", "JSON"),
         ("[]", "object"),
-        *(
-            (f"missing {field}", field)
-            for field in ("project", "version", "git_sha", "image_digest")
-        ),
+        *((f"missing {field}", field) for field in ("project", "version", "git_sha")),
+        ("bad project", "project"),
         ("bad version", "version"),
         ("bad git_sha", "git_sha"),
         ("bad image_digest", "image_digest"),
+        ("no image_digest", "IMAGE_DIGEST"),
+        ("no marker", "release.env"),
     ],
 )
 def test_an_unreadable_identity_fails_the_verification(
@@ -473,18 +492,28 @@ def test_an_unreadable_identity_fails_the_verification(
     repo = _timers_repo(tmp_path / "repo")
     artefact = _artefact(repo)
     data = _identity(artefact)
+    digest: str | None = DIGEST
     if case.startswith("missing "):
         del data[problem]
+    elif case == "bad image_digest":
+        digest = "sha256:" + "d" * 64
     elif case.startswith("bad "):
         data[problem] = BIND
-    answer = case if case in ("not json", "[]") else json.dumps(data)
+    elif case == "no image_digest":
+        digest = None
+    if case in ("not json", "[]"):
+        answer = _answer(case)
+    elif case == "no marker":
+        answer = json.dumps(data)
+    else:
+        answer = _answer(data, digest)
     with pytest.raises(DeployError, match=problem) as caught:
         _target(repo, tmp_path, run=RecordingHost(answer)).apply(artefact)
     assert BIND not in str(caught.value)
 
 
 @pytest.mark.parametrize("failure", ["exit", "timeout", "unavailable"])
-def test_a_failed_version_command_is_a_redacted_deploy_error(tmp_path: Path, failure: str) -> None:
+def test_a_failed_identity_read_is_a_redacted_deploy_error(tmp_path: Path, failure: str) -> None:
     repo = _timers_repo(tmp_path / "repo")
     error = {
         "exit": None,
@@ -507,7 +536,7 @@ def test_the_flows_build_the_timers_target_from_the_manifest(
     assert set(implementations()) == set(DeployTarget)
 
 
-def test_plan_names_the_site_and_the_version_command(tmp_path: Path) -> None:
+def test_plan_names_the_site_and_the_identity_read(tmp_path: Path) -> None:
     repo = _timers_repo(tmp_path / "repo")
     artefact = _artefact(repo)
     FileLedger(repo / RECEIPTS_DIR).attest(
@@ -530,18 +559,9 @@ def test_plan_names_the_site_and_the_version_command(tmp_path: Path) -> None:
     )
     assert out.exit_code == 0, out.output
     assert "on private-1" in out.output and "private-1-deploy" in out.output
-    assert "bin/python3 -m backup version --json" in out.output
+    assert IDENTITY_FILE in out.output
     assert "restart red-backup.timer" in out.output
     assert "GET " not in out.output and BIND not in out.output
-
-
-def test_the_version_command_reads_the_release_environment(tmp_path: Path) -> None:
-    """Over ssh there is no `EnvironmentFile=`: the script loads `release.env` itself, so the
-    command answers the identity the units would see."""
-    repo = _timers_repo(tmp_path)
-    script = _target(repo, tmp_path).version_script()
-    load = "set -a; . /opt/red-backup/current/release.env; set +a"
-    assert load in script and script.index(load) < script.index("exec ./bin/python3")
 
 
 @pytest.mark.parametrize(
@@ -574,7 +594,82 @@ def test_the_project_credentials_and_the_journal_are_accepted() -> None:
         "NoNewPrivileges=yes\nLoadCredential=webhook:/etc/red-backup/discord-webhook\n"
         "SetCredential=webhook:\nStandardOutput=journal\nStandardError=journal\n"
         "SyslogIdentifier=red-backup\nUMask=0077\nPrivateTmp=yes\nPrivateDevices=yes\n"
-        "ProtectHome=tmpfs\nReadWritePaths=/data/backups\nBindReadOnlyPaths=/etc/red-backup\n"
+        "ProtectHome=tmpfs\nReadWritePaths=/data/backups\n"
         "WorkingDirectory=/opt/red-backup/current/app\nEnvironment=PATH=/usr/bin:/bin",
     )
     assert _declared(text) == []
+
+
+@pytest.mark.parametrize(
+    ("line", "rule"),
+    [
+        ("StateDirectory=docker", "StateDirectory="),
+        ("LogsDirectory=journal", "LogsDirectory="),
+        ("RuntimeDirectory=red-backup/../docker", "RuntimeDirectory="),
+        ("CacheDirectory=other", "CacheDirectory="),
+        ("EnvironmentFile=/etc/other/secrets", "EnvironmentFile="),
+        ("EnvironmentFile=-/etc/red-backup/extra", "EnvironmentFile="),
+        ("KillMode=process", "KillMode="),
+        ("KillMode=none", "KillMode="),
+        ("BindPaths=/etc", "BindPaths="),
+        ("BindReadOnlyPaths=/root", "BindReadOnlyPaths="),
+        ("TemporaryFileSystem=/etc", "TemporaryFileSystem="),
+        ("Group=disk", "Group="),
+        ("SupplementaryGroups=shadow", "SupplementaryGroups="),
+        ("SupplementaryGroups=docker sudo", "SupplementaryGroups="),
+    ],
+)
+def test_final_review_findings_are_refused(line: str, rule: str) -> None:
+    """Final review of the branch: systemd acts as root on these values (directories it owns
+    or chowns, environment files it reads, mounts it builds), a kill mode lets a run outlive
+    its bound, and privileged groups are not a decision the spec took."""
+    text = SERVICE.replace("NoNewPrivileges=yes", f"NoNewPrivileges=yes\n{line}")
+    assert any(rule in r for r in _declared(text)), _declared(text)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "StateDirectory=red-backup",
+        "LogsDirectory=red-backup/runs",
+        "RuntimeDirectory=red-backup-pitr",
+        "EnvironmentFile=/etc/red-backup/extra.env",
+        "KillMode=mixed",
+        "Group=red-backup",
+    ],
+)
+def test_project_owned_values_are_accepted(line: str) -> None:
+    text = SERVICE.replace("NoNewPrivileges=yes", f"NoNewPrivileges=yes\n{line}")
+    assert _declared(text) == []
+
+
+def test_no_new_privileges_is_required() -> None:
+    refusals = _declared(SERVICE.replace("NoNewPrivileges=yes\n", ""))
+    assert any("NoNewPrivileges=" in r for r in refusals), refusals
+
+
+def test_install_sections_are_bounded() -> None:
+    service = SERVICE + "\n[Install]\nWantedBy=multi-user.target\n"
+    assert any("[Install]" in r for r in _declared(service))
+    timer_ok = timer_refusals(TIMER, unit="red-backup.timer", declared=DECLARED)
+    assert timer_ok == []
+    timer_bad = TIMER.replace("WantedBy=timers.target", "WantedBy=timers.target\nAlso=x.service")
+    assert any(
+        "[Install]" in r
+        for r in timer_refusals(timer_bad, unit="red-backup.timer", declared=DECLARED)
+    )
+    timer_alias = TIMER.replace("WantedBy=timers.target", "WantedBy=multi-user.target")
+    assert any(
+        "[Install]" in r
+        for r in timer_refusals(timer_alias, unit="red-backup.timer", declared=DECLARED)
+    )
+
+
+def test_the_services_are_checked_again_just_before_current_moves(tmp_path: Path) -> None:
+    """A timer may fire during the pull: the running check is repeated right before the
+    switch, so the window is milliseconds, not the length of a pull."""
+    script = _script(tmp_path)
+    switch = script.index('ln -sfn "$release" "$root/current"')
+    check = "state=$(systemctl show --property=ActiveState --value red-backup.service)"
+    assert script.count(check) == 2
+    assert script.index("docker cp") < script.rindex(check) < switch

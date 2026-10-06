@@ -117,8 +117,8 @@ class NewProject:
             data["deploy_target"] = self.deploy_target
             if self.deploy_target == DeployTarget.PRIVATE_TIMERS:
                 raise ScaffoldError(
-                    "target private-timers is written by hand: rail.yaml needs deploy.payload, "
-                    "deploy.units and deploy.version_command, which only the project knows "
+                    "target private-timers is written by hand: rail.yaml needs deploy.payload "
+                    "and deploy.units, which only the project knows "
                     "(spec 2026-10-06-private-timers-target)"
                 )
             if self.deploy_target == DeployTarget.PRIVATE_SYSTEMD:

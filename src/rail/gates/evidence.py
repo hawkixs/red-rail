@@ -269,7 +269,11 @@ def visible(repo: Path) -> GateResult:
         and shape.target is DeployTarget.PRIVATE_TIMERS
         and shape.units is not None
     ):
-        return _timers_visible(view, agent, shape.units, deploy.recorded_at)
+        # measured from the newest delivery: a drill's rollback and roll-forward re-apply
+        # releases already proven (final review of the private-timers branch)
+        delivery = _newest_release_deploy(repo)
+        since = delivery.recorded_at if isinstance(delivery, Record) else deploy.recorded_at
+        return _timers_visible(view, agent, shape.units, since)
     running = [c for c in monitor.stack_containers(view, project) if c.state == "running"]
     if not running:
         return GateResult(

@@ -56,7 +56,7 @@ deploy_target:
     {% if deploy_target == 'private-systemd' %}
     private-systemd is written by hand: rail.yaml needs deploy.unit and deploy.binary
     {% elif deploy_target == 'private-timers' %}
-    private-timers is written by hand: rail.yaml needs deploy.payload, deploy.units and deploy.version_command
+    private-timers is written by hand: rail.yaml needs deploy.payload and deploy.units
     {% endif %}
 healthcheck:
   type: str

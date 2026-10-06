@@ -17,8 +17,8 @@ never in the repository: `~/.config/red-rail/sites.yaml`, mode 0600, holding
 `rail deploy --plan` stops before printing a step, naming the site and the file. In
 `rail.yaml`, `deploy.site: <site>` names the site, and its healthcheck uses the rail's token
 as the host (`http://${BIND_ADDRESS}:<port>/<path>`); records redact that site's address
-only; `private-timers` has no healthcheck and verifies identity through `deploy.version_command`
-over ssh, delivering `deploy.payload` and `deploy.units` and restarting only the timers after
+only; `private-timers` has no healthcheck and verifies identity by reading the payload's
+`.rail-identity.json` and `release.env` over ssh, executing nothing, delivering `deploy.payload` and `deploy.units` and restarting only the timers after
 refusing any running unit. The same file declares the site `red-monitor` (`observe.monitor_site`), which
 `rail check observe` needs.
 
@@ -36,7 +36,7 @@ or restore the link, then deploy again.
 1. Preview: `rail deploy --repo <path> --plan` (the remote script and the checks, nothing runs).
 2. Deploy: `rail deploy --repo <path>` — refuses without a `released` attestation, asks for
    confirmation, verifies the release identity equals the artefact (`/version` for HTTP targets,
-   `deploy.version_command` for `private-timers`), attests `deployed`. A refusal (a
+   the payload's `.rail-identity.json` for `private-timers`), attests `deployed`. A refusal (a
    unit or compose file the target will not ship, a missing parameter) exits 1 before the
    first ssh and records nothing. A failed deployment puts the previous artefact back by
    itself when one exists (else the incident stays open) and exits 1. Exit 2 = live but

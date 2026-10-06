@@ -43,7 +43,6 @@ UNIT_NAME_PATTERN = r"[a-z0-9]+(?:-[a-z0-9]+)*\.service"
 _UNIT_PATH = re.compile(rf"^(?:[A-Za-z0-9._-]+/)*{UNIT_NAME_PATTERN}$")
 TIMER_UNIT_NAME_PATTERN = r"[a-z0-9]+(?:-[a-z0-9]+)*\.(?:service|timer)"
 _TIMER_UNIT_PATH = re.compile(rf"^(?:[A-Za-z0-9._-]+/)*{TIMER_UNIT_NAME_PATTERN}$")
-_VERSION_WORD = re.compile(r"^[A-Za-z0-9._/=-]+$")
 # The binary's path inside the released image: absolute and of safe characters, because it
 # reaches the remote script.
 _BINARY_PATH = re.compile(r"^(?:/[A-Za-z0-9._-]+)+$")
@@ -106,7 +105,6 @@ class DeployConfig(BaseModel):
     binary: str | None = None  # private-systemd: the binary's path inside the released image
     payload: str | None = None
     units: tuple[str, ...] | None = None
-    version_command: tuple[str, ...] | None = None
 
     @model_validator(mode="after")
     def _a_site_and_its_token_go_together(self) -> DeployConfig:
@@ -173,8 +171,8 @@ class DeployConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _a_timers_target_names_its_payload_its_units_and_its_version(self) -> DeployConfig:
-        for name in ("payload", "units", "version_command"):
+    def _a_timers_target_names_its_payload_and_its_units(self) -> DeployConfig:
+        for name in ("payload", "units"):
             value = getattr(self, name)
             if self.target is DeployTarget.PRIVATE_TIMERS and value is None:
                 raise ValueError(f"deploy.{name} is required by target private-timers")
@@ -211,17 +209,6 @@ class DeployConfig(BaseModel):
             if missing:
                 raise ValueError(
                     "deploy.units timers require matching services: " + ", ".join(missing)
-                )
-        if self.version_command is not None:
-            command = self.version_command
-            if (
-                not 1 <= len(command) <= 16
-                or not all(_VERSION_WORD.fullmatch(word) for word in command)
-                or command[0].startswith("/")
-                or _has_dot_segment(command[0])
-            ):
-                raise ValueError(
-                    "deploy.version_command must contain safe words and a relative executable"
                 )
         return self
 

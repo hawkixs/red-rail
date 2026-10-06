@@ -692,8 +692,7 @@ def _timers_deployed_tree(tmp_path: Path) -> Path:
         .replace(
             "  target: vps-traefik\n",
             "  target: private-timers\n  payload: /opt/red\n"
-            "  units:\n    - deploy/red-job.service\n    - deploy/red-job.timer\n"
-            "  version_command: [bin/python, -m, red, version]\n",
+            "  units:\n    - deploy/red-job.service\n    - deploy/red-job.timer\n",
         )
     )
     # the target is verified without HTTP and refuses a healthcheck (spec decision 8)
@@ -955,3 +954,25 @@ def test_carry_forward_fails_not_crashes_when_addressed_is_a_bare_string(tmp_pat
     _bad_cf_verdict(ledger, pr=8, minutes=2, carry_forwards={"addressed": "CF-5-1"})
     result = carry_forward(repo)
     assert not result.passed and "hawkixs/red-alpha#8" in result.details
+
+
+def test_a_drill_does_not_reset_the_timers_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate measures from the newest delivery: a drill's rollback and roll-forward
+    re-apply releases already proven, so they do not turn it red until the next night (final
+    review of the branch)."""
+    repo = _timers_deployed_tree(tmp_path)
+    ledger = _ledger(repo)
+    delivered = ledger.list("red-beta", attestation=AttestationKind.DEPLOYED)[-1].recorded_at
+    ledger.attest(
+        "red-beta",
+        AttestationKind.DEPLOYED,
+        {"sha": gitrepo.head_sha(repo), "digest": "sha256:" + "a" * 64, "mode": "drill"},
+        issuer="op",
+        idempotency_key="deployed:drill",
+        emitted_at=delivered + timedelta(hours=1),
+    )
+    view = _timer_view(exited=delivered + timedelta(minutes=2))
+    result = _observe_timers(repo, monkeypatch, view)
+    assert result.passed, result.details

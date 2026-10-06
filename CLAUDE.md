@@ -87,8 +87,10 @@ comments, test names. The conversation with the operator stays in French.
   restart, that it loaded that unit with no drop-in; two fixed sudo commands — spec
   2026-09-24-private-systemd-target), `private_timers.py` (oneshot services and timers with a
   payload directory copied out of the released image by digest, running units refused before
-  changes, only timers restarted, and identity verified by the release's version command over
-  ssh without HTTP) and `flow.py` (forward / rollback / drill, the target
+  changes and again before `current` moves, only timers restarted, `[Unit]`, `[Service]` and
+  `[Install]` read through allow-lists, and identity verified by READING the payload's
+  `.rail-identity.json` and `release.env` over ssh, never executing the release — spec
+  2026-10-06-private-timers-target) and `flow.py` (forward / rollback / drill, the target
   chosen from the manifest, and the attestation sequences they write — ADR-0004; each flow
   builds its remote scripts before its first side effect, so a refusal records nothing).
 - `src/rail/ledger/` — the `Ledger` protocol, `FileLedger` (`docs/receipts/*.json`, append-only,

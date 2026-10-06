@@ -6,7 +6,6 @@ Values the rail cannot establish as safe are refused before any remote operation
 
 import json
 import posixpath
-import shlex
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -41,6 +40,13 @@ def _inside(program: str, directory: str) -> bool:
         and posixpath.normpath(program) == program
         and len(program) > len(directory)
     )
+
+
+# The release's identity, read and never executed (operator decision 2026-10-06): a static file
+# the project's image writes into the payload at build, and the release.env the rail wrote.
+IDENTITY_FILE = ".rail-identity.json"
+IDENTITY_MARKER = "--- release.env ---"
+_IDENTITY_LIMIT = 65536
 
 
 TIMER_TRIGGERS = (
@@ -138,9 +144,6 @@ _SERVICE_KEYS = frozenset(
         "ReadWritePaths",
         "ReadOnlyPaths",
         "InaccessiblePaths",
-        "BindPaths",
-        "BindReadOnlyPaths",
-        "TemporaryFileSystem",
         "ExecCondition",
         "ExecStartPre",
         "ExecStart",
@@ -154,6 +157,24 @@ _SERVICE_KEYS = frozenset(
     }
 )
 _STREAMS_OUT = frozenset({"journal", "null", "inherit"})
+# directories systemd creates as root, chowns to `User=` when they exist, and may remove
+_DIRECTORY_KEYS = ("RuntimeDirectory", "StateDirectory", "CacheDirectory", "LogsDirectory")
+# a run must not outlive its bound: the whole control group is killed at the timeout
+_KILL_MODES = frozenset({"control-group", "mixed"})
+# the one supplementary group the spec takes knowingly (`docker exec` dumps)
+_SUPPLEMENTARY_GROUPS = frozenset({"docker"})
+_TRUE = frozenset({"yes", "true", "1", "on"})
+
+
+def _project_directory(word: str, project: str) -> bool:
+    """`<project>`, `<project>-…` or `<project>/…`, normalised, before any `:` suffix."""
+    name = word.partition(":")[0]
+    return (
+        bool(name)
+        and posixpath.normpath(name) == name
+        and not name.startswith("/")
+        and (name == project or name.startswith((f"{project}/", f"{project}-")))
+    )
 
 
 def _unit_names(values: list[str]) -> list[str]:
@@ -202,7 +223,34 @@ def service_refusals(text: str, *, unit: str, current: str, declared: frozenset[
         if key not in _SERVICE_KEYS
     )
     # credentials are read by systemd as root: only the project's own host configuration
-    project_etc = f"/etc/{posixpath.basename(posixpath.dirname(current))}/"
+    project = posixpath.basename(posixpath.dirname(current))
+    project_etc = f"/etc/{project}/"
+    for key in _DIRECTORY_KEYS:
+        refusals.extend(
+            f"{unit}: {key}={word} must name {project}, {project}-… or {project}/…: systemd "
+            "creates and chowns it as root"
+            for value in _effective(service.get(key, []))
+            for word in value.split()
+            if not _project_directory(word, project)
+        )
+    for value in _effective(service.get("EnvironmentFile", [])):
+        if value != f"{current}/release.env" and not _inside(value, project_etc):
+            refusals.append(
+                f"{unit}: EnvironmentFile={value} — only {current}/release.env or a file under "
+                f"{project_etc}, without `-`: systemd reads it as root"
+            )
+    refusals.extend(
+        f"{unit}: KillMode={value} lets a run outlive its timeout; only control-group or mixed"
+        for value in service.get("KillMode", [])
+        if value not in _KILL_MODES
+    )
+    no_new = service.get("NoNewPrivileges", [])
+    if not no_new or no_new[-1].lower() not in _TRUE:
+        refusals.append(f"{unit}: NoNewPrivileges=yes is required")
+    if "Install" in parse_unit(text):
+        refusals.append(
+            f"{unit}: an [Install] section is not accepted on a service: its timer fires it"
+        )
     for key in ("LoadCredential", "LoadCredentialEncrypted"):
         for value in _effective(service.get(key, [])):
             source = value.partition(":")[2]
@@ -221,17 +269,18 @@ def service_refusals(text: str, *, unit: str, current: str, declared: frozenset[
             for value in service.get(key, [])
             if value not in _STREAMS_OUT
         )
+    users = service.get("User", [])
     refusals.extend(
-        f"{unit}: Group={value} must be a plain group other than root (got {value!r})"
+        f"{unit}: Group={value} must be the user's own group ({users[-1] if users else 'User='})"
         for value in service.get("Group", [])
-        if value in _ROOT_GROUPS or not _USERNAME.fullmatch(value)
+        if not users or value != users[-1]
     )
-    # a numeric id (`00` is GID 0 for systemd) or a specifier would slip past a name check
     refusals.extend(
-        f"{unit}: SupplementaryGroups= lists plain group names other than root only (got {word!r})"
+        f"{unit}: SupplementaryGroups= accepts {', '.join(sorted(_SUPPLEMENTARY_GROUPS))} only "
+        f"(got {word!r})"
         for value in _effective(service.get("SupplementaryGroups", []))
         for word in value.split()
-        if word in _ROOT_GROUPS or not _USERNAME.fullmatch(word)
+        if word not in _SUPPLEMENTARY_GROUPS
     )
     for value in service.get("RemainAfterExit", []):
         if value.lower() not in ("no", "false", "0", "off"):
@@ -320,6 +369,17 @@ def timer_refusals(text: str, *, unit: str, declared: frozenset[str]) -> list[st
         for key in section
         if key not in _ORDERING
     )
+    install = parse_unit(text).get("Install", {})
+    refusals.extend(
+        f"{unit}: [Install] {key}= is not accepted: only WantedBy=timers.target"
+        for key in install
+        if key != "WantedBy"
+    )
+    refusals.extend(
+        f"{unit}: [Install] WantedBy={value} — only timers.target"
+        for value in install.get("WantedBy", [])
+        if value != "timers.target"
+    )
     if not any(_effective(timer.get(key, [])) for key in TIMER_TRIGGERS):
         refusals.append(f"{unit}: at least one timer trigger must have a non-empty value")
     if "Unit" in timer:
@@ -344,17 +404,19 @@ def remote_script(
     release = f"{root}/releases/{artefact.version}"
     lines = lock_preamble(root, release)
     # a timer is always `active` while it waits: only a service can be in the middle of a run
-    for unit in (name for name in units if name.endswith(".service")):
-        lines.extend(
-            [
-                f"state=$(systemctl show --property=ActiveState --value {unit})",
-                'if [ "$state" = "active" ] || [ "$state" = "activating" ]; then',
-                f'  echo "{unit} is $state: a run is in progress, deploy again once it has '
-                'finished" >&2',
-                "  exit 1",
-                "fi",
-            ]
+    running_check = [
+        line
+        for unit in (name for name in units if name.endswith(".service"))
+        for line in (
+            f"state=$(systemctl show --property=ActiveState --value {unit})",
+            'if [ "$state" = "active" ] || [ "$state" = "activating" ]; then',
+            f'  echo "{unit} is $state: a run is in progress, deploy again once it has '
+            'finished" >&2',
+            "  exit 1",
+            "fi",
         )
+    ]
+    lines.extend(running_check)
     lines.extend(
         [
             *(heredoc(unit, text) for unit, text in units.items()),
@@ -369,6 +431,8 @@ def remote_script(
             'if [ -e "$release/app" ]; then mv "$release/app" "$release/.app.old"; fi',
             'mv "$release/.app.new" "$release/app"',
             'rm -rf "$release/.app.old"',
+            # a timer may have fired during the pull: check again, right before the switch
+            *running_check,
             'ln -sfn "$release" "$root/current"',
             "sudo -n /usr/bin/systemctl daemon-reload",
         ]
@@ -396,20 +460,11 @@ class PrivateTimers(RemoteTarget):
     def __init__(self, repo: Path, cfg: RailConfig, **kwargs: Any) -> None:
         super().__init__(repo, cfg, **kwargs)
         deploy = cfg.deploy
-        if (
-            deploy is None
-            or deploy.units is None
-            or deploy.payload is None
-            or deploy.version_command is None
-        ):
+        if deploy is None or deploy.units is None or deploy.payload is None:
             # The manifest model requires these before a target can be built.
-            raise DeployError(
-                "target private-timers needs deploy.units, deploy.payload "
-                "and deploy.version_command"
-            )
+            raise DeployError("target private-timers needs deploy.units and deploy.payload")
         self.unit_paths = deploy.units
         self.payload = deploy.payload
-        self.version_command = deploy.version_command
 
     @property
     def current(self) -> str:
@@ -460,31 +515,31 @@ class PrivateTimers(RemoteTarget):
         return [
             Step(self.describe(artefact), ssh_argv(self.params), script),
             Step(
-                f"ssh {self.params.ssh_host}: {' '.join(self.version_command)} == "
+                f"ssh {self.params.ssh_host}: read app/{IDENTITY_FILE} and release.env == "
                 f"{artefact.version} / {artefact.sha[:12]} / {artefact.digest}",
                 ssh_argv(self.params),
-                self.version_script(),
+                self.identity_script(),
             ),
         ]
 
-    def version_script(self) -> str:
-        command = " ".join(shlex.quote(word) for word in self.version_command)
-        # over ssh there is no `EnvironmentFile=`: load the file the units read, which the rail
-        # wrote and which carries no secret (spec decision 4), so the command answers the
-        # identity the units see
+    def identity_script(self) -> str:
+        """Read, never run: the payload's identity file and the release.env the rail wrote,
+        through `current`, as the deploy account. Running the release's own code here would
+        give it the deploy account's rights, outside every rule its units obey."""
         return (
             "set -euo pipefail\n"
-            f"set -a; . {self.current}/release.env; set +a\n"
-            f"cd {self.current}/app\n"
-            f"exec ./{command}\n"
+            f"head -c {_IDENTITY_LIMIT} {self.current}/app/{IDENTITY_FILE}\n"
+            f"printf '\\n%s\\n' '{IDENTITY_MARKER}'\n"
+            f"head -c {_IDENTITY_LIMIT} {self.current}/release.env\n"
         )
 
     def verify(self, artefact: Artefact) -> LiveVersion:
-        """Read identity from the release without starting a service or using HTTP."""
+        """The identity the payload was built with, and the digest of the release `current`
+        points at, compared with the artefact (spec decision 8). No HTTP, no execution."""
         try:
             done = self._run(
                 list(ssh_argv(self.params)),
-                input=self.version_script(),
+                input=self.identity_script(),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -502,20 +557,47 @@ class PrivateTimers(RemoteTarget):
         if done.returncode != 0:
             raise DeployError(
                 self.redact(
-                    f"the version command failed (exit {done.returncode}): "
+                    f"reading the release identity failed (exit {done.returncode}): "
                     + _tail(done.stderr or done.stdout)
                 )
             )
+        identity, marker, environment = done.stdout.partition(f"\n{IDENTITY_MARKER}\n")
+        if not marker:
+            raise DeployError(
+                self.redact("the identity read returned no release.env: the release is incomplete")
+            )
         try:
-            data = json.loads(done.stdout)
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise DeployError(self.redact("the version command does not answer JSON")) from exc
+            data = json.loads(identity)
+        except ValueError as exc:
+            raise DeployError(
+                self.redact(f"app/{IDENTITY_FILE} is not JSON: the image must write it")
+            ) from exc
         if not isinstance(data, dict):
-            raise DeployError(self.redact("the version command must answer a JSON object"))
-        fields = ("project", "version", "git_sha", "image_digest")
-        missing = [field for field in fields if not data.get(field)]
+            raise DeployError(self.redact(f"app/{IDENTITY_FILE} must hold a JSON object"))
+        fields = ("project", "version", "git_sha")
+        missing = [
+            field for field in fields if not isinstance(data.get(field), str) or not data[field]
+        ]
         if missing:
-            raise DeployError(self.redact("the version command misses " + ", ".join(missing)))
+            raise DeployError(self.redact(f"app/{IDENTITY_FILE} misses " + ", ".join(missing)))
+        digest = next(
+            (
+                line.partition("=")[2]
+                for line in environment.splitlines()
+                if line.startswith("IMAGE_DIGEST=")
+            ),
+            "",
+        )
+        if not digest:
+            raise DeployError(self.redact("release.env carries no IMAGE_DIGEST"))
+        data = {**{field: data[field] for field in fields}, "image_digest": digest}
+        if data["project"] != self.cfg.project:
+            raise DeployError(
+                self.redact(
+                    f"the payload's project: live {data['project']!r} ≠ {self.cfg.project!r}"
+                )
+            )
+        fields = ("project", "version", "git_sha", "image_digest")
         live = LiveVersion(*(str(data[field]) for field in fields))
         mismatch = [
             f"{field}: live {getattr(live, field)!r} ≠ artefact {value!r}"

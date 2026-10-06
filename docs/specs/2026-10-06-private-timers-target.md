@@ -44,10 +44,8 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
 3. **The units are versioned in the project and delivered by the rail.** `deploy.units` lists
    them, relative paths read at the released commit, each a plain name ending in `.service` or
    `.timer` (`[a-z0-9]+(-[a-z0-9]+)*\.(service|timer)`). A timer `X.timer` triggers `X.service`,
-   which must be in the list. `deploy.version_command` is the command, relative to the payload,
-   that prints the release's identity (decision 8). `private-timers` requires `payload`, `units`
-   and `version_command`, and refuses `healthcheck`, `unit` and `binary`; every other target
-   refuses the three new keys. `deploy.site` works as on the other private targets.
+   which must be in the list. `private-timers` requires `payload` and `units`, and refuses
+   `healthcheck`, `unit` and `binary`; every other target refuses the two new keys. `deploy.site` works as on the other private targets.
 
    ```yaml
    deploy:
@@ -62,7 +60,6 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
        - deploy/systemd/red-backup-watchdog.service
        - deploy/systemd/red-backup-watchdog.timer
        - deploy/systemd/red-backup-alert.service
-     version_command: [bin/python3, -m, backup, version, --json]
    ```
 
 4. **The layout mirrors `private-systemd`.** A release lives in
@@ -127,11 +124,15 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
      character.
    - `deploy.units` declares at least one timer.
 
-8. **Verification without HTTP: what systemd loaded, and which release runs.** After the
-   script, the rail runs, over ssh and unprivileged, the release's `version_command` from
-   `current/app/`. It prints a JSON object (`project`, `version`, `git_sha`, `image_digest`, read
-   from `release.env`) that the rail compares with the artefact, field by field, exactly as it
-   compares `/version` today. A mismatch fails the deployment.
+8. **Verification without HTTP and without execution: what systemd loaded, and which release
+   `current` holds.** After the script, the rail READS over ssh, as the deploy account,
+   `current/app/.rail-identity.json` (a static JSON object `project`, `version`, `git_sha` that
+   the project's image writes into the payload at build) and `current/release.env` (written by
+   the rail, which carries `IMAGE_DIGEST`), and compares them with the manifest's project and
+   the artefact, field by field, as it compares `/version` today. A mismatch fails the
+   deployment. Nothing of the release is executed outside its units: a version command run by
+   the rail would carry the deploy account's rights (owner of the stack, both sudo lines, the
+   docker group) past every rule of decision 7 (operator decision, 2026-10-06, final review).
 
 9. **`observe.visible` proves that the delivered timers ran.** red-monitor already collects, for
    each unit it watches, `ActiveState`, `SubState`, `Result`, `ExecMainStatus`,
@@ -139,7 +140,8 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
    requires, on `observe.monitor_agent`:
    - each declared timer `active`/`waiting`, with a next elapse;
    - the service each timer triggers has exited with `Result=success` and status 0 **after** the
-     newest `deployed` attestation.
+     newest delivery, the newest `deployed` attestation in mode `release`: a drill's rollback
+     and roll-forward re-apply releases already proven and do not reset the gate.
 
    Until then the gate fails, naming the service still waiting and its next elapse. For
    red-backup it turns green after the first night: run, brain drill, watchdog. That is the
@@ -163,12 +165,14 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
 - **A `Dockerfile` whose image holds `/opt/red-backup`**: a standalone Python (for example
   python-build-standalone) and the application installed without absolute paths, so that
   `bin/python3 -m backup …` runs from any directory.
-- **`red-backup version --json`**: `project`, `version`, `git_sha`, `image_digest`, read from
-  `VERSION`, `GIT_SHA` and `IMAGE_DIGEST`.
+- **`/opt/red-backup/.rail-identity.json` in the image**: `{"project", "version", "git_sha"}`,
+  written at build from the release's version and commit.
 - **The seven units, rewritten for the release**: `ExecStart=<stack_root>/red-backup/current/app/bin/python3 -m backup …`,
   `EnvironmentFile=<stack_root>/red-backup/current/release.env`, a `MemoryMax=` from a measured
   peak, the `ExecStartPre=docker image inspect …` checks moved into the application (no program
-  outside the release), configuration and secrets in `/etc/red-backup`, the hardening kept.
+  outside the release), configuration and secrets in `/etc/red-backup`, the hardening kept with
+  `NoNewPrivileges=yes`, no bind mounts (the payload no longer lives in a checkout), no
+  `[Install]` section on the services.
 - **Sources reached through export accounts** (red-watcher's work), since the run moves away from
   the machine it used to dump locally.
 - **The manifest** of decision 3, with `deploy.ssh_host` declared for the site.
@@ -179,10 +183,12 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
    `/etc/red-backup`.
 2. Install the sudoers file of decision 6 and check, as the deploy account, that `sudo -n -l`
    lists exactly those commands.
-3. Immediately before the first `rail deploy`, link the seven units (decision 4) and
-   `systemctl enable` the three timers. Until the first delivery creates `current`, the links
-   point at nothing.
-4. Add the seven units to red-monitor's agent configuration on that host (decision 9).
+3. Immediately before the first `rail deploy`, link the seven units (decision 4). Until the
+   first delivery creates `current`, the links point at nothing.
+4. Right after the first delivery, `systemctl enable` the three timers (their `[Install]`
+   section is `WantedBy=timers.target` only, decision 7), so they survive a reboot; the
+   deployment itself already started them.
+5. Add the seven units to red-monitor's agent configuration on that host (decision 9).
 
 The first drill needs two red-backup releases.
 
@@ -201,16 +207,16 @@ The first drill needs two red-backup releases.
 
 ## Success criteria
 
-1. A `private-timers` manifest loads; one that lacks `payload`, `units` or `version_command`,
-   or that declares `healthcheck`, `unit` or `binary`, is refused with the key named; every other
-   target refuses the three new keys.
+1. A `private-timers` manifest loads; one that lacks `payload` or `units`, or that declares
+   `healthcheck`, `unit` or `binary`, is refused with the key named; every other target refuses
+   the two new keys.
 2. Each refusal of decision 7 fails before the first ssh, naming the unit and the rule; a timer
    whose service is not declared is refused.
 3. The remote script runs the steps of decision 5 in that order, stops before any change when a
    declared unit is running, removes the container on every exit path, calls exactly the
    commands of decision 6, and never writes outside `<stack_root>/<project>`.
-4. The verification of decision 8 accepts the matching identity and fails, naming the field, on
-   any mismatch or on an unreadable answer.
+4. The verification of decision 8 executes nothing of the release, accepts the matching
+   identity and fails, naming the field, on any mismatch or on an unreadable answer.
 5. `observe.visible` on `private-timers` passes when every timer is `active`/`waiting` and every
    triggered service succeeded after the newest deployment, and otherwise fails naming the unit;
    the other targets behave exactly as before.

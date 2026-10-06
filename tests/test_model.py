@@ -354,7 +354,6 @@ TIMERS = {
         "deploy/systemd/red-backup.timer",
         "deploy/systemd/red-backup-alert.service",
     ],
-    "version_command": ["bin/python3", "-m", "backup", "version", "--json"],
 }
 
 
@@ -365,7 +364,7 @@ def test_a_private_timers_manifest_loads() -> None:
     assert DeployTarget.PRIVATE_TIMERS in PRIVATE_TARGETS
 
 
-@pytest.mark.parametrize("key", ["payload", "units", "version_command"])
+@pytest.mark.parametrize("key", ["payload", "units"])
 def test_private_timers_requires_its_keys(key: str) -> None:
     with pytest.raises(ValidationError, match=f"deploy.{key} is required by target private-timers"):
         DeployConfig.model_validate({k: v for k, v in TIMERS.items() if k != key})
@@ -386,7 +385,7 @@ def test_private_timers_refuses_the_keys_of_other_targets(key: str, value: str) 
         DeployConfig.model_validate({**TIMERS, key: value})
 
 
-@pytest.mark.parametrize("key", ["payload", "units", "version_command"])
+@pytest.mark.parametrize("key", ["payload", "units"])
 def test_other_targets_refuse_the_timer_keys(key: str) -> None:
     other = {
         "target": "private-compose",
@@ -422,13 +421,10 @@ def test_bad_unit_lists_are_refused(units: list[str]) -> None:
         DeployConfig.model_validate({**TIMERS, "units": units})
 
 
-@pytest.mark.parametrize(
-    "command",
-    [[], ["../bin/python3"], ["/abs/python3"], ["bin/python3", "a;b"], ["bin/python3", "$(x)"]],
-)
-def test_bad_version_commands_are_refused(command: list[str]) -> None:
-    with pytest.raises(ValidationError, match="deploy.version_command"):
-        DeployConfig.model_validate({**TIMERS, "version_command": command})
+def test_a_version_command_is_no_longer_a_manifest_key() -> None:
+    """The identity is read from the payload, never executed (operator decision 2026-10-06)."""
+    with pytest.raises(ValidationError, match="version_command"):
+        DeployConfig.model_validate({**TIMERS, "version_command": ["bin/python3"]})
 
 
 @pytest.mark.parametrize("payload", ["opt/red-backup", "/opt/../etc", "/opt/red backup"])
