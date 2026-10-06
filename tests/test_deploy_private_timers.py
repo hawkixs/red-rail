@@ -542,3 +542,39 @@ def test_the_version_command_reads_the_release_environment(tmp_path: Path) -> No
     script = _target(repo, tmp_path).version_script()
     load = "set -a; . /opt/red-backup/current/release.env; set +a"
     assert load in script and script.index(load) < script.index("exec ./bin/python3")
+
+
+@pytest.mark.parametrize(
+    ("line", "rule"),
+    [
+        ("LoadCredential=shadow:/etc/shadow", "LoadCredential="),
+        ("LoadCredential=key:/etc/red-backup/../shadow", "LoadCredential="),
+        ("LoadCredentialEncrypted=key:/root/secret", "LoadCredentialEncrypted="),
+        ("ImportCredential=*", "ImportCredential="),
+        ("StandardOutput=file:/etc/sudoers.d/x", "StandardOutput="),
+        ("StandardError=append:/etc/passwd", "StandardError="),
+        ("StandardInput=file:/etc/shadow", "StandardInput="),
+        ("OpenFile=/etc/shadow", "OpenFile="),
+        ("DeviceAllow=/dev/sda rw", "DeviceAllow="),
+        ("DynamicUser=yes", "DynamicUser="),
+        ("PAMName=login", "PAMName="),
+    ],
+)
+def test_a_service_key_systemd_performs_as_root_is_refused(line: str, rule: str) -> None:
+    """systemd opens credentials, standard streams and `OpenFile=` as root on the service's
+    behalf (commit security review): `[Service]` is an allow-list, and those keys may only
+    reach the project's own host configuration or the journal."""
+    text = SERVICE.replace("NoNewPrivileges=yes", f"NoNewPrivileges=yes\n{line}")
+    assert any(rule in r for r in _declared(text)), _declared(text)
+
+
+def test_the_project_credentials_and_the_journal_are_accepted() -> None:
+    text = SERVICE.replace(
+        "NoNewPrivileges=yes",
+        "NoNewPrivileges=yes\nLoadCredential=webhook:/etc/red-backup/discord-webhook\n"
+        "SetCredential=webhook:\nStandardOutput=journal\nStandardError=journal\n"
+        "SyslogIdentifier=red-backup\nUMask=0077\nPrivateTmp=yes\nPrivateDevices=yes\n"
+        "ProtectHome=tmpfs\nReadWritePaths=/data/backups\nBindReadOnlyPaths=/etc/red-backup\n"
+        "WorkingDirectory=/opt/red-backup/current/app\nEnvironment=PATH=/usr/bin:/bin",
+    )
+    assert _declared(text) == []

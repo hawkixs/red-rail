@@ -112,6 +112,13 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
      `OnSuccess=` naming declared units, the start limits, and `FailureAction=`,
      `SuccessAction=`, `StartLimitAction=`, `JobTimeoutAction=` set to `none` (PID 1 performs
      them as root). Any other key, an alias systemd still reads included, is refused.
+     `[Service]` is an allow-list as well: identity, environment, limits, timeouts, logging,
+     credentials, runtime directories, the hardening keys and the `Exec*=` commands. Keys
+     systemd performs as root on the service's behalf are checked: `LoadCredential=` and
+     `LoadCredentialEncrypted=` read only files under `/etc/<project>/`;
+     `StandardInput=` is `null`; `StandardOutput=` and `StandardError=` are `journal`, `null`
+     or `inherit`; `OpenFile=`, `ImportCredential=`, `PAMName=`, `DeviceAllow=` and
+     `DynamicUser=` are not accepted.
    - A timer: a `[Timer]` section with at least one trigger (`OnCalendar=`, `OnBootSec=`,
      `OnUnitActiveSec=`, `OnUnitInactiveSec=`, `OnActiveSec=`, `OnStartupSec=`); no `Unit=` key,
      so the timer triggers the service of the same name; that service is declared; `[Unit]` accepts ordering and

@@ -70,6 +70,91 @@ _SERVICE_UNIT_KEYS = frozenset(
 )
 _ROOT_GROUPS = frozenset({"root", "0"})
 
+# `[Service]` is an allow-list too (commit security review): systemd performs some keys as root
+# on the service's behalf — it reads credentials, opens standard streams and `OpenFile=` paths,
+# runs PAM — so an unknown key is refused, and the keys below that reach a path are checked.
+_SERVICE_KEYS = frozenset(
+    {
+        "Type",
+        "User",
+        "Group",
+        "SupplementaryGroups",
+        "WorkingDirectory",
+        "Environment",
+        "EnvironmentFile",
+        "UMask",
+        "MemoryMax",
+        "MemoryHigh",
+        "TasksMax",
+        "CPUQuota",
+        "Nice",
+        "IOWeight",
+        "TimeoutStartSec",
+        "TimeoutStopSec",
+        "TimeoutSec",
+        "RemainAfterExit",
+        "SuccessExitStatus",
+        "KillMode",
+        "KillSignal",
+        "SyslogIdentifier",
+        "StandardInput",
+        "StandardOutput",
+        "StandardError",
+        "LoadCredential",
+        "LoadCredentialEncrypted",
+        "SetCredential",
+        "RuntimeDirectory",
+        "RuntimeDirectoryMode",
+        "StateDirectory",
+        "StateDirectoryMode",
+        "CacheDirectory",
+        "LogsDirectory",
+        "NoNewPrivileges",
+        "ProtectSystem",
+        "ProtectHome",
+        "PrivateTmp",
+        "PrivateDevices",
+        "PrivateNetwork",
+        "PrivateUsers",
+        "PrivateIPC",
+        "ProtectKernelTunables",
+        "ProtectKernelModules",
+        "ProtectKernelLogs",
+        "ProtectControlGroups",
+        "ProtectClock",
+        "ProtectHostname",
+        "ProtectProc",
+        "ProcSubset",
+        "RestrictNamespaces",
+        "RestrictRealtime",
+        "RestrictSUIDSGID",
+        "RestrictAddressFamilies",
+        "LockPersonality",
+        "MemoryDenyWriteExecute",
+        "SystemCallFilter",
+        "SystemCallArchitectures",
+        "SystemCallErrorNumber",
+        "CapabilityBoundingSet",
+        "ReadWritePaths",
+        "ReadOnlyPaths",
+        "InaccessiblePaths",
+        "BindPaths",
+        "BindReadOnlyPaths",
+        "TemporaryFileSystem",
+        "ExecCondition",
+        "ExecStartPre",
+        "ExecStart",
+        "ExecStartPost",
+        "ExecReload",
+        "ExecStop",
+        "ExecStopPost",
+        # refused below with their own reason, so they are "known" here
+        "AmbientCapabilities",
+        "PermissionsStartOnly",
+    }
+)
+_STREAMS_OUT = frozenset({"journal", "null", "inherit"})
+
 
 def _unit_names(values: list[str]) -> list[str]:
     return [name for value in _effective(values) for name in value.split()]
@@ -110,6 +195,31 @@ def service_refusals(text: str, *, unit: str, current: str, declared: frozenset[
             f"{unit}: {key}={value} makes systemd act on the host as root; only `none` is allowed"
             for value in section.get(key, [])
             if value != "none"
+        )
+    refusals.extend(
+        f"{unit}: {key}= is not a key this target accepts in [Service]"
+        for key in service
+        if key not in _SERVICE_KEYS
+    )
+    # credentials are read by systemd as root: only the project's own host configuration
+    project_etc = f"/etc/{posixpath.basename(posixpath.dirname(current))}/"
+    for key in ("LoadCredential", "LoadCredentialEncrypted"):
+        for value in _effective(service.get(key, [])):
+            source = value.partition(":")[2]
+            if not _inside(source, project_etc):
+                refusals.append(
+                    f"{unit}: {key}={value} must read a file under {project_etc}: systemd "
+                    "reads it as root on the service's behalf"
+                )
+    for value in service.get("StandardInput", []):
+        if value != "null":
+            refusals.append(f"{unit}: StandardInput={value} — only null: systemd opens it as root")
+    for key in ("StandardOutput", "StandardError"):
+        refusals.extend(
+            f"{unit}: {key}={value} — only {', '.join(sorted(_STREAMS_OUT))}: systemd opens "
+            "a file as root"
+            for value in service.get(key, [])
+            if value not in _STREAMS_OUT
         )
     refusals.extend(
         f"{unit}: Group={value} must be a plain group other than root (got {value!r})"
