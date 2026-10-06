@@ -41,6 +41,9 @@ _TOKEN_HOST = re.compile(rf"^https?://{re.escape(ADDRESS_TOKEN)}(?::\d+)?(?=[/?#
 # rule alike.
 UNIT_NAME_PATTERN = r"[a-z0-9]+(?:-[a-z0-9]+)*\.service"
 _UNIT_PATH = re.compile(rf"^(?:[A-Za-z0-9._-]+/)*{UNIT_NAME_PATTERN}$")
+TIMER_UNIT_NAME_PATTERN = r"[a-z0-9]+(?:-[a-z0-9]+)*\.(?:service|timer)"
+_TIMER_UNIT_PATH = re.compile(rf"^(?:[A-Za-z0-9._-]+/)*{TIMER_UNIT_NAME_PATTERN}$")
+_VERSION_WORD = re.compile(r"^[A-Za-z0-9._/=-]+$")
 # The binary's path inside the released image: absolute and of safe characters, because it
 # reaches the remote script.
 _BINARY_PATH = re.compile(r"^(?:/[A-Za-z0-9._-]+)+$")
@@ -85,26 +88,41 @@ class DeployTarget(StrEnum):
     VPS_TRAEFIK = "vps-traefik"
     PRIVATE_COMPOSE = "private-compose"
     PRIVATE_SYSTEMD = "private-systemd"
+    PRIVATE_TIMERS = "private-timers"
 
 
-PRIVATE_TARGETS = frozenset({DeployTarget.PRIVATE_COMPOSE, DeployTarget.PRIVATE_SYSTEMD})
+PRIVATE_TARGETS = frozenset(
+    {DeployTarget.PRIVATE_COMPOSE, DeployTarget.PRIVATE_SYSTEMD, DeployTarget.PRIVATE_TIMERS}
+)
 
 
 class DeployConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target: DeployTarget
-    healthcheck: str = Field(pattern=r"^https?://")
+    healthcheck: str | None = Field(default=None, pattern=r"^https?://")
     site: str | None = Field(default=None, pattern=SITE_PATTERN)
     unit: str | None = None  # private-systemd: the unit file, read at the released commit
     binary: str | None = None  # private-systemd: the binary's path inside the released image
+    payload: str | None = None
+    units: tuple[str, ...] | None = None
+    version_command: tuple[str, ...] | None = None
 
     @model_validator(mode="after")
     def _a_site_and_its_token_go_together(self) -> DeployConfig:
         if self.site is not None and self.target not in PRIVATE_TARGETS:
             raise ValueError(
-                "deploy.site applies to a private target only (private-compose, private-systemd)"
+                "deploy.site applies to a private target only "
+                "(private-compose, private-systemd, private-timers)"
             )
+        if self.target is DeployTarget.PRIVATE_TIMERS:
+            # verified without HTTP (spec 2026-10-06-private-timers-target, decision 8): a
+            # healthcheck here would be ignored silently
+            if self.healthcheck is not None:
+                raise ValueError("deploy.healthcheck does not apply to target private-timers")
+            return self
+        if self.healthcheck is None:
+            raise ValueError(f"deploy.healthcheck is required by target {self.target.value}")
         if self.site is None and ADDRESS_TOKEN in self.healthcheck:
             raise ValueError(
                 f"deploy.healthcheck uses {ADDRESS_TOKEN} but no deploy.site says whose "
@@ -123,6 +141,8 @@ class DeployConfig(BaseModel):
         for name, value in (("unit", self.unit), ("binary", self.binary)):
             if systemd and value is None:
                 raise ValueError(f"deploy.{name} is required by target private-systemd")
+            if not systemd and value is not None and self.target is DeployTarget.PRIVATE_TIMERS:
+                raise ValueError(f"deploy.{name} does not apply to target private-timers")
             if not systemd and value is not None:
                 raise ValueError(f"deploy.{name} applies to target private-systemd only")
         if self.unit is not None and (
@@ -149,6 +169,55 @@ class DeployConfig(BaseModel):
                     f"deploy.binary is copied into the release as {name!r}, which would "
                     f"overwrite {held[name]}: the binary's file name must differ from the "
                     f"unit's and from {RELEASE_ENV}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _a_timers_target_names_its_payload_its_units_and_its_version(self) -> DeployConfig:
+        for name in ("payload", "units", "version_command"):
+            value = getattr(self, name)
+            if self.target is DeployTarget.PRIVATE_TIMERS and value is None:
+                raise ValueError(f"deploy.{name} is required by target private-timers")
+            if self.target is not DeployTarget.PRIVATE_TIMERS and value is not None:
+                raise ValueError(f"deploy.{name} applies to target private-timers only")
+
+        if self.payload is not None and (
+            not _BINARY_PATH.fullmatch(self.payload) or _has_dot_segment(self.payload)
+        ):
+            raise ValueError(
+                "deploy.payload must be an absolute path of safe characters without dot segments"
+            )
+        if self.units is not None:
+            names = []
+            for path in self.units:
+                name = path.rsplit("/", 1)[-1]
+                if not _TIMER_UNIT_PATH.fullmatch(path) or _has_dot_segment(path):
+                    raise ValueError(f"deploy.units contains an invalid unit path: {path!r}")
+                names.append(name)
+            if not 1 <= len(self.units) <= 32:
+                raise ValueError("deploy.units must contain between 1 and 32 entries")
+            if len(names) != len(set(names)):
+                raise ValueError("deploy.units file names must be unique")
+            available = set(names)
+            missing = [
+                name[:-6] + ".service"
+                for name in names
+                if name.endswith(".timer") and name[:-6] + ".service" not in available
+            ]
+            if missing:
+                raise ValueError(
+                    "deploy.units timers require matching services: " + ", ".join(missing)
+                )
+        if self.version_command is not None:
+            command = self.version_command
+            if (
+                not 1 <= len(command) <= 16
+                or not all(_VERSION_WORD.fullmatch(word) for word in command)
+                or command[0].startswith("/")
+                or _has_dot_segment(command[0])
+            ):
+                raise ValueError(
+                    "deploy.version_command must contain safe words and a relative executable"
                 )
         return self
 

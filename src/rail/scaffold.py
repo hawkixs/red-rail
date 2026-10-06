@@ -115,6 +115,12 @@ class NewProject:
         }
         if self.tier is Tier.PROD:
             data["deploy_target"] = self.deploy_target
+            if self.deploy_target == DeployTarget.PRIVATE_TIMERS:
+                raise ScaffoldError(
+                    "target private-timers is written by hand: rail.yaml needs deploy.payload, "
+                    "deploy.units and deploy.version_command, which only the project knows "
+                    "(spec 2026-10-06-private-timers-target)"
+                )
             if self.deploy_target == DeployTarget.PRIVATE_SYSTEMD:
                 raise ScaffoldError(
                     "target private-systemd is written by hand: rail.yaml needs deploy.unit and "

@@ -2307,3 +2307,17 @@ def test_cli_upgrade_rejects_docs_as_a_switch_target(
     result = CliRunner().invoke(main, ["upgrade", "--repo", str(tmp_path), "--stack", "docs"])
     assert result.exit_code == 2, result.output
     assert calls == []
+
+
+def test_a_private_timers_target_is_written_by_hand(template_dir: Path, tmp_path: Path) -> None:
+    """Like private-systemd, the target needs keys only the project knows (spec
+    2026-10-06-private-timers-target): `rail new` refuses it instead of rendering a manifest
+    that would not load."""
+    project = _project(
+        template_dir,
+        tmp_path / "red-probe",
+        tier=Tier.PROD,
+        deploy_target=DeployTarget.PRIVATE_TIMERS,
+    )
+    with pytest.raises(ScaffoldError, match="private-timers is written by hand"):
+        _ = project.answers
