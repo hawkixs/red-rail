@@ -6,7 +6,6 @@ import pytest
 from click.testing import CliRunner
 
 from rail.brain import settings as brain_settings
-from rail.brain.client import BrainClient
 from rail.cli import main
 from tests.helpers import conforming_tree
 
@@ -46,14 +45,27 @@ def test_ping_shows_the_brain_site_name_even_when_unreachable(
     monkeypatch.setenv("RAIL_SITES_FILE", str(sites))
     monkeypatch.setattr(brain_settings, "route_interface", lambda address: "wg0")
 
-    async def call(self: BrainClient, name: str, arguments: dict, agent: str) -> dict:
-        assert self.transport_factory(agent).url == f"http://{address}:8765/mcp"
-        assert agent == "red-rail" and name == "brain_delivery_list"
-        if not reachable:
-            raise RuntimeError(f"connect to {address}:8765 failed")
-        return {"items": [], "omitted_count": 0}
+    class Session:
+        def __init__(self, transport, *, timeout):
+            self.transport = transport
 
-    monkeypatch.setattr(BrainClient, "_call", call)
+        async def __aenter__(self):
+            return self
+
+        async def call_tool(self, name, arguments, *, timeout):
+            assert self.transport.url == f"http://{address}:8765/mcp"
+            assert self.transport.headers["X-Brain-Agent"] == "red-rail"
+            assert name == "brain_delivery_list"
+            if not reachable:
+                raise RuntimeError(f"connect to {address}:8765 failed")
+            from types import SimpleNamespace
+
+            return SimpleNamespace(structured_content={"items": [], "omitted_count": 0})
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("fastmcp.Client", Session)
     out = CliRunner().invoke(main, ["brain", "ping", "--repo", str(repo)])
     assert out.exit_code == (0 if reachable else 1)
     assert "brain:8765" in out.output

@@ -6,6 +6,25 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _close_brain_clients(monkeypatch: pytest.MonkeyPatch):
+    """Persistent MCP sessions must not outlive the test that owns their fake server."""
+    from rail.brain.client import BrainClient, close_all
+
+    clients = []
+    original = BrainClient.__init__
+
+    def init(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        clients.append(self)
+
+    monkeypatch.setattr(BrainClient, "__init__", init)
+    yield clients
+    for client in clients:
+        client.close()
+    close_all()
+
+
+@pytest.fixture(autouse=True)
 def _no_host_sites_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`observe.visible` reads the host's private sites file. A test that does not declare one
     sees none, never the developer's own `~/.config/red-rail/sites.yaml`."""

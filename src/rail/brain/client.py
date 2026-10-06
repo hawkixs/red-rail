@@ -8,13 +8,17 @@ mandatory, `X-Brain-Tool-Profile: native` so the delivery tools are callable by 
 from __future__ import annotations
 
 import asyncio
+import atexit
+import concurrent.futures
+import threading
+import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from rail.brain.settings import BrainSettings, is_reachable
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
+    from fastmcp import Client, FastMCP
 
     from tests.fake_brain import FakeBrain
 
@@ -89,10 +93,175 @@ def _http_client_factory(interface: str | None) -> Callable[..., Any]:
     return factory
 
 
+def _run_until_stopped(loop: asyncio.AbstractEventLoop) -> None:
+    loop.run_forever()
+    loop.close()  # a no-op when `close()` already closed it
+
+
+class _SessionPool:
+    """One loop and one session per label, independent of the calling client's lifetime."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._sessions: dict[str, Client] = {}
+
+    def call(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        label: str,
+        timeout: float,
+        before_call: Callable[[str], None] | None,
+        transport_factory: Callable[[str], Any],
+    ) -> dict[str, Any]:
+        with self._lock:
+            future = None
+            try:
+                if self._loop is None:
+                    self._loop = asyncio.new_event_loop()
+                    self._thread = threading.Thread(
+                        target=_run_until_stopped,
+                        args=(self._loop,),
+                        name="rail-brain",
+                        daemon=True,
+                    )
+                    self._thread.start()
+                future = asyncio.run_coroutine_threadsafe(
+                    self._call(name, arguments, label, timeout, before_call, transport_factory),
+                    self._loop,
+                )
+                try:
+                    return future.result(timeout)
+                except concurrent.futures.TimeoutError:
+                    # an empty TimeoutError would leave a spooled attestation with no cause
+                    raise TimeoutError(f"no answer within {timeout:g} s") from None
+            except BrainToolError:
+                raise
+            except Exception:  # transport, timeout, shape — brain gave no answer
+                self._abandon(future, label, timeout, wait=True)
+                raise
+            except BaseException:  # an interrupt: never leave a call in flight on a session
+                self._abandon(future, label, timeout, wait=False)
+                raise
+
+    def _abandon(self, future: Any, label: str, timeout: float, *, wait: bool) -> None:
+        """Cancel the call and drop its session, so no later call shares it."""
+        if future is not None:
+            future.cancel()
+        if self._loop is not None:
+            discarded = asyncio.run_coroutine_threadsafe(self._discard(label, timeout), self._loop)
+            if wait:
+                discarded.result()
+
+    async def _discard(self, agent: str, timeout: float = CALL_TIMEOUT_SECONDS) -> None:
+        client = self._sessions.pop(agent, None)
+        if client is not None:
+            try:
+                await asyncio.wait_for(client.close(), timeout=timeout)
+            except (Exception, asyncio.CancelledError):
+                pass  # A broken transport must not hide the original failure.
+
+    async def _close_sessions(self) -> None:
+        for agent in list(self._sessions):
+            await self._discard(agent)
+
+    def close(self) -> None:
+        """Release server traces before stopping the loop; the next call may reopen it."""
+        if self._thread is not None and threading.current_thread() is self._thread:
+            # a finalizer running on the loop thread itself cannot wait on that loop: stop
+            # it and let the thread end (review finding)
+            loop = self._loop
+            if loop is not None:
+                loop.call_soon(self._stop_from_loop)
+            return
+        with self._lock:
+            if self._loop is None:
+                return
+            loop, thread = self._loop, self._thread
+            try:
+                asyncio.run_coroutine_threadsafe(self._close_sessions(), loop).result()
+            finally:
+                loop.call_soon_threadsafe(loop.stop)
+                if thread is not None:
+                    thread.join()
+                loop.close()
+                self._loop = None
+                self._thread = None
+
+    def _stop_from_loop(self) -> None:
+        """Called on the loop thread: schedule the shutdown, never wait on the loop."""
+        if self._loop is not None:
+            self._loop.create_task(self._shutdown())
+
+    async def _shutdown(self) -> None:
+        loop = asyncio.get_running_loop()
+        await self._close_sessions()  # the DELETEs are sent before the loop stops
+        self._loop = None
+        self._thread = None
+        loop.stop()  # the thread's target closes the loop once `run_forever` returns
+
+    async def _call(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        agent: str,
+        timeout: float,
+        before_call: Callable[[str], None] | None,
+        transport_factory: Callable[[str], Any],
+    ) -> dict[str, Any]:
+        from fastmcp import Client
+        from fastmcp.exceptions import ToolError
+
+        if before_call is not None:
+            before_call(agent)
+        client = self._sessions.get(agent)
+        if client is None:
+            client = Client(transport_factory(agent), timeout=timeout)
+            await client.__aenter__()
+            self._sessions[agent] = client
+        try:
+            result = await client.call_tool(name, arguments, timeout=timeout)
+        except ToolError as exc:
+            text = str(exc)
+            # fastmcp 3.4: `Unknown tool: '<name>'`; a refusal is `<code>: <message>` and its
+            # message may well say "not found" (ticket_not_found, contract_not_found)
+            if text.startswith(("Unknown tool", "Tool not found")):
+                raise BrainUnreachable(text) from exc
+            code, message = parse_tool_error(text)
+            raise BrainToolError(code, message) from exc
+        content = result.structured_content
+        if not isinstance(content, dict):
+            raise BrainUnreachable(f"{name}: no structured content")
+        return content
+
+
+_registry_lock = threading.Lock()
+# Transport identities stay private; neither the URL nor the token is logged.
+_http_pools: dict[tuple[str, str, str | None], _SessionPool] = {}
+_private_pools: weakref.WeakSet[_SessionPool] = weakref.WeakSet()
+
+
+def close_all() -> None:
+    """Close every session and stop its loop. Existing clients may reopen their pool.
+
+    Keep HTTP entries so a surviving client and a new client still share the same pool.
+    """
+    with _registry_lock:
+        for pool in [*_http_pools.values(), *_private_pools]:
+            pool.close()
+
+
+atexit.register(close_all)
+
+
 class BrainClient:
-    """`transport_factory(agent)` builds the transport for one call under one agent label:
-    the ledger sends each record's `issuer` as `X-Brain-Agent`, so brain's `issuer_identity`
-    equals the mirror's `issuer` and the two digests match."""
+    """HTTP clients share one process-owned session per transport identity and label.
+
+    The ledger sends each record's `issuer` as `X-Brain-Agent`, so brain's
+    `issuer_identity` equals the mirror's `issuer` and the two digests match.
+    """
 
     def __init__(
         self,
@@ -102,12 +271,21 @@ class BrainClient:
         timeout: float = CALL_TIMEOUT_SECONDS,
         redact: Callable[[str], str] | None = None,
         guard: Callable[[], None] | None = None,
+        _pool: _SessionPool | None = None,
     ) -> None:
         self.transport_factory = transport_factory
         self.guard = guard
         self.agent = agent
         self.timeout = timeout
         self.redact = redact if redact is not None else lambda text: text
+        self._before_call: Callable[[str], None] | None = None
+        self._shared = _pool is not None
+        self._pool = _pool if _pool is not None else _SessionPool()
+        if not self._shared:
+            with _registry_lock:
+                _private_pools.add(self._pool)
+            # The finalizer owns the pool, never the client. Dropped test clients cannot leak.
+            weakref.finalize(self, self._pool.close)
 
     @classmethod
     def http(
@@ -120,7 +298,7 @@ class BrainClient:
         guard: Callable[[], None] | None = None,
         interface: str | None = None,
     ) -> BrainClient:
-        from fastmcp.client.transports import StreamableHttpTransport
+        from fastmcp.client import transports
 
         if not is_reachable(url):
             raise BrainUnreachable("brain is reached on the loopback or a private address only")
@@ -129,11 +307,16 @@ class BrainClient:
 
         def factory(label: str) -> Any:
             headers = {"X-Brain-Tool-Profile": "native", "X-Brain-Agent": label}
-            return StreamableHttpTransport(
+            return transports.StreamableHttpTransport(
                 url, auth=token, headers=headers, httpx_client_factory=client_factory
             )
 
-        return cls(factory, agent, redact=redact, guard=guard)
+        with _registry_lock:
+            identity = (url, token, interface)  # the interface shapes every socket
+            pool = _http_pools.get(identity)
+            if pool is None:
+                pool = _http_pools[identity] = _SessionPool()
+        return cls(factory, agent, redact=redact, guard=guard, _pool=pool)
 
     @classmethod
     def from_settings(cls, settings: BrainSettings, *, agent: str) -> BrainClient:
@@ -148,16 +331,19 @@ class BrainClient:
 
     @classmethod
     def in_memory(cls, brain: FakeBrain | FastMCP, *, agent: str) -> BrainClient:
-        """Tests: a FastMCP server (or a `FakeBrain`) in the same process; the label the
-        real server would read from the header is set on the fake."""
+        """Tests: a private pool for an in-process server, closed explicitly or on collection.
+
+        The label the real server would read from the header is set on the fake.
+        """
         server = getattr(brain, "server", brain)
 
-        def factory(label: str) -> Any:
+        def set_agent(label: str) -> None:
             if hasattr(brain, "agent"):
                 brain.agent = label
-            return server
 
-        return cls(factory, agent)
+        client = cls(lambda label: server, agent)
+        client._before_call = set_agent
+        return client
 
     def call(
         self, name: str, arguments: dict[str, Any], *, agent: str | None = None
@@ -170,29 +356,27 @@ class BrainClient:
             except PrivateFileError as exc:
                 raise BrainUnreachable(self.redact(f"{name}: {exc}")) from None
         try:
-            return asyncio.run(self._call(name, arguments, agent or self.agent))
+            return self._pool.call(
+                name,
+                arguments,
+                agent or self.agent,
+                self.timeout,
+                self._before_call,
+                self.transport_factory,
+            )
         except BrainToolError:
             raise
-        except Exception as exc:  # transport, timeout, shape — brain gave no answer
+        except Exception as exc:
             # The transport's traceback may quote the private address too.
             raise BrainUnreachable(self.redact(f"{name}: {exc}")) from None
 
-    async def _call(self, name: str, arguments: dict[str, Any], agent: str) -> dict[str, Any]:
-        from fastmcp import Client
-        from fastmcp.exceptions import ToolError
+    def close(self) -> None:
+        """Close a private pool. HTTP sessions belong to the process; use `close_all()`."""
+        if not self._shared:
+            self._pool.close()
 
-        async with Client(self.transport_factory(agent), timeout=self.timeout) as client:
-            try:
-                result = await client.call_tool(name, arguments, timeout=self.timeout)
-            except ToolError as exc:
-                text = str(exc)
-                # fastmcp 3.4: `Unknown tool: '<name>'`; a refusal is `<code>: <message>` and its
-                # message may well say "not found" (ticket_not_found, contract_not_found)
-                if text.startswith(("Unknown tool", "Tool not found")):
-                    raise BrainUnreachable(text) from exc
-                code, message = parse_tool_error(text)
-                raise BrainToolError(code, message) from exc
-        content = result.structured_content
-        if not isinstance(content, dict):
-            raise BrainUnreachable(f"{name}: no structured content")
-        return content
+    def __enter__(self) -> BrainClient:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        self.close()
