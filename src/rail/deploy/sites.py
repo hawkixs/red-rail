@@ -8,11 +8,11 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import IPv4Address, IPv6Address, ip_address
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from rail.deploy import DeployError
 from rail.model import ADDRESS_TOKEN, SITE_PATTERN
@@ -22,12 +22,29 @@ DEFAULT_SITES_FILE = "~/.config/red-rail/sites.yaml"
 SITES_FILE_VARIABLE = "RAIL_SITES_FILE"  # names the path; the environment never holds an address
 
 Address = IPv4Address | IPv6Address
+INTERFACE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$"
 
 
 class Site(BaseModel):
+    """`interface` is read only for the `brain` site (the tunnel its address must be routed
+    through); deploy targets ignore it."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     address: Address
+    interface: str | None = Field(default=None, pattern=INTERFACE_PATTERN)
+
+    @field_validator("interface")
+    @classmethod
+    def _a_label_not_an_address(cls, value: str | None) -> str | None:
+        # an address typed by mistake would be printed by a route refusal
+        if value is not None:
+            try:
+                ip_address(value)
+            except ValueError:
+                return value
+            raise ValueError("an interface is a label (such as wg0), not an address")
+        return value
 
     @field_validator("address", mode="before")
     @classmethod

@@ -23,6 +23,44 @@ def _sites(tmp_path: Path, text: str, mode: int = 0o600) -> Path:
 def test_a_private_file_gives_the_site_its_address(tmp_path: Path) -> None:
     path = _sites(tmp_path, f"sites:\n  private-1:\n    address: {V4}\n")
     assert str(load_site("private-1", path).address) == V4
+    assert load_site("private-1", path).interface is None
+
+
+@pytest.mark.parametrize("interface", ["a", "wg0", "wg-tunnel.1", "wg_private", "a" * 15])
+def test_a_site_accepts_a_linux_interface_name(tmp_path: Path, interface: str) -> None:
+    path = _sites(
+        tmp_path, f'sites:\n  private-1:\n    address: "{V4}"\n    interface: "{interface}"\n'
+    )
+    assert load_site("private-1", path).interface == interface
+    binding = SiteBinding.load("private-1", path)
+    assert binding.fill("http://${BIND_ADDRESS}:9100/health") == f"http://{V4}:9100/health"
+
+
+@pytest.mark.parametrize("interface", [V4, ".".join(["10", "0", "0", "8"])])
+def test_an_address_used_as_an_interface_is_refused_without_echoing_it(
+    tmp_path: Path, interface: str
+) -> None:
+    path = _sites(
+        tmp_path, f'sites:\n  brain:\n    address: "{V6}"\n    interface: "{interface}"\n'
+    )
+    with pytest.raises(DeployError, match="interface.*label") as caught:
+        load_site("brain", path)
+    assert interface not in str(caught.value)
+    assert V6 not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "interface", ["", ".", "..", "a" * 16, "wg/0", "wg 0", "wg\\t0", "wg\\n0", "-wg0", "éth0"]
+)
+def test_an_invalid_interface_is_refused_without_the_site_address(
+    tmp_path: Path, interface: str
+) -> None:
+    path = _sites(
+        tmp_path, f'sites:\n  brain:\n    address: "{V4}"\n    interface: "{interface}"\n'
+    )
+    with pytest.raises(DeployError, match="interface") as caught:
+        load_site("brain", path)
+    assert V4 not in str(caught.value)
 
 
 def test_a_declared_site_can_be_distinguished_from_an_absent_one(tmp_path: Path) -> None:

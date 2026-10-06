@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from rail.brain import settings as brain_settings
 from rail.brain.client import BrainClient
 from rail.cli import main
 from tests.helpers import conforming_tree
@@ -40,9 +41,10 @@ def test_ping_shows_the_brain_site_name_even_when_unreachable(
     monkeypatch.delenv("RAIL_BRAIN_URL", raising=False)
     address = ".".join(["10", "0", "0", "7"])  # private, built at run time: no literal here
     sites = tmp_path / "sites.yaml"
-    sites.write_text(f"sites:\n  brain:\n    address: {address}\n")
+    sites.write_text(f"sites:\n  brain:\n    address: {address}\n    interface: wg0\n")
     sites.chmod(0o600)
     monkeypatch.setenv("RAIL_SITES_FILE", str(sites))
+    monkeypatch.setattr(brain_settings, "route_interface", lambda address: "wg0")
 
     async def call(self: BrainClient, name: str, arguments: dict, agent: str) -> dict:
         assert self.transport_factory(agent).url == f"http://{address}:8765/mcp"

@@ -104,6 +104,9 @@ comments, test names. The conversation with the operator stays in French.
   default, or the host's `brain` site from `sites.yaml`, with its address never shown;
   the bearer is read from a private file only — `RAIL_BRAIN_TOKEN_FILE`, default
   `~/.config/red-rail/brain-token` — never from an environment variable holding the value).
+  A private `brain` site declares its tunnel's `interface`; the rail refuses unless the kernel
+  routes its address through it, because the bearer travels as plain HTTP and confidentiality
+  comes from the tunnel.
 - `src/rail/contracts/` — brain-v42's published contracts vendored as data at the tag in
   `pins.py` (`delivery-attestations-v1.0`: 43 finding codes, the attestation API v1.0), frozen
   by `tests/test_boundary.py` (digests in CI, parity with the sibling checkout on the host).

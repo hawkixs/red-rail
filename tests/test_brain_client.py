@@ -1,14 +1,19 @@
 """`BrainClient`: one sync call, one stable code per refusal, the transport facts of
 2026-09-18 (bearer, tool profile, agent label)."""
 
+import asyncio
 import os
+import subprocess
 import traceback
+from ipaddress import ip_address
 from pathlib import Path
 
 import pytest
 
+from rail.brain import settings as brain_settings
 from rail.brain.client import BrainClient, BrainToolError, BrainUnreachable
 from rail.brain.settings import BrainSettings
+from rail.deploy.sites import Address
 from rail.private import PrivateFileError
 from tests.fake_brain import FakeBrain
 
@@ -66,6 +71,53 @@ def test_http_client_sends_bearer_profile_and_agent_headers() -> None:
     assert transport.auth is not None
 
 
+def test_http_transport_ignores_environment_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    monkeypatch.setenv("HTTP_PROXY", "http://192.0.2.20:8080")
+    monkeypatch.setenv("ALL_PROXY", "http://192.0.2.20:8080")
+    client = BrainClient.http("http://localhost:8765/mcp", token="t", agent="a")
+    transport = client.transport_factory("a")
+    assert transport.httpx_client_factory is not None
+
+    async def inspect() -> None:
+        timeout = httpx.Timeout(7)
+        auth = httpx.BasicAuth("user", "password")
+        async with transport.httpx_client_factory(
+            headers={"X-Probe": "present"}, timeout=timeout, auth=auth, follow_redirects=True
+        ) as http_client:
+            assert http_client.trust_env is False
+            # off, as in the MCP SDK: its transports follow redirects within the origin only
+            assert http_client.follow_redirects is False
+            assert http_client.headers["X-Probe"] == "present"
+            assert http_client.timeout == timeout
+            assert http_client.auth is auth
+
+    asyncio.run(inspect())
+
+
+def test_http_client_redacts_a_guard_refusal_before_creating_the_transport() -> None:
+    def refuse() -> None:
+        raise PrivateFileError(f"no route to {V4}")
+
+    client = BrainClient.http(
+        f"http://{V4}:8765/mcp",
+        token="t",
+        agent="a",
+        guard=refuse,
+        redact=lambda text: text.replace(V4, "brain"),
+    )
+
+    def unexpected_transport(agent: str) -> None:
+        pytest.fail("a refused guard must prevent transport creation")
+
+    client.transport_factory = unexpected_transport
+    with pytest.raises(BrainUnreachable, match="no route to brain") as caught:
+        client.call("brain_delivery_list", {})
+    assert caught.value.__suppress_context__
+    assert V4 not in "".join(traceback.format_exception(caught.value))
+
+
 # Built at run time: this public repository never carries a literal outside the documentation
 # ranges (tests/test_no_machine_address.py).
 _REFUSED_HOSTS = [
@@ -120,9 +172,14 @@ def test_a_declared_brain_site_gives_the_url_and_its_name_is_what_is_shown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _token(tmp_path, monkeypatch)
-    sites = _sites(tmp_path, f"sites:\n  brain:\n    address: {V4}\n")
+    sites = _sites(tmp_path, f"sites:\n  brain:\n    address: {V4}\n    interface: wg0\n")
     monkeypatch.setenv("RAIL_SITES_FILE", str(sites))
-    settings = BrainSettings.from_environment(os.environ)
+
+    def route_of(address: Address) -> str:
+        assert str(address) == V4
+        return "wg0"
+
+    settings = BrainSettings.from_environment(os.environ, route_of=route_of)
     assert settings.url == f"http://{V4}:8765/mcp"
     assert settings.shown == "http://brain:8765/mcp"
     assert settings.redact(f"connect to {V4}:8765 failed") == "connect to brain:8765 failed"
@@ -160,9 +217,9 @@ def test_a_declared_ipv6_brain_site_is_bracketed_and_redacted(
 ) -> None:
     _token(tmp_path, monkeypatch)
     address = V6
-    sites = _sites(tmp_path, f'sites:\n  brain:\n    address: "{address}"\n')
+    sites = _sites(tmp_path, f'sites:\n  brain:\n    address: "{address}"\n    interface: wg0\n')
     monkeypatch.setenv("RAIL_SITES_FILE", str(sites))
-    settings = BrainSettings.from_environment(os.environ)
+    settings = BrainSettings.from_environment(os.environ, route_of=lambda address: "wg0")
     client = BrainClient.from_settings(settings, agent="red-rail")
     assert client.transport_factory("red-rail").url == f"http://[{address}]:8765/mcp"
     assert settings.shown == "http://brain:8765/mcp"
@@ -219,9 +276,10 @@ def test_a_client_from_settings_redacts_a_transport_failure_and_its_traceback(
 ) -> None:
     _token(tmp_path, monkeypatch)
     monkeypatch.setenv(
-        "RAIL_SITES_FILE", str(_sites(tmp_path, f"sites:\n  brain:\n    address: {V4}\n"))
+        "RAIL_SITES_FILE",
+        str(_sites(tmp_path, f"sites:\n  brain:\n    address: {V4}\n    interface: wg0\n")),
     )
-    settings = BrainSettings.from_environment(os.environ)
+    settings = BrainSettings.from_environment(os.environ, route_of=lambda address: "wg0")
     client = BrainClient.from_settings(settings, agent="red-rail")
 
     async def fail(name: str, arguments: dict, agent: str) -> dict:
@@ -301,3 +359,209 @@ def test_the_environment_names_a_loopback_url_only(
     with pytest.raises(PrivateFileError, match="loopback URL only") as caught:
         BrainSettings.from_environment(os.environ)
     assert V4 not in str(caught.value)
+
+
+@pytest.mark.parametrize("address", [V4, V6])
+def test_a_private_brain_site_must_declare_its_tunnel_interface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, address: str
+) -> None:
+    _token(tmp_path, monkeypatch)
+    path = _sites(tmp_path, f'sites:\n  brain:\n    address: "{address}"\n')
+    monkeypatch.setenv("RAIL_SITES_FILE", str(path))
+
+    def unexpected_route(address: Address) -> str:
+        pytest.fail("a missing declaration must be refused before querying the kernel")
+
+    with pytest.raises(PrivateFileError) as caught:
+        BrainSettings.from_environment(os.environ, route_of=unexpected_route)
+    assert str(caught.value) == (
+        "site brain: declare `interface`, the one the kernel must route its address through "
+        f"(the tunnel's), in {path}"
+    )
+    assert address not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.mark.parametrize("address", [V4, V6])
+@pytest.mark.parametrize("actual", ["eth0", None])
+def test_a_private_brain_site_refuses_a_route_outside_its_declared_interface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, address: str, actual: str | None
+) -> None:
+    _token(tmp_path, monkeypatch)
+    path = _sites(tmp_path, f'sites:\n  brain:\n    address: "{address}"\n    interface: wg0\n')
+    monkeypatch.setenv("RAIL_SITES_FILE", str(path))
+    calls = []
+
+    def route_of(destination: Address) -> str | None:
+        calls.append(destination)
+        return actual
+
+    with pytest.raises(PrivateFileError) as caught:
+        BrainSettings.from_environment(os.environ, route_of=route_of)
+    assert calls == [ip_address(address)]
+    assert str(caught.value) == (
+        "site brain: the kernel gives no route to its address"
+        if actual is None
+        else "site brain: the kernel routes its address through eth0, not the declared wg0"
+    )
+    assert address not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.mark.parametrize("source", ["default", "environment", "site"])
+def test_loopback_never_queries_the_kernel_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    _token(tmp_path, monkeypatch)
+    loopback = ".".join(["127", "0", "0", "1"])
+    if source == "environment":
+        monkeypatch.setenv("RAIL_BRAIN_URL", f"http://{loopback}:8765/mcp")
+    elif source == "site":
+        path = _sites(tmp_path, f"sites:\n  brain:\n    address: {loopback}\n")
+        monkeypatch.setenv("RAIL_SITES_FILE", str(path))
+
+    def unexpected_route(address: Address) -> str:
+        pytest.fail("loopback does not carry the bearer over a remote interface")
+
+    settings = BrainSettings.from_environment(os.environ, route_of=unexpected_route)
+    assert settings.url == f"http://{loopback}:8765/mcp"
+    settings.guard()
+    client = BrainClient.from_settings(settings, agent="red-rail")
+    client.transport_factory = lambda agent: FakeBrain().server
+    assert client.call("brain_delivery_list", {"actor_project": "red-probe"})["items"] == []
+
+
+@pytest.mark.parametrize("actual", ["eth0", None])
+def test_each_call_checks_the_route_again_before_creating_the_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, actual: str | None
+) -> None:
+    _token(tmp_path, monkeypatch)
+    monkeypatch.setenv(
+        "RAIL_SITES_FILE",
+        str(_sites(tmp_path, f"sites:\n  brain:\n    address: {V4}\n    interface: wg0\n")),
+    )
+    routes = iter(["wg0", "wg0", actual])
+    destinations = []
+
+    def route_of(address: Address) -> str | None:
+        destinations.append(address)
+        return next(routes)
+
+    settings = BrainSettings.from_environment(os.environ, route_of=route_of)
+    client = BrainClient.from_settings(settings, agent="red-rail")
+    transports = []
+    brain = FakeBrain()
+
+    def transport(agent: str) -> object:
+        transports.append(agent)
+        return brain.server
+
+    client.transport_factory = transport
+    assert client.call("brain_delivery_list", {"actor_project": "red-probe"})["items"] == []
+    with pytest.raises(BrainUnreachable) as caught:
+        client.call("brain_delivery_list", {"actor_project": "red-probe"})
+    assert str(caught.value) == (
+        "brain_delivery_list: site brain: the kernel gives no route to its address"
+        if actual is None
+        else "brain_delivery_list: site brain: the kernel routes its address through eth0, "
+        "not the declared wg0"
+    )
+    assert destinations == [ip_address(V4)] * 3
+    assert transports == ["red-rail"]
+    assert V4 not in "".join(traceback.format_exception(caught.value))
+
+
+def test_route_interface_queries_the_ipv4_table_for_a_mapped_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mapped = ip_address("::ffff:" + V4)
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        assert command == ["ip", "-o", "route", "get", V4]
+        return subprocess.CompletedProcess(command, 0, f"{V4} dev wg0 src {V4}\n", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert brain_settings.route_interface(mapped) == "wg0"
+
+
+@pytest.mark.parametrize(
+    ("address", "output", "interface"),
+    [
+        (V4, f"{V4} via 192.0.2.1 dev eth0 src 192.0.2.2 uid 1000 \\\n    cache", "eth0"),
+        (V4, f"local {V4} dev lo table local src {V4} uid 1000 \\\n    cache", "lo"),
+        (
+            V6,
+            f"{V6} from :: via {':'.join(['fe80', '', '1'])} dev wg0 proto static "
+            f"src {V6} metric 1024 pref medium",
+            "wg0",
+        ),
+    ],
+)
+def test_route_interface_parses_realistic_kernel_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    address: str,
+    output: str,
+    interface: str,
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, output, ""),
+    )
+    assert brain_settings.route_interface(ip_address(address)) == interface
+    _token(tmp_path, monkeypatch)
+    monkeypatch.setenv(
+        "RAIL_SITES_FILE",
+        str(_sites(tmp_path, f'sites:\n  brain:\n    address: "{address}"\n    interface: wg0\n')),
+    )
+    if interface == "wg0":
+        BrainSettings.from_environment(os.environ)
+    else:
+        with pytest.raises(PrivateFileError, match=f"through {interface}, not the declared wg0"):
+            BrainSettings.from_environment(os.environ)
+
+
+@pytest.mark.parametrize("address", ["192.0.2.10", "2001:db8::10"])
+def test_route_interface_asks_the_kernel_with_a_bounded_command(
+    monkeypatch: pytest.MonkeyPatch, address: str
+) -> None:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        assert command == ["ip", "-o", "route", "get", address]
+        assert kwargs == {"capture_output": True, "text": True, "timeout": 2, "check": False}
+        return subprocess.CompletedProcess(command, 0, f"{address} dev wg0 src {address}\n", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert brain_settings.route_interface(ip_address(address)) == "wg0"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "output"),
+    [(1, "192.0.2.10 dev wg0"), (0, "192.0.2.10 via 192.0.2.1"), (0, "dev"), (0, "")],
+)
+def test_route_interface_returns_none_without_a_successful_route(
+    monkeypatch: pytest.MonkeyPatch, returncode: int, output: str
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], returncode, output, ""),
+    )
+    assert brain_settings.route_interface(ip_address("192.0.2.10")) is None
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        FileNotFoundError("ip"),
+        subprocess.TimeoutExpired("ip", 2),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        ValueError("invalid route output"),
+    ],
+)
+def test_route_interface_returns_none_when_the_kernel_query_cannot_run(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
+        raise failure
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert brain_settings.route_interface(ip_address("192.0.2.10")) is None

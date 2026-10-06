@@ -42,6 +42,26 @@ def parse_tool_error(text: str) -> tuple[str, str]:
     return code, message.strip()
 
 
+def _without_proxies(
+    headers: dict[str, str] | None = None,
+    timeout: Any = None,
+    auth: Any = None,
+    follow_redirects: bool = False,  # passed by fastmcp, deliberately not honoured
+) -> Any:
+    """The MCP SDK's client factory (`mcp.shared._httpx_utils.create_mcp_http_client`) with
+    `trust_env=False`: a proxy variable would send the bearer outside the tunnel the route
+    guard checked (review finding). fastmcp asks a custom factory to follow redirects; the
+    SDK's own factory does not, and neither does this one: a redirect is a destination the
+    route guard never checked, and the MCP transports follow same-origin ones themselves."""
+    del follow_redirects
+    import httpx
+    from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
+
+    if timeout is None:
+        timeout = httpx.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT)
+    return httpx.AsyncClient(headers=headers, timeout=timeout, auth=auth, trust_env=False)
+
+
 class BrainClient:
     """`transport_factory(agent)` builds the transport for one call under one agent label:
     the ledger sends each record's `issuer` as `X-Brain-Agent`, so brain's `issuer_identity`
@@ -54,8 +74,10 @@ class BrainClient:
         *,
         timeout: float = CALL_TIMEOUT_SECONDS,
         redact: Callable[[str], str] | None = None,
+        guard: Callable[[], None] | None = None,
     ) -> None:
         self.transport_factory = transport_factory
+        self.guard = guard
         self.agent = agent
         self.timeout = timeout
         self.redact = redact if redact is not None else lambda text: text
@@ -68,6 +90,7 @@ class BrainClient:
         token: str,
         agent: str,
         redact: Callable[[str], str] | None = None,
+        guard: Callable[[], None] | None = None,
     ) -> BrainClient:
         from fastmcp.client.transports import StreamableHttpTransport
 
@@ -76,13 +99,21 @@ class BrainClient:
 
         def factory(label: str) -> Any:
             headers = {"X-Brain-Tool-Profile": "native", "X-Brain-Agent": label}
-            return StreamableHttpTransport(url, auth=token, headers=headers)
+            return StreamableHttpTransport(
+                url, auth=token, headers=headers, httpx_client_factory=_without_proxies
+            )
 
-        return cls(factory, agent, redact=redact)
+        return cls(factory, agent, redact=redact, guard=guard)
 
     @classmethod
     def from_settings(cls, settings: BrainSettings, *, agent: str) -> BrainClient:
-        return cls.http(settings.url, token=settings.token, agent=agent, redact=settings.redact)
+        return cls.http(
+            settings.url,
+            token=settings.token,
+            agent=agent,
+            redact=settings.redact,
+            guard=settings.guard,
+        )
 
     @classmethod
     def in_memory(cls, brain: FakeBrain | FastMCP, *, agent: str) -> BrainClient:
@@ -100,6 +131,13 @@ class BrainClient:
     def call(
         self, name: str, arguments: dict[str, Any], *, agent: str | None = None
     ) -> dict[str, Any]:
+        from rail.private import PrivateFileError
+
+        if self.guard is not None:
+            try:
+                self.guard()
+            except PrivateFileError as exc:
+                raise BrainUnreachable(self.redact(f"{name}: {exc}")) from None
         try:
             return asyncio.run(self._call(name, arguments, agent or self.agent))
         except BrainToolError:
