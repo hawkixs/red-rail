@@ -5,7 +5,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from rail.model import DeployTarget, LedgerBackend, RailConfig, Stack, Tier, load_rail_config
+from rail.model import (
+    PRIVATE_TARGETS,
+    DeployConfig,
+    DeployTarget,
+    LedgerBackend,
+    RailConfig,
+    Stack,
+    Tier,
+    load_rail_config,
+)
 
 MINIMAL = {
     "rail": 1,
@@ -332,3 +341,108 @@ def test_a_site_is_accepted_on_the_systemd_target_too() -> None:
 def test_the_retired_target_name_no_longer_loads() -> None:
     with pytest.raises(ValidationError, match="pc-server-systemd"):
         RailConfig.model_validate(_prod({**SITE_DEPLOY, "target": "pc-server-systemd"}))
+
+
+# -- private-timers (spec 2026-10-06-private-timers-target) ------------------------------
+
+TIMERS = {
+    "target": "private-timers",
+    "site": "private-1",
+    "payload": "/opt/red-backup",
+    "units": [
+        "deploy/systemd/red-backup.service",
+        "deploy/systemd/red-backup.timer",
+        "deploy/systemd/red-backup-alert.service",
+    ],
+}
+
+
+def test_a_private_timers_manifest_loads() -> None:
+    cfg = DeployConfig.model_validate(TIMERS)
+    assert cfg.target is DeployTarget.PRIVATE_TIMERS and cfg.healthcheck is None
+    assert cfg.units[1] == "deploy/systemd/red-backup.timer"
+    assert DeployTarget.PRIVATE_TIMERS in PRIVATE_TARGETS
+
+
+@pytest.mark.parametrize("key", ["payload", "units"])
+def test_private_timers_requires_its_keys(key: str) -> None:
+    with pytest.raises(ValidationError, match=f"deploy.{key} is required by target private-timers"):
+        DeployConfig.model_validate({k: v for k, v in TIMERS.items() if k != key})
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("healthcheck", "http://${BIND_ADDRESS}:9/health"),
+        ("unit", "deploy/a.service"),
+        ("binary", "/usr/bin/a"),
+    ],
+)
+def test_private_timers_refuses_the_keys_of_other_targets(key: str, value: str) -> None:
+    with pytest.raises(
+        ValidationError, match=f"deploy.{key} does not apply to target private-timers"
+    ):
+        DeployConfig.model_validate({**TIMERS, key: value})
+
+
+@pytest.mark.parametrize("key", ["payload", "units"])
+def test_other_targets_refuse_the_timer_keys(key: str) -> None:
+    other = {
+        "target": "private-compose",
+        "site": "private-1",
+        "healthcheck": "http://${BIND_ADDRESS}:9/health",
+    }
+    with pytest.raises(
+        ValidationError, match=f"deploy.{key} applies to target private-timers only"
+    ):
+        DeployConfig.model_validate({**other, key: TIMERS[key]})
+
+
+def test_other_targets_still_require_a_healthcheck() -> None:
+    with pytest.raises(
+        ValidationError, match="deploy.healthcheck is required by target private-compose"
+    ):
+        DeployConfig.model_validate({"target": "private-compose", "site": "private-1"})
+
+
+@pytest.mark.parametrize(
+    "units",
+    [
+        ["deploy/systemd/red-backup.timer"],
+        ["deploy/../x.service"],
+        ["deploy/systemd/Red.service"],
+        ["deploy/systemd/a.socket"],
+        ["deploy/a.service", "other/a.service"],
+        [],
+    ],
+)
+def test_bad_unit_lists_are_refused(units: list[str]) -> None:
+    with pytest.raises(ValidationError, match="deploy.units"):
+        DeployConfig.model_validate({**TIMERS, "units": units})
+
+
+def test_a_version_command_is_no_longer_a_manifest_key() -> None:
+    """The identity is read from the payload, never executed (operator decision 2026-10-06)."""
+    with pytest.raises(ValidationError, match="version_command"):
+        DeployConfig.model_validate({**TIMERS, "version_command": ["bin/python3"]})
+
+
+@pytest.mark.parametrize("payload", ["opt/red-backup", "/opt/../etc", "/opt/red backup"])
+def test_bad_payloads_are_refused(payload: str) -> None:
+    with pytest.raises(ValidationError, match="deploy.payload"):
+        DeployConfig.model_validate({**TIMERS, "payload": payload})
+
+
+def test_a_healthcheck_on_private_timers_is_refused_even_behind_a_site() -> None:
+    """The target is verified without HTTP (spec decision 8): a declared healthcheck would be
+    ignored silently, so it is refused."""
+    with pytest.raises(
+        ValidationError, match="deploy.healthcheck does not apply to target private-timers"
+    ):
+        DeployConfig.model_validate({**TIMERS, "healthcheck": "http://${BIND_ADDRESS}:9/health"})
+
+
+def test_a_units_list_without_a_timer_is_refused() -> None:
+    """Without a timer nothing fires, and the observe gate would have nothing to prove."""
+    with pytest.raises(ValidationError, match="deploy.units must declare at least one timer"):
+        DeployConfig.model_validate({**TIMERS, "units": ["deploy/systemd/red-backup.service"]})

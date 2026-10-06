@@ -102,10 +102,37 @@ def test_read_agent_reads_the_systemd_units_too() -> None:
         "not a row",
     ]
     view = read_agent("http://192.0.2.2:8081", "vps", http=_http(body=snapshot))
-    running = Unit(name="red-agent.service", active_state="active", sub_state="running")
+    running = Unit(
+        name="red-agent.service", active_state="active", sub_state="running", load_state="loaded"
+    )
     assert view.units == (running,)
     assert find_unit(view, "red-agent.service") == view.units[0]
     assert find_unit(view, "other.service") is None
+
+
+def test_a_systemd_row_parses_timer_observation_fields() -> None:
+    snapshot = json.loads(json.dumps(LATEST))
+    snapshot["agents"]["vps"]["systemd"] = [
+        {
+            "name": "red-job.timer",
+            "load_state": "loaded",
+            "active_state": "active",
+            "sub_state": "waiting",
+            "result": "success",
+            "exec_main_status": 0,
+            "exec_main_exited_at": "2026-09-19T20:07:25Z",
+            "next_elapse_at": "2026-09-20T20:07:25Z",
+        },
+        {"name": "bad.service", "exec_main_status": "unknown", "exec_main_exited_at": "bad"},
+    ]
+    view = read_agent("http://192.0.2.2:8081", "vps", http=_http(body=snapshot))
+    timer, bad = view.units
+    assert timer.load_state == "loaded" and timer.result == "success"
+    assert timer.exec_main_status == 0
+    assert timer.exec_main_exited_at == datetime(2026, 9, 19, 20, 7, 25, tzinfo=UTC)
+    assert timer.next_elapse_at == datetime(2026, 9, 20, 20, 7, 25, tzinfo=UTC)
+    assert bad.exec_main_status is None and bad.exec_main_exited_at is None
+    assert bad.next_elapse_at is None
 
 
 def test_an_agent_without_systemd_rows_has_no_units() -> None:

@@ -30,6 +30,11 @@ class Unit:
     name: str
     active_state: str
     sub_state: str
+    load_state: str = ""
+    result: str = ""
+    exec_main_status: int | None = None
+    exec_main_exited_at: datetime | None = None
+    next_elapse_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +94,16 @@ def read_agent(
             name=str(row.get("name", "")),
             active_state=str(row.get("active_state", "")),
             sub_state=str(row.get("sub_state", "")),
+            load_state=str(row.get("load_state", "")),
+            result=str(row.get("result", "")),
+            exec_main_status=(
+                row.get("exec_main_status")
+                if isinstance(row.get("exec_main_status"), int)
+                and not isinstance(row.get("exec_main_status"), bool)
+                else None
+            ),
+            exec_main_exited_at=_instant(row.get("exec_main_exited_at")),
+            next_elapse_at=_instant(row.get("next_elapse_at")),
         )
         for row in (unit_rows if isinstance(unit_rows, list) else [])
         if isinstance(row, dict)
