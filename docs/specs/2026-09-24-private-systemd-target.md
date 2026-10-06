@@ -110,6 +110,10 @@ the ticket asks for systemd.
      prefix, because the file must exist;
    - an `Exec*=` line carries the `+`, `!` or `!!` prefix (full privileges), or
      `PermissionsStartOnly=` is set;
+   - `[Service] AmbientCapabilities=` has an effective non-empty value (it gives a non-root user
+     root's powers), or a `[Unit]` `FailureAction=`, `SuccessAction=`, `StartLimitAction=` or
+     `JobTimeoutAction=` has a value other than `none` (PID 1 performs it as root: reboot,
+     power off, exit);
    - the file name is not a plain unit name (`[a-z0-9]+(-[a-z0-9]+)*\.service`).
 
    The parser reads sections, `key=value` lines, comments and line continuations, and ignores the

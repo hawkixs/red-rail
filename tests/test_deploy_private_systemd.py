@@ -763,3 +763,37 @@ def test_the_container_is_removed_even_when_the_copy_fails(tmp_path: Path) -> No
     assert calls[-1] == "docker rm --force fake-container"
     assert not any(call.startswith("sudo") for call in calls)
     assert not (project / "current").exists()
+
+
+@pytest.mark.parametrize("value", ["CAP_NET_BIND_SERVICE", "CAP_NET_RAW CAP_NET_ADMIN"])
+def test_ambient_capabilities_are_refused(value: str) -> None:
+    refusals = _refusals(
+        GOOD.replace("Type=simple\n", f"Type=simple\nAmbientCapabilities={value}\n")
+    )
+    assert any("AmbientCapabilities=" in refusal for refusal in refusals), refusals
+    assert all(refusal.startswith(UNIT) for refusal in refusals), refusals
+
+
+def test_an_ambient_capabilities_list_reset_is_accepted() -> None:
+    """Only what follows the last empty assignment is effective, as for every list."""
+    text = GOOD.replace(
+        "Type=simple\n", "Type=simple\nAmbientCapabilities=CAP_NET_RAW\nAmbientCapabilities=\n"
+    )
+    assert _refusals(text) == []
+
+
+@pytest.mark.parametrize(
+    "key", ["FailureAction", "SuccessAction", "StartLimitAction", "JobTimeoutAction"]
+)
+@pytest.mark.parametrize("value", ["reboot", "poweroff-force", "exit", "reboot-force"])
+def test_a_unit_action_other_than_none_is_refused(key: str, value: str) -> None:
+    refusals = _refusals(GOOD.replace("After=", f"{key}={value}\nAfter=", 1))
+    assert any(f"{key}={value}" in refusal for refusal in refusals), refusals
+    assert all(refusal.startswith(UNIT) for refusal in refusals), refusals
+
+
+@pytest.mark.parametrize(
+    "key", ["FailureAction", "SuccessAction", "StartLimitAction", "JobTimeoutAction"]
+)
+def test_a_unit_action_none_is_accepted(key: str) -> None:
+    assert _refusals(GOOD.replace("After=", f"{key}=none\nAfter=", 1)) == []

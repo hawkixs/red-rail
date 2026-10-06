@@ -139,6 +139,10 @@ def parse_unit(text: str) -> dict[str, dict[str, list[str]]]:
     return sections
 
 
+# PID 1 performs these as root: anything but `none` reboots, powers off or exits the host.
+_UNIT_ACTIONS = ("FailureAction", "SuccessAction", "StartLimitAction", "JobTimeoutAction")
+
+
 def _effective(values: list[str]) -> list[str]:
     """Only the values assigned after the last empty one: systemd resets a list-valued
     directive to empty on a bare `Key=`, so nothing assigned before that reset survives."""
@@ -219,7 +223,8 @@ def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> li
     if invisible_refusal is not None:
         return [invisible_refusal]
 
-    service = parse_unit(text).get("Service")
+    sections = parse_unit(text)
+    service = sections.get("Service")
     if service is None:
         return [f"{unit} has no [Service] section"]
 
@@ -285,6 +290,16 @@ def unit_refusals(text: str, *, unit: str, current: str, binary_name: str) -> li
 
     if "PermissionsStartOnly" in service:
         refusals.append(f"{unit}: PermissionsStartOnly= runs the Exec*Pre/Post commands as root")
+
+    for value in _effective(service.get("AmbientCapabilities", [])):
+        refusals.append(f"{unit}: AmbientCapabilities={value} gives a non-root user root's powers")
+
+    for key in _UNIT_ACTIONS:
+        refusals.extend(
+            f"{unit}: {key}={value} makes systemd act on the host as root; only `none` is allowed"
+            for value in sections.get("Unit", {}).get(key, [])
+            if value != "none"
+        )
 
     return refusals
 
