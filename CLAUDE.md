@@ -100,7 +100,8 @@ comments, test names. The conversation with the operator stays in French.
   derives deterministic keys (`<kind>:<subject>[:<occurrence>]`); `brain_digest` recomputes
   brain's payload digest.
 - `src/rail/brain/` — `client.py` (one synchronous MCP call, stable refusal codes, the
-  `X-Brain-Agent` label sent per call = the record's issuer) and `settings.py` (loopback URL;
+  `X-Brain-Agent` label sent per call = the record's issuer) and `settings.py` (loopback by
+  default, or the host's `brain` site from `sites.yaml`, with its address never shown;
   the bearer is read from a private file only — `RAIL_BRAIN_TOKEN_FILE`, default
   `~/.config/red-rail/brain-token` — never from an environment variable holding the value).
 - `src/rail/contracts/` — brain-v42's published contracts vendored as data at the tag in

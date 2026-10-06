@@ -1,6 +1,6 @@
 """One synchronous call to brain-v42 over MCP, one stable code per refusal.
 
-Transport facts (brain-v42, 2026-09-18): Streamable HTTP on the host loopback, bearer
+Transport facts (brain-v42): Streamable HTTP on loopback or a private address, bearer
 mandatory, `X-Brain-Tool-Profile: native` so the delivery tools are callable by name,
 `X-Brain-Agent` = the issuer label. A refusal is `ToolError("<code>: <message>")`.
 """
@@ -11,7 +11,7 @@ import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from rail.brain.settings import is_loopback
+from rail.brain.settings import BrainSettings, is_reachable
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -53,23 +53,36 @@ class BrainClient:
         agent: str,
         *,
         timeout: float = CALL_TIMEOUT_SECONDS,
+        redact: Callable[[str], str] | None = None,
     ) -> None:
         self.transport_factory = transport_factory
         self.agent = agent
         self.timeout = timeout
+        self.redact = redact if redact is not None else lambda text: text
 
     @classmethod
-    def http(cls, url: str, *, token: str, agent: str) -> BrainClient:
+    def http(
+        cls,
+        url: str,
+        *,
+        token: str,
+        agent: str,
+        redact: Callable[[str], str] | None = None,
+    ) -> BrainClient:
         from fastmcp.client.transports import StreamableHttpTransport
 
-        if not is_loopback(url):
-            raise BrainUnreachable(f"{url}: brain is reached on the host loopback only")
+        if not is_reachable(url):
+            raise BrainUnreachable("brain is reached on the loopback or a private address only")
 
         def factory(label: str) -> Any:
             headers = {"X-Brain-Tool-Profile": "native", "X-Brain-Agent": label}
             return StreamableHttpTransport(url, auth=token, headers=headers)
 
-        return cls(factory, agent)
+        return cls(factory, agent, redact=redact)
+
+    @classmethod
+    def from_settings(cls, settings: BrainSettings, *, agent: str) -> BrainClient:
+        return cls.http(settings.url, token=settings.token, agent=agent, redact=settings.redact)
 
     @classmethod
     def in_memory(cls, brain: FakeBrain | FastMCP, *, agent: str) -> BrainClient:
@@ -92,7 +105,8 @@ class BrainClient:
         except BrainToolError:
             raise
         except Exception as exc:  # transport, timeout, shape — brain gave no answer
-            raise BrainUnreachable(f"{name}: {exc}") from exc
+            # The transport's traceback may quote the private address too.
+            raise BrainUnreachable(self.redact(f"{name}: {exc}")) from None
 
     async def _call(self, name: str, arguments: dict[str, Any], agent: str) -> dict[str, Any]:
         from fastmcp import Client

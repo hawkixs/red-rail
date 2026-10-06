@@ -80,9 +80,7 @@ def sites_file(environ: Mapping[str, str] | None = None) -> Path:
     return Path(env.get(SITES_FILE_VARIABLE) or DEFAULT_SITES_FILE).expanduser()
 
 
-def load_site(name: str, path: Path | None = None) -> Site:
-    """The site `name` from the host's private sites file. Every failure is a `DeployError`
-    naming the site, the file and the fix; the target calls this before any step is planned."""
+def _read_sites(name: str, path: Path | None) -> tuple[Path, SitesFile]:
     try:
         where = sites_file() if path is None else path
     except RuntimeError as exc:  # `~user` of an unknown user: a refusal, never a crash
@@ -104,9 +102,26 @@ def load_site(name: str, path: Path | None = None) -> Site:
             f"site {name}: {where} is not a valid sites file: not YAML ({type(exc).__name__}) "
             f"— {fix}"
         ) from exc
+    return where, document
+
+
+def declared_site(name: str, path: Path | None = None) -> Site | None:
+    """An absent declaration returns None; an untrusted file still raises `DeployError`, so
+    callers with a default never mistake a broken configuration for an absent site."""
+    _, document = _read_sites(name, path)
+    return document.sites.get(name)
+
+
+def load_site(name: str, path: Path | None = None) -> Site:
+    """The site `name` from the host's private sites file. Every failure is a `DeployError`
+    naming the site, the file and the fix; the target calls this before any step is planned."""
+    where, document = _read_sites(name, path)
     site = document.sites.get(name)
     if site is None:
         known = ", ".join(sorted(document.sites)) or "none"
+        fix = (
+            f'declare it on this host: `sites: {{{name}: {{address: "…"}}}}` in {where}, mode 0600'
+        )
         raise DeployError(f"site {name} is not declared in {where} (known: {known}) — {fix}")
     return site
 

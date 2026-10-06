@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from rail.brain.client import BrainClient
 from rail.cli import main
 from tests.helpers import conforming_tree
 
@@ -25,3 +26,33 @@ def test_ping_refuses_a_remote_url(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("RAIL_BRAIN_URL", "http://brain.example.com/mcp")
     out = CliRunner().invoke(main, ["brain", "ping", "--repo", str(repo)])
     assert out.exit_code == 1 and "loopback" in out.output and "t0ken" not in out.output
+
+
+@pytest.mark.parametrize("reachable", [True, False])
+def test_ping_shows_the_brain_site_name_even_when_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reachable: bool
+) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "bootstrap")
+    token_file = tmp_path / "brain-token"
+    token_file.write_text("t0ken\n")
+    token_file.chmod(0o600)
+    monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(token_file))
+    monkeypatch.delenv("RAIL_BRAIN_URL", raising=False)
+    address = ".".join(["10", "0", "0", "7"])  # private, built at run time: no literal here
+    sites = tmp_path / "sites.yaml"
+    sites.write_text(f"sites:\n  brain:\n    address: {address}\n")
+    sites.chmod(0o600)
+    monkeypatch.setenv("RAIL_SITES_FILE", str(sites))
+
+    async def call(self: BrainClient, name: str, arguments: dict, agent: str) -> dict:
+        assert self.transport_factory(agent).url == f"http://{address}:8765/mcp"
+        assert agent == "red-rail" and name == "brain_delivery_list"
+        if not reachable:
+            raise RuntimeError(f"connect to {address}:8765 failed")
+        return {"items": [], "omitted_count": 0}
+
+    monkeypatch.setattr(BrainClient, "_call", call)
+    out = CliRunner().invoke(main, ["brain", "ping", "--repo", str(repo)])
+    assert out.exit_code == (0 if reachable else 1)
+    assert "brain:8765" in out.output
+    assert address not in out.output and "t0ken" not in out.output

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from rail.deploy import DeployError
+from rail.deploy import sites as host_sites
 from rail.deploy.sites import SiteBinding, load_site, redact_address, sites_file, substitute_address
 
 V4 = "192.0.2.10"  # RFC 5737 and RFC 3849: documentation addresses only
@@ -22,6 +23,35 @@ def _sites(tmp_path: Path, text: str, mode: int = 0o600) -> Path:
 def test_a_private_file_gives_the_site_its_address(tmp_path: Path) -> None:
     path = _sites(tmp_path, f"sites:\n  private-1:\n    address: {V4}\n")
     assert str(load_site("private-1", path).address) == V4
+
+
+def test_a_declared_site_can_be_distinguished_from_an_absent_one(tmp_path: Path) -> None:
+    path = _sites(tmp_path, f"sites:\n  brain:\n    address: {V4}\n")
+    site = host_sites.declared_site("brain", path)
+    assert site is not None and str(site.address) == V4
+    assert host_sites.declared_site("other", path) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "mode"),
+    [
+        (f"sites:\n  brain:\n    address: {V4}\n", 0o644),
+        (f'sites:\n  brain:\n    address: "{V4}/24"\n', 0o600),
+        (f'sites:\n  brain:\n    address: "{V4}"\n    broken: [\n', 0o600),
+    ],
+)
+def test_a_declared_site_lookup_still_refuses_an_untrusted_file(
+    tmp_path: Path, text: str, mode: int
+) -> None:
+    path = _sites(tmp_path, text, mode)
+    with pytest.raises(DeployError, match="site brain") as caught:
+        host_sites.declared_site("brain", path)
+    assert V4 not in str(caught.value)
+
+
+def test_a_declared_site_lookup_refuses_a_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(DeployError, match="site brain"):
+        host_sites.declared_site("brain", tmp_path / "absent.yaml")
 
 
 def test_an_ipv6_address_is_accepted(tmp_path: Path) -> None:

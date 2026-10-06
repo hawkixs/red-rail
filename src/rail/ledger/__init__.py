@@ -379,8 +379,8 @@ def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
         try:
             settings = BrainSettings.from_environment()
         except PrivateFileError as exc:
-            raise LedgerError(f"brain token: {exc}") from exc
-        client = BrainClient.http(settings.url, token=settings.token, agent="red-rail")
+            raise LedgerError(str(exc)) from exc  # the refusal names its cause
+        client = BrainClient.from_settings(settings, agent="red-rail")
     assert cfg.ticket is not None  # guaranteed by the manifest validator
     return BrainLedger(
         client, ticket=cfg.ticket, project=cfg.project, spool_dir=spool_directory(cfg.project)
