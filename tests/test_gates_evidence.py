@@ -1,6 +1,7 @@
 """Stages 5–10 read the ledger: a history gate judges the newest matching attestation that
 sits on HEAD's history, never one from another line."""
 
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -681,6 +682,112 @@ def test_visible_reads_the_unit_on_a_systemd_target(
     monkeypatch.setattr(monitor, "read_agent", lambda base_url, agent, **kwargs: view)
     result = visible(repo)
     assert result.passed is passed and detail in result.details, result.details
+
+
+def _timers_deployed_tree(tmp_path: Path) -> Path:
+    repo = _deployed_tree(tmp_path)
+    manifest = (
+        (repo / "rail.yaml")
+        .read_text()
+        .replace(
+            "  target: vps-traefik\n",
+            "  target: private-timers\n  payload: /opt/red\n"
+            "  units:\n    - deploy/red-job.service\n    - deploy/red-job.timer\n"
+            "  version_command: [bin/python, -m, red, version]\n",
+        )
+    )
+    # the target is verified without HTTP and refuses a healthcheck (spec decision 8)
+    manifest = re.sub(r"(?m)^  healthcheck: .*\n", "", manifest)
+    (repo / "rail.yaml").write_text(manifest)
+    return repo
+
+
+def _timer_view(
+    *,
+    timer_state: str = "waiting",
+    result: str = "success",
+    status: int = 0,
+    exited: datetime = T0 + timedelta(minutes=2),
+) -> AgentView:
+    return AgentView(
+        agent="vps",
+        status="up",
+        last_seen=T0,
+        containers=(),
+        units=(
+            monitor.Unit(
+                "red-job.timer",
+                "active",
+                timer_state,
+                load_state="loaded",
+                next_elapse_at=T0 + timedelta(days=1),
+            ),
+            monitor.Unit(
+                "red-job.service",
+                "inactive",
+                "dead",
+                result=result,
+                exec_main_status=status,
+                exec_main_exited_at=exited,
+            ),
+        ),
+    )
+
+
+def _observe_timers(repo: Path, monkeypatch: pytest.MonkeyPatch, view: AgentView):
+    _sites(monkeypatch, repo.parent, f'sites:\n  red-monitor:\n    address: "{MONITOR}"\n')
+    monkeypatch.setattr(monitor, "read_agent", lambda base_url, agent, **kwargs: view)
+    return visible(repo)
+
+
+def test_timers_visible_when_every_triggered_service_succeeded_after_the_deployment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _timers_deployed_tree(tmp_path)
+    result = _observe_timers(repo, monkeypatch, _timer_view())
+    assert result.passed and "1 timer(s) waiting on vps" in result.details
+
+
+def test_a_success_before_the_deployment_does_not_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _timers_deployed_tree(tmp_path)
+    result = _observe_timers(repo, monkeypatch, _timer_view(exited=T0))
+    assert not result.passed and "red-job.service" in result.details
+    assert "next run" in result.details
+
+
+def test_a_timer_not_waiting_fails_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _timers_deployed_tree(tmp_path)
+    result = _observe_timers(repo, monkeypatch, _timer_view(timer_state="running"))
+    assert not result.passed and "red-job.timer" in result.details
+
+
+def test_a_failed_triggered_service_fails_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _timers_deployed_tree(tmp_path)
+    result = _observe_timers(repo, monkeypatch, _timer_view(result="exit-code", status=1))
+    assert not result.passed and "red-job.service" in result.details
+
+
+def test_a_service_without_a_timer_is_not_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _timers_deployed_tree(tmp_path)
+    manifest = (
+        (repo / "rail.yaml")
+        .read_text()
+        .replace(
+            "    - deploy/red-job.timer\n",
+            "    - deploy/red-job.timer\n    - deploy/red-alert.service\n",
+        )
+    )
+    (repo / "rail.yaml").write_text(manifest)
+    result = _observe_timers(repo, monkeypatch, _timer_view())
+    assert result.passed
 
 
 def test_verdict_refuses_a_review_that_did_not_see_the_whole_change(tmp_path: Path) -> None:

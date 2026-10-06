@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from rail import gitrepo, monitor
@@ -263,6 +264,12 @@ def visible(repo: Path) -> GateResult:
         and shape.unit is not None
     ):
         return _unit_visible(view, agent, PurePosixPath(shape.unit).name)
+    if (
+        shape is not None
+        and shape.target is DeployTarget.PRIVATE_TIMERS
+        and shape.units is not None
+    ):
+        return _timers_visible(view, agent, shape.units, deploy.recorded_at)
     running = [c for c in monitor.stack_containers(view, project) if c.state == "running"]
     if not running:
         return GateResult(
@@ -317,6 +324,62 @@ def _unit_visible(view: monitor.AgentView, agent: str, unit: str) -> GateResult:
         "visible",
         True,
         f"unit {unit} active/running on {agent}; its digest was verified at deployment by /version",
+    )
+
+
+def _timers_visible(
+    view: monitor.AgentView, agent: str, units: tuple[str, ...], deployed_at: datetime
+) -> GateResult:
+    """Require every declared timer's service to have completed after this deployment."""
+    timers = [PurePosixPath(name).name for name in units if name.endswith(".timer")]
+    for timer in timers:
+        found = monitor.find_unit(view, timer)
+        if found is None:
+            return GateResult(
+                Stage.OBSERVE,
+                "visible",
+                False,
+                f"red-monitor lists no unit {timer} on agent {agent}",
+            )
+        state = f"{found.active_state}/{found.sub_state}"
+        if (
+            found.load_state != "loaded"
+            or state != "active/waiting"
+            or found.next_elapse_at is None
+        ):
+            return GateResult(
+                Stage.OBSERVE, "visible", False, f"timer {timer} on agent {agent} is {state}"
+            )
+        service = timer.removesuffix(".timer") + ".service"
+        triggered = monitor.find_unit(view, service)
+        if triggered is None:
+            return GateResult(
+                Stage.OBSERVE,
+                "visible",
+                False,
+                f"red-monitor lists no unit {service} on agent {agent}",
+            )
+        if (
+            triggered.result != "success"
+            or triggered.exec_main_status != 0
+            or triggered.exec_main_exited_at is None
+            or triggered.exec_main_exited_at <= deployed_at
+        ):
+            exited = deployed_at.isoformat()
+            next_run = found.next_elapse_at.isoformat() if found.next_elapse_at else "unknown"
+            return GateResult(
+                Stage.OBSERVE,
+                "visible",
+                False,
+                f"{service} has not run successfully since the deployment of {exited} "
+                f"(next run {next_run})",
+            )
+    return GateResult(
+        Stage.OBSERVE,
+        "visible",
+        True,
+        f"{len(timers)} timer(s) waiting on {agent}, each triggered service succeeded "
+        "after the deployment",
     )
 
 
