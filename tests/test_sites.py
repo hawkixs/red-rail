@@ -260,3 +260,13 @@ def test_a_binding_fills_urls_and_redacts_with_the_site_name(tmp_path: Path) -> 
     binding = SiteBinding.load("private-1", path)
     assert binding.fill("http://${BIND_ADDRESS}:9100/health") == f"http://{V4}:9100/health"
     assert binding.redact(f"connect to host {V4} port 22") == "connect to host private-1 port 22"
+
+
+def test_an_ipv6_address_used_as_an_interface_is_refused_without_echoing_it(
+    tmp_path: Path,
+) -> None:
+    """Independent review F-85-2: the address check runs before the name pattern."""
+    path = _sites(tmp_path, f'sites:\n  brain:\n    address: "{V6}"\n    interface: "{V6}"\n')
+    with pytest.raises(DeployError, match="interface.*label") as caught:
+        load_site("brain", path)
+    assert V6 not in str(caught.value)

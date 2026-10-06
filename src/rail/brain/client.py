@@ -42,24 +42,51 @@ def parse_tool_error(text: str) -> tuple[str, str]:
     return code, message.strip()
 
 
-def _without_proxies(
-    headers: dict[str, str] | None = None,
-    timeout: Any = None,
-    auth: Any = None,
-    follow_redirects: bool = False,  # passed by fastmcp, deliberately not honoured
-) -> Any:
-    """The MCP SDK's client factory (`mcp.shared._httpx_utils.create_mcp_http_client`) with
-    `trust_env=False`: a proxy variable would send the bearer outside the tunnel the route
-    guard checked (review finding). fastmcp asks a custom factory to follow redirects; the
-    SDK's own factory does not, and neither does this one: a redirect is a destination the
-    route guard never checked, and the MCP transports follow same-origin ones themselves."""
-    del follow_redirects
-    import httpx
-    from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
+def _http_client_factory(interface: str | None) -> Callable[..., Any]:
+    """The MCP SDK's client factory (`mcp.shared._httpx_utils.create_mcp_http_client`), made
+    safe for a bearer sent as plain HTTP through a tunnel:
 
-    if timeout is None:
-        timeout = httpx.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT)
-    return httpx.AsyncClient(headers=headers, timeout=timeout, auth=auth, trust_env=False)
+    - its sockets are bound to the declared interface (`SO_BINDTODEVICE`, unprivileged since
+      Linux 5.7): the route guard checks before a call, the binding holds during it, so a
+      tunnel lost mid-call fails the connection instead of leaving through the default
+      gateway (independent review F-85-5);
+    - `trust_env=False`: a proxy variable would send the bearer elsewhere;
+    - no redirects: fastmcp asks a custom factory to follow them, the SDK's own factory does
+      not, and a redirect is a destination nothing checked.
+    """
+
+    def factory(
+        headers: dict[str, str] | None = None,
+        timeout: Any = None,
+        auth: Any = None,
+        follow_redirects: bool = False,  # passed by fastmcp, deliberately not honoured
+        **options: Any,  # anything a later SDK passes, except what this factory decides
+    ) -> Any:
+        import socket
+
+        import httpx
+        from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
+
+        del follow_redirects
+        for decided in ("trust_env", "transport", "mounts", "proxy"):
+            options.pop(decided, None)
+        if timeout is None:
+            timeout = httpx.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT)
+        bound = (
+            [(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode())]
+            if interface is not None
+            else None
+        )
+        return httpx.AsyncClient(
+            headers=headers,
+            timeout=timeout,
+            auth=auth,
+            trust_env=False,
+            transport=httpx.AsyncHTTPTransport(socket_options=bound),
+            **options,
+        )
+
+    return factory
 
 
 class BrainClient:
@@ -91,16 +118,19 @@ class BrainClient:
         agent: str,
         redact: Callable[[str], str] | None = None,
         guard: Callable[[], None] | None = None,
+        interface: str | None = None,
     ) -> BrainClient:
         from fastmcp.client.transports import StreamableHttpTransport
 
         if not is_reachable(url):
             raise BrainUnreachable("brain is reached on the loopback or a private address only")
 
+        client_factory = _http_client_factory(interface)
+
         def factory(label: str) -> Any:
             headers = {"X-Brain-Tool-Profile": "native", "X-Brain-Agent": label}
             return StreamableHttpTransport(
-                url, auth=token, headers=headers, httpx_client_factory=_without_proxies
+                url, auth=token, headers=headers, httpx_client_factory=client_factory
             )
 
         return cls(factory, agent, redact=redact, guard=guard)
@@ -113,6 +143,7 @@ class BrainClient:
             agent=agent,
             redact=settings.redact,
             guard=settings.guard,
+            interface=settings.interface,
         )
 
     @classmethod

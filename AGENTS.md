@@ -84,9 +84,9 @@ parsing.
 Project key `red-rail` (group `red`). Reachable over Streamable HTTP on loopback by default,
 or at the host's `brain` site from its private `sites.yaml`, with the address never shown;
 Codex has it wired in `~/.codex/config.toml`.
-The private `brain` site must declare its tunnel's `interface`, and the rail refuses unless
-the kernel routes its address through it. The bearer travels as plain HTTP; its confidentiality
-comes from the tunnel.
+The private `brain` site must declare its tunnel's `interface`. The bearer travels as plain
+HTTP and its confidentiality is the tunnel's: the rail checks the route before every call,
+binds its sockets to that interface, ignores proxies and never follows redirects.
 
 ```bash
 uv run rail brain ping   # is brain reachable with the private token, as this project?

@@ -34,11 +34,12 @@ class Site(BaseModel):
     address: Address
     interface: str | None = Field(default=None, pattern=INTERFACE_PATTERN)
 
-    @field_validator("interface")
+    @field_validator("interface", mode="before")
     @classmethod
-    def _a_label_not_an_address(cls, value: str | None) -> str | None:
-        # an address typed by mistake would be printed by a route refusal
-        if value is not None:
+    def _a_label_not_an_address(cls, value: object) -> object:
+        # an address typed by mistake would be printed by a route refusal; before the name
+        # pattern, so an IPv6 address gets this message too (independent review F-85-2)
+        if isinstance(value, str):
             try:
                 ip_address(value)
             except ValueError:

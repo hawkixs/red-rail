@@ -565,3 +565,78 @@ def test_route_interface_returns_none_when_the_kernel_query_cannot_run(
 
     monkeypatch.setattr(subprocess, "run", run)
     assert brain_settings.route_interface(ip_address("192.0.2.10")) is None
+
+
+def _local_http_server() -> tuple[object, int]:
+    """A one-route HTTP server on the loopback, for the socket-binding tests (no network)."""
+    import http.server
+    import threading as _threading
+
+    class Ok(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 — the stdlib's name
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ok)
+    server.daemon_threads = True
+    _threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, server.server_address[1]
+
+
+def test_the_http_client_binds_its_sockets_to_the_declared_interface() -> None:
+    """Independent review F-85-5: a route checked before the call cannot stop a tunnel lost
+    during it. The sockets themselves are bound to the interface (SO_BINDTODEVICE), so a lost
+    tunnel fails the connection instead of sending the bearer through the default gateway."""
+    import httpx
+
+    server, port = _local_http_server()
+    try:
+
+        async def get(interface: str) -> int:
+            client = BrainClient.http(
+                f"http://127.0.0.1:{port}/mcp", token="t", agent="a", interface=interface
+            )
+            factory = client.transport_factory("a").httpx_client_factory
+            async with factory(headers=None, timeout=httpx.Timeout(3)) as http_client:
+                return (await http_client.get(f"http://127.0.0.1:{port}/")).status_code
+
+        assert asyncio.run(get("lo")) == 200  # bound to the interface the route uses
+        with pytest.raises(httpx.ConnectError):
+            asyncio.run(get("nosuchif0"))  # the interface is gone: no other way out
+    finally:
+        server.shutdown()
+
+
+def test_without_an_interface_the_sockets_are_not_bound() -> None:
+    client = BrainClient.http("http://localhost:8765/mcp", token="t", agent="a")
+    factory = client.transport_factory("a").httpx_client_factory
+
+    async def options() -> object:
+        async with factory() as http_client:
+            return http_client._transport._pool._socket_options
+
+    assert asyncio.run(options()) is None
+
+
+def test_settings_hand_the_declared_interface_to_the_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _token(tmp_path, monkeypatch)
+    monkeypatch.setenv(
+        "RAIL_SITES_FILE",
+        str(_sites(tmp_path, f"sites:\n  brain:\n    address: {V4}\n    interface: wg0\n")),
+    )
+    settings = BrainSettings.from_environment(os.environ, route_of=lambda address: "wg0")
+    client = BrainClient.from_settings(settings, agent="red-rail")
+    factory = client.transport_factory("red-rail").httpx_client_factory
+
+    async def options() -> object:
+        async with factory() as http_client:
+            return http_client._transport._pool._socket_options
+
+    import socket
+
+    assert asyncio.run(options()) == [(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"wg0")]
