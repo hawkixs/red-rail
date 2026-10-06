@@ -269,10 +269,7 @@ def visible(repo: Path) -> GateResult:
         and shape.target is DeployTarget.PRIVATE_TIMERS
         and shape.units is not None
     ):
-        # measured from the newest delivery: a drill's rollback and roll-forward re-apply
-        # releases already proven (final review of the private-timers branch)
-        delivery = _newest_release_deploy(repo)
-        since = delivery.recorded_at if isinstance(delivery, Record) else deploy.recorded_at
+        since = _newest_live_change(repo) or deploy.recorded_at
         return _timers_visible(view, agent, shape.units, since)
     running = [c for c in monitor.stack_containers(view, project) if c.state == "running"]
     if not running:
@@ -329,6 +326,26 @@ def _unit_visible(view: monitor.AgentView, agent: str, unit: str) -> GateResult:
         True,
         f"unit {unit} active/running on {agent}; its digest was verified at deployment by /version",
     )
+
+
+def _newest_live_change(repo: Path) -> datetime | None:
+    """When the live release last changed for real: a delivery or an operator's rollback.
+    A drill's rollback, always followed by its `drill` roll-forward, re-applies releases
+    already proven and is skipped with it (final review of the private-timers branch)."""
+    records = _attestations(repo, AttestationKind.DEPLOYED)
+    if not isinstance(records, list):
+        return None
+    kept = [
+        record
+        for index, record in enumerate(records)
+        if record.data.get("mode") != "drill"
+        and not (
+            record.data.get("mode") == "rollback"
+            and index + 1 < len(records)
+            and records[index + 1].data.get("mode") == "drill"
+        )
+    ]
+    return kept[-1].recorded_at if kept else None
 
 
 def _timers_visible(

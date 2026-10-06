@@ -166,15 +166,21 @@ _SUPPLEMENTARY_GROUPS = frozenset({"docker"})
 _TRUE = frozenset({"yes", "true", "1", "on"})
 
 
-def _project_directory(word: str, project: str) -> bool:
-    """`<project>`, `<project>-…` or `<project>/…`, normalised, before any `:` suffix."""
-    name = word.partition(":")[0]
+def _project_name(name: str, project: str) -> bool:
     return (
         bool(name)
         and posixpath.normpath(name) == name
         and not name.startswith("/")
         and (name == project or name.startswith((f"{project}/", f"{project}-")))
     )
+
+
+def _project_directory(word: str, project: str) -> bool:
+    """`<project>`, `<project>-…` or `<project>/…`, normalised; with `source:destination`
+    systemd also creates, as root, a symlink at the destination, so both sides are checked
+    (commit security review)."""
+    parts = word.split(":")
+    return 1 <= len(parts) <= 2 and all(_project_name(part, project) for part in parts)
 
 
 def _unit_names(values: list[str]) -> list[str]:
@@ -526,9 +532,14 @@ class PrivateTimers(RemoteTarget):
         """Read, never run: the payload's identity file and the release.env the rail wrote,
         through `current`, as the deploy account. Running the release's own code here would
         give it the deploy account's rights, outside every rule its units obey."""
+        identity = f"{self.current}/app/{IDENTITY_FILE}"
         return (
             "set -euo pipefail\n"
-            f"head -c {_IDENTITY_LIMIT} {self.current}/app/{IDENTITY_FILE}\n"
+            # the payload comes from the image: a symlink would make this account read
+            # whatever it points at
+            f"[ -f {identity} ] && [ ! -L {identity} ] || "
+            f"{{ echo 'app/{IDENTITY_FILE} must be a regular file' >&2; exit 1; }}\n"
+            f"head -c {_IDENTITY_LIMIT} {identity}\n"
             f"printf '\\n%s\\n' '{IDENTITY_MARKER}'\n"
             f"head -c {_IDENTITY_LIMIT} {self.current}/release.env\n"
         )
@@ -561,7 +572,9 @@ class PrivateTimers(RemoteTarget):
                     + _tail(done.stderr or done.stdout)
                 )
             )
-        identity, marker, environment = done.stdout.partition(f"\n{IDENTITY_MARKER}\n")
+        # the LAST marker is the one this script printed: the identity file comes from the
+        # image and must not be able to supply its own release.env (final review, round 2)
+        identity, marker, environment = done.stdout.rpartition(f"\n{IDENTITY_MARKER}\n")
         if not marker:
             raise DeployError(
                 self.redact("the identity read returned no release.env: the release is incomplete")

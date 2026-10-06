@@ -976,3 +976,44 @@ def test_a_drill_does_not_reset_the_timers_observation(
     view = _timer_view(exited=delivered + timedelta(minutes=2))
     result = _observe_timers(repo, monkeypatch, view)
     assert result.passed, result.details
+
+
+def test_an_operator_rollback_resets_the_timers_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rollback the operator asked for puts an older release live: it has to run again
+    before the gate is green. Only a drill's rollback, followed by its roll-forward, does not
+    count (final review, round 2)."""
+    repo = _timers_deployed_tree(tmp_path)
+    ledger = _ledger(repo)
+    delivered = ledger.list("red-beta", attestation=AttestationKind.DEPLOYED)[-1].recorded_at
+    ledger.attest(
+        "red-beta",
+        AttestationKind.DEPLOYED,
+        {"sha": gitrepo.head_sha(repo), "digest": "sha256:" + "b" * 64, "mode": "rollback"},
+        issuer="op",
+        idempotency_key="deployed:rollback",
+        emitted_at=delivered + timedelta(hours=1),
+    )
+    view = _timer_view(exited=delivered + timedelta(minutes=2))
+    result = _observe_timers(repo, monkeypatch, view)
+    assert not result.passed and "red-job.service" in result.details
+
+
+def test_a_drill_rollback_and_roll_forward_do_not_reset_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _timers_deployed_tree(tmp_path)
+    ledger = _ledger(repo)
+    delivered = ledger.list("red-beta", attestation=AttestationKind.DEPLOYED)[-1].recorded_at
+    for minutes, mode in ((60, "rollback"), (61, "drill")):
+        ledger.attest(
+            "red-beta",
+            AttestationKind.DEPLOYED,
+            {"sha": gitrepo.head_sha(repo), "digest": "sha256:" + "a" * 64, "mode": mode},
+            issuer="op",
+            idempotency_key=f"deployed:{mode}",
+            emitted_at=delivered + timedelta(minutes=minutes),
+        )
+    view = _timer_view(exited=delivered + timedelta(minutes=2))
+    assert _observe_timers(repo, monkeypatch, view).passed

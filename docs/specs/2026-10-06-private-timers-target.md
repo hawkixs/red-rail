@@ -115,7 +115,14 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
      `LoadCredentialEncrypted=` read only files under `/etc/<project>/`;
      `StandardInput=` is `null`; `StandardOutput=` and `StandardError=` are `journal`, `null`
      or `inherit`; `OpenFile=`, `ImportCredential=`, `PAMName=`, `DeviceAllow=` and
-     `DynamicUser=` are not accepted.
+     `DynamicUser=` are not accepted. `RuntimeDirectory=`, `StateDirectory=`,
+     `CacheDirectory=` and `LogsDirectory=` name `<project>`, `<project>-…` or `<project>/…`, on
+     both sides of a `source:destination` pair (systemd creates, chowns and links them as root);
+     an extra `EnvironmentFile=` is a file under `/etc/<project>/`; `NoNewPrivileges=yes` is
+     required and bind mounts (`BindPaths=`, `BindReadOnlyPaths=`, `TemporaryFileSystem=`) are
+     not accepted; `KillMode=` is `control-group` or `mixed`, so a run never outlives its
+     bound; `Group=` is the user's own group and `SupplementaryGroups=` lists `docker` only; a
+     service carries no `[Install]` section, a timer's is `WantedBy=timers.target` only.
    - A timer: a `[Timer]` section with at least one trigger (`OnCalendar=`, `OnBootSec=`,
      `OnUnitActiveSec=`, `OnUnitInactiveSec=`, `OnActiveSec=`, `OnStartupSec=`); no `Unit=` key,
      so the timer triggers the service of the same name; that service is declared; `[Unit]` accepts ordering and
@@ -126,7 +133,7 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
 
 8. **Verification without HTTP and without execution: what systemd loaded, and which release
    `current` holds.** After the script, the rail READS over ssh, as the deploy account,
-   `current/app/.rail-identity.json` (a static JSON object `project`, `version`, `git_sha` that
+   `current/app/.rail-identity.json` (a regular file, never a symlink: a static JSON object `project`, `version`, `git_sha` that
    the project's image writes into the payload at build) and `current/release.env` (written by
    the rail, which carries `IMAGE_DIGEST`), and compares them with the manifest's project and
    the artefact, field by field, as it compares `/version` today. A mismatch fails the
@@ -140,8 +147,8 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
    requires, on `observe.monitor_agent`:
    - each declared timer `active`/`waiting`, with a next elapse;
    - the service each timer triggers has exited with `Result=success` and status 0 **after** the
-     newest delivery, the newest `deployed` attestation in mode `release`: a drill's rollback
-     and roll-forward re-apply releases already proven and do not reset the gate.
+     newest real change of the live release, a delivery or an operator's rollback: a drill's
+     rollback and its roll-forward re-apply releases already proven and do not reset the gate.
 
    Until then the gate fails, naming the service still waiting and its next elapse. For
    red-backup it turns green after the first night: run, brain drill, watchdog. That is the

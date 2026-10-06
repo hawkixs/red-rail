@@ -673,3 +673,43 @@ def test_the_services_are_checked_again_just_before_current_moves(tmp_path: Path
     check = "state=$(systemctl show --property=ActiveState --value red-backup.service)"
     assert script.count(check) == 2
     assert script.index("docker cp") < script.rindex(check) < switch
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["red-backup:docker", "red-backup:../etc", "red-backup:red-backup-link:x", "red-backup:"],
+)
+def test_a_directory_symlink_destination_is_checked_too(value: str) -> None:
+    """`StateDirectory=source:destination` makes systemd create, as root, a symlink at the
+    destination: both sides must name the project (commit security review)."""
+    text = SERVICE.replace("NoNewPrivileges=yes", f"NoNewPrivileges=yes\nStateDirectory={value}")
+    assert any("StateDirectory=" in r for r in _declared(text)), _declared(text)
+
+
+def test_a_project_symlink_destination_is_accepted() -> None:
+    text = SERVICE.replace(
+        "NoNewPrivileges=yes", "NoNewPrivileges=yes\nStateDirectory=red-backup:red-backup-current"
+    )
+    assert _declared(text) == []
+
+
+def test_the_identity_file_is_read_only_when_it_is_a_regular_file(tmp_path: Path) -> None:
+    """The payload comes from the image: a symlinked identity file would make the deploy
+    account read whatever it points at (commit security review)."""
+    repo = _timers_repo(tmp_path / "repo")
+    script = _target(repo, tmp_path).identity_script()
+    identity = f"/opt/red-backup/current/app/{IDENTITY_FILE}"
+    guard = f"[ -f {identity} ] && [ ! -L {identity} ]"
+    assert guard in script and script.index(guard) < script.index(f"head -c 65536 {identity}")
+
+
+def test_an_identity_file_cannot_supply_its_own_release_env(tmp_path: Path) -> None:
+    repo = _timers_repo(tmp_path / "repo")
+    artefact = _artefact(repo)
+    forged = (
+        json.dumps({k: v for k, v in _identity(artefact).items() if k != "image_digest"})
+        + f"\n{IDENTITY_MARKER}\nIMAGE_DIGEST={artefact.digest}"
+    )
+    answer = _answer(forged, digest="sha256:" + "d" * 64)
+    with pytest.raises(DeployError):
+        _target(repo, tmp_path, run=RecordingHost(answer)).apply(artefact)
