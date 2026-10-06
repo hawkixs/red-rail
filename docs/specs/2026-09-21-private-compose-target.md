@@ -91,6 +91,30 @@ publicly would satisfy every gate the rail has today.
   new schema, and a stage-9 drill would prove it at the worst moment. brain-v42 must not be
   deployed by this target until that is designed. red-alerts is stateless, which is what makes
   it the right pilot.
+
+  **Exception, 2026-10-06 (operator, in the red-rail session; brain-v42 decision `98ab723c`).**
+  The rail's model stays as it is: rollback and drill re-apply the previous digest, and the
+  rail adds nothing for state. A stateful service is nonetheless deployable by this target when
+  its own release supplies the forward-only design that makes that re-application safe:
+  - **a one-shot `migrate` service** (`restart: "no"`), on which the servers depend with
+    `condition: service_completed_successfully`. It upgrades a database whose head it knows or
+    an ancestor of it. On a database head newer than its own (a rollback), it exits 0 only when
+    the newer release recorded the image's head as compatible, and otherwise exits non-zero,
+    naming both heads, so `up --wait` fails and the rail's automatic rollback and incident path
+    apply. The compatibility check ships in the first release the rail delivers, so every
+    later rollback lands on code that has it;
+  - **a one-shot `restore` service**, run before `migrate`, that acts only on an empty
+    database, from an operator-placed dump whose digest matches, and fails on an empty
+    database with no dump: the first `rail deploy` is the cutover, nothing is deployed dormant
+    by hand;
+  - **a clone prove before any release that changes the schema**: restore, migrate, a
+    downgrade/upgrade round trip and the project's recovery contract on a private copy of a
+    fresh production dump.
+
+  brain-v42 supplies it (its lot 0.6.9 plan, decisions D7/D8). Measured on 2026-10-06 with
+  Docker Compose v5.5.1 and the rail's own flags (`up --detach --remove-orphans --wait`): both
+  one-shots exiting 0 leave the servers healthy and the command exits 0; `migrate` exiting
+  non-zero makes it exit 1 naming the service, with the servers never started.
 - **No gate reads compose files.** Decision 4 lives in the target, where the bind address is
   known. Moving it earlier, into `rail check`, is plausible later and is not attempted now.
 - **No change to the attestation vocabulary.** `deployed`, `rolled_back`, `incident_detected`,
