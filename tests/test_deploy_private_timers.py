@@ -38,7 +38,7 @@ WantedBy=timers.target
 
 
 def _service(text: str = SERVICE) -> list[str]:
-    return service_refusals(text, unit="red-backup.service", current=CURRENT)
+    return service_refusals(text, unit="red-backup.service", current=CURRENT, declared=DECLARED)
 
 
 def test_the_hardened_oneshot_service_is_accepted() -> None:
@@ -130,3 +130,73 @@ def test_a_program_that_leaves_the_payload_by_its_path_is_refused(program: str) 
         "ExecStart=/opt/red-backup/current/app/bin/python3", f"ExecStart={program}", 1
     )
     assert any("ExecStart" in r for r in _service(text)), _service(text)
+
+
+DECLARED = frozenset({"red-backup.service", "red-backup.timer", "red-backup-alert.service"})
+
+
+def _declared(text: str) -> list[str]:
+    return service_refusals(text, unit="red-backup.service", current=CURRENT, declared=DECLARED)
+
+
+def test_a_service_kept_active_after_its_run_is_refused() -> None:
+    """`RemainAfterExit=yes` keeps a oneshot `active`: the timer never fires it again, and the
+    running-unit guard would then refuse every deployment (review of tasks 1-2)."""
+    refusals = _declared(SERVICE.replace("Type=oneshot", "Type=oneshot\nRemainAfterExit=yes"))
+    assert any("RemainAfterExit=" in r for r in refusals), refusals
+    assert _declared(SERVICE.replace("Type=oneshot", "Type=oneshot\nRemainAfterExit=no")) == []
+
+
+@pytest.mark.parametrize(
+    ("line", "rule"),
+    [
+        ("FailureAction=reboot", "FailureAction="),
+        ("SuccessAction=poweroff-force", "SuccessAction="),
+        ("StartLimitAction=reboot", "StartLimitAction="),
+        ("OnFailure=other.service", "OnFailure="),
+        ("OnSuccess=other.service", "OnSuccess="),
+    ],
+)
+def test_a_service_unit_section_reaching_beyond_the_release_is_refused(
+    line: str, rule: str
+) -> None:
+    """systemd runs `*Action=` as PID 1, and `OnFailure=` may start a unit the rail never
+    delivered (review of tasks 1-2)."""
+    text = SERVICE.replace(
+        "Description=ReD Backup - daily run", f"Description=ReD Backup - daily run\n{line}"
+    )
+    assert any(rule in r for r in _declared(text)), _declared(text)
+
+
+def test_a_declared_on_failure_unit_and_ordering_are_accepted() -> None:
+    text = SERVICE.replace(
+        "Description=ReD Backup - daily run",
+        "Description=ReD Backup - daily run\nOnFailure=red-backup-alert.service\n"
+        "Requires=docker.service\nAfter=docker.service\nFailureAction=none",
+    )
+    assert _declared(text) == []
+
+
+def test_ambient_capabilities_are_refused() -> None:
+    text = SERVICE.replace(
+        "NoNewPrivileges=yes", "NoNewPrivileges=yes\nAmbientCapabilities=CAP_SYS_ADMIN"
+    )
+    assert any("AmbientCapabilities=" in r for r in _declared(text))
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Wants=reboot.target",
+        "Requires=x.service",
+        "Conflicts=y.service",
+        "OnFailure=z.service",
+        "BindsTo=a.service",
+    ],
+)
+def test_a_timer_pulls_no_other_unit(line: str) -> None:
+    """The rail restarts each timer through sudo: a dependency would start or stop any unit on
+    the host at deployment (review of tasks 1-2)."""
+    text = TIMER.replace("Description=ReD Backup - daily run at 03:02", f"Description=x\n{line}")
+    refusals = timer_refusals(text, unit="red-backup.timer", declared=DECLARED)
+    assert any(line.split("=")[0] + "=" in r for r in refusals), refusals

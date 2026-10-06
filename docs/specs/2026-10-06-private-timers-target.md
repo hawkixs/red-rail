@@ -103,11 +103,20 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
      since it bounds a oneshot run; every `Exec*=` program under `<stack_root>/<project>/current/app/`;
      `EnvironmentFile=<stack_root>/<project>/current/release.env` without the `-` prefix; no
      `+`, `!` or `!!` prefix and no `PermissionsStartOnly=`; no quoting, backslash or `;` that
-     would make systemd read another command; no invisible character.
+     would make systemd read another command; no invisible character; `RemainAfterExit=`
+     absent or false (a oneshot left `active` is never fired again by its timer, and would
+     block every later deployment); no `AmbientCapabilities=`; in `[Unit]`, `OnFailure=` and
+     `OnSuccess=` name only declared units, and `FailureAction=`, `SuccessAction=`,
+     `StartLimitAction=` and `JobTimeoutAction=` are absent or `none` (PID 1 performs them as
+     root).
    - A timer: a `[Timer]` section with at least one trigger (`OnCalendar=`, `OnBootSec=`,
      `OnUnitActiveSec=`, `OnUnitInactiveSec=`, `OnActiveSec=`, `OnStartupSec=`); no `Unit=` key,
-     so the timer triggers the service of the same name; that service is declared; no invisible
+     so the timer triggers the service of the same name; that service is declared; no key in
+     `[Unit]` that starts, stops or acts on another unit (`Wants=`, `Requires=`, `Requisite=`,
+     `BindsTo=`, `PartOf=`, `Upholds=`, `Conflicts=`, `OnFailure=`, `OnSuccess=` and the
+     propagation keys), since the rail restarts every timer through sudo; no invisible
      character.
+   - `deploy.units` declares at least one timer.
 
 8. **Verification without HTTP: what systemd loaded, and which release runs.** After the
    script, the rail runs, over ssh and unprivileged, the release's `version_command` from

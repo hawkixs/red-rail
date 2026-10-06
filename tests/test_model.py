@@ -444,3 +444,9 @@ def test_a_healthcheck_on_private_timers_is_refused_even_behind_a_site() -> None
         ValidationError, match="deploy.healthcheck does not apply to target private-timers"
     ):
         DeployConfig.model_validate({**TIMERS, "healthcheck": "http://${BIND_ADDRESS}:9/health"})
+
+
+def test_a_units_list_without_a_timer_is_refused() -> None:
+    """Without a timer nothing fires, and the observe gate would have nothing to prove."""
+    with pytest.raises(ValidationError, match="deploy.units must declare at least one timer"):
+        DeployConfig.model_validate({**TIMERS, "units": ["deploy/systemd/red-backup.service"]})

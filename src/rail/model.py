@@ -198,6 +198,10 @@ class DeployConfig(BaseModel):
                 raise ValueError("deploy.units must contain between 1 and 32 entries")
             if len(names) != len(set(names)):
                 raise ValueError("deploy.units file names must be unique")
+            if not any(name.endswith(".timer") for name in names):
+                raise ValueError(
+                    "deploy.units must declare at least one timer: without one nothing fires"
+                )
             available = set(names)
             missing = [
                 name[:-6] + ".service"

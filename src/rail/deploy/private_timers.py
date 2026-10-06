@@ -43,7 +43,34 @@ TIMER_TRIGGERS = (
 )
 
 
-def service_refusals(text: str, *, unit: str, current: str) -> list[str]:
+# [Unit] keys that make systemd start, stop or act on another unit. A service may name only
+# units the release delivers in `OnFailure=`/`OnSuccess=`; a timer names none at all, since the
+# rail restarts every timer through sudo and would pull them in at deployment.
+_PULLS = (
+    "Wants",
+    "Requires",
+    "Requisite",
+    "BindsTo",
+    "PartOf",
+    "Upholds",
+    "Conflicts",
+    "OnFailure",
+    "OnSuccess",
+    "PropagatesReloadTo",
+    "ReloadPropagatedFrom",
+    "PropagatesStopTo",
+    "StopPropagatedFrom",
+)
+_RUNS_DECLARED = ("OnFailure", "OnSuccess")
+# PID 1 performs these as root: anything but `none` reboots, powers off or exits the host.
+_ACTIONS = ("FailureAction", "SuccessAction", "StartLimitAction", "JobTimeoutAction")
+
+
+def _unit_names(values: list[str]) -> list[str]:
+    return [name for value in _effective(values) for name in value.split()]
+
+
+def service_refusals(text: str, *, unit: str, current: str, declared: frozenset[str]) -> list[str]:
     """Return unit-named refusals for an unsafe oneshot service; an empty list accepts it."""
     invisible = _invisible_character_refusal(text, unit)
     if invisible is not None:
@@ -54,6 +81,27 @@ def service_refusals(text: str, *, unit: str, current: str) -> list[str]:
         return [f"{unit} has no [Service] section"]
 
     refusals: list[str] = []
+    section = parse_unit(text).get("Unit", {})
+    for key in _RUNS_DECLARED:
+        refusals.extend(
+            f"{unit}: {key}={name} names a unit this release does not deliver"
+            for name in _unit_names(section.get(key, []))
+            if name not in declared
+        )
+    for key in _ACTIONS:
+        refusals.extend(
+            f"{unit}: {key}={value} makes systemd act on the host as root; only `none` is allowed"
+            for value in section.get(key, [])
+            if value != "none"
+        )
+    for value in service.get("RemainAfterExit", []):
+        if value.lower() not in ("no", "false", "0", "off"):
+            refusals.append(
+                f"{unit}: RemainAfterExit={value} keeps the run active, so its timer never "
+                "fires it again"
+            )
+    for value in _effective(service.get("AmbientCapabilities", [])):
+        refusals.append(f"{unit}: AmbientCapabilities={value} gives a non-root user root's powers")
     types = service.get("Type", [])
     if not types or any(value != "oneshot" for value in types):
         refusals.append(f"{unit}: Type=oneshot is required, a timer fires a run (got {types!r})")
@@ -126,6 +174,12 @@ def timer_refusals(text: str, *, unit: str, declared: frozenset[str]) -> list[st
         return [f"{unit} has no [Timer] section"]
 
     refusals: list[str] = []
+    section = parse_unit(text).get("Unit", {})
+    refusals.extend(
+        f"{unit}: {key}= pulls in another unit when the rail restarts this timer"
+        for key in _PULLS
+        if key in section
+    )
     if not any(_effective(timer.get(key, [])) for key in TIMER_TRIGGERS):
         refusals.append(f"{unit}: at least one timer trigger must have a non-empty value")
     if "Unit" in timer:
