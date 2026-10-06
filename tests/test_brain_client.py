@@ -2,14 +2,23 @@
 2026-09-18 (bearer, tool profile, agent label)."""
 
 import asyncio
+import gc
 import os
 import subprocess
+import sys
+import threading
 import traceback
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from ipaddress import ip_address
 from pathlib import Path
+from textwrap import dedent
+from types import SimpleNamespace
 
 import pytest
+from fastmcp import Client, FastMCP
 
+from rail.brain import client as brain_client
 from rail.brain import settings as brain_settings
 from rail.brain.client import BrainClient, BrainToolError, BrainUnreachable
 from rail.brain.settings import BrainSettings
@@ -21,6 +30,309 @@ from tests.fake_brain import FakeBrain
 # (tests/test_no_machine_address.py).
 V4 = ".".join(["10", "0", "0", "7"])
 V6 = ":".join(["fd7a", "", "7"])
+
+
+@pytest.fixture
+def sessions(monkeypatch: pytest.MonkeyPatch) -> list[Client]:
+    opened = []
+
+    class CountingClient(Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            opened.append(self)
+
+    monkeypatch.setattr("fastmcp.Client", CountingClient)
+    return opened
+
+
+def _counting_client() -> tuple[BrainClient, list[str]]:
+    brain = FakeBrain()
+    labels = []
+
+    def factory(label: str):
+        labels.append(label)
+        return brain.server
+
+    return BrainClient(factory, "red-rail"), labels
+
+
+def _list(client: BrainClient, *, agent: str | None = None) -> dict:
+    return client.call("brain_delivery_list", {"actor_project": "red-probe"}, agent=agent)
+
+
+def test_calls_reuse_one_connected_session_per_label(sessions: list[Client]) -> None:
+    client, labels = _counting_client()
+    for _ in range(3):
+        assert _list(client)["items"] == []
+    assert labels == ["red-rail"]
+    _list(client, agent="operator")
+    _list(client)
+    assert labels == ["red-rail", "operator"]
+    assert len(sessions) == 2 and all(session.is_connected() for session in sessions)
+
+
+@pytest.mark.parametrize("failure", ["transport", "timeout", "unreadable", "unknown_tool"])
+def test_an_unreachable_session_is_closed_and_only_the_next_call_reconnects(
+    monkeypatch: pytest.MonkeyPatch, sessions: list[Client], failure: str
+) -> None:
+    client, labels = _counting_client()
+    _list(client)
+    _list(client, agent="operator")
+    original = Client.call_tool
+
+    async def fail(self, *args, **kwargs):
+        if failure == "transport":
+            raise ConnectionError("transport lost")
+        if failure == "timeout":
+            await asyncio.sleep(0.3)
+            return await original(self, *args, **kwargs)
+        if failure == "unreadable":
+            return SimpleNamespace(structured_content=None)
+        return await original(self, "brain_no_such_tool", {})
+
+    monkeypatch.setattr(Client, "call_tool", fail)
+    client.timeout = 0.1
+    with pytest.raises(BrainUnreachable):
+        _list(client)
+    assert labels == ["red-rail", "operator"]  # no replay of the failed call
+    assert not sessions[0].is_connected()
+    assert sessions[1].is_connected()
+    monkeypatch.setattr(Client, "call_tool", original)
+    client.timeout = 10
+    _list(client)
+    assert labels == ["red-rail", "operator", "red-rail"]
+
+
+def test_a_tool_refusal_keeps_the_connected_session(sessions: list[Client]) -> None:
+    client, labels = _counting_client()
+    _list(client)
+    with pytest.raises(BrainToolError):
+        client.call("brain_delivery_get", {"ticket_id": "nope", "actor_project": "x"})
+    assert sessions[0].is_connected()
+    _list(client)
+    assert labels == ["red-rail"]
+
+
+def test_close_disconnects_all_sessions_and_a_later_call_reopens(sessions: list[Client]) -> None:
+    client, labels = _counting_client()
+    _list(client)
+    _list(client, agent="operator")
+    client.close()
+    client.close()
+    assert all(not session.is_connected() for session in sessions)
+    _list(client)
+    assert labels == ["red-rail", "operator", "red-rail"]
+    assert sessions[-1].is_connected()
+
+
+def test_context_manager_closes_sessions_on_exception(sessions: list[Client]) -> None:
+    client, _ = _counting_client()
+    with pytest.raises(ValueError, match="caller failed"), client as entered:
+        assert entered is client
+        _list(client)
+        raise ValueError("caller failed")
+    assert not sessions[0].is_connected()
+
+
+@pytest.fixture
+def http_transports(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
+    server = FastMCP("counting-brain")
+    opened = []
+
+    @server.tool()
+    async def brain_delivery_list(actor_project: str) -> dict:
+        return {"items": [], "next_cursor": None, "omitted_count": 0}
+
+    def factory(url, *, auth, headers, httpx_client_factory):
+        opened.append((url, auth, headers["X-Brain-Agent"]))
+        return server
+
+    monkeypatch.setattr("fastmcp.client.transports.StreamableHttpTransport", factory)
+    return opened
+
+
+def test_repeated_http_clients_share_sessions_after_being_dropped(
+    tmp_path: Path,
+    http_transports: list[tuple[str, str, str]],
+    sessions: list[Client],
+    _close_brain_clients: list[BrainClient],
+) -> None:
+    threads_before = threading.active_count()
+    settings = BrainSettings(
+        url="http://127.0.0.1:8765/mcp", token="t", token_file=tmp_path / "token"
+    )
+    for _ in range(50):
+        client = BrainClient.from_settings(settings, agent="red-rail")
+        assert _list(client)["items"] == []
+        assert _list(client, agent="operator")["items"] == []
+        reference = weakref.ref(client)
+        _close_brain_clients.remove(client)
+        del client
+        gc.collect()
+        assert reference() is None
+    assert [label for _, _, label in http_transports] == ["red-rail", "operator"]
+    assert len(sessions) == 2 and all(session.is_connected() for session in sessions)
+    assert threading.active_count() <= threads_before + 1
+
+
+def test_close_all_disconnects_every_pool_is_idempotent_and_allows_reopening(
+    http_transports: list[tuple[str, str, str]], sessions: list[Client]
+) -> None:
+    threads_before = threading.active_count()
+    first = BrainClient.http("http://127.0.0.1:8765/mcp", token="t", agent="red-rail")
+    second = BrainClient.http("http://127.0.0.1:8766/mcp", token="t", agent="red-rail")
+    _list(first)
+    _list(first, agent="operator")
+    _list(second)
+    brain_client.close_all()
+    brain_client.close_all()
+    assert len(sessions) == 3 and all(not session.is_connected() for session in sessions)
+    assert threading.active_count() <= threads_before
+    _list(first)
+    another = BrainClient.http("http://127.0.0.1:8765/mcp", token="t", agent="red-rail")
+    _list(another)
+    assert len(http_transports) == 4
+    assert sessions[-1].is_connected()
+
+
+def test_closing_an_http_instance_does_not_disconnect_the_shared_sessions(
+    http_transports: list[tuple[str, str, str]], sessions: list[Client]
+) -> None:
+    first = BrainClient.http("http://127.0.0.1:8765/mcp", token="t", agent="red-rail")
+    second = BrainClient.http("http://127.0.0.1:8765/mcp", token="t", agent="operator")
+    with first:
+        _list(first)
+        _list(second)
+    second.close()
+    _list(first)
+    _list(second)
+    assert len(http_transports) == 2
+    assert all(session.is_connected() for session in sessions)
+
+
+def test_http_transport_identity_includes_url_and_token(
+    http_transports: list[tuple[str, str, str]],
+) -> None:
+    for port, token in [(8765, "t"), (8765, "other"), (8766, "t"), (8765, "t")]:
+        _list(BrainClient.http(f"http://127.0.0.1:{port}/mcp", token=token, agent="red-rail"))
+    assert len(http_transports) == 3
+
+
+def test_concurrent_http_clients_open_only_one_session_per_label(
+    http_transports: list[tuple[str, str, str]], sessions: list[Client]
+) -> None:
+    def call(index: int) -> dict:
+        client = BrainClient.http("http://127.0.0.1:8765/mcp", token="t", agent="red-rail")
+        return _list(client, agent="operator" if index % 2 else "red-rail")
+
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        assert all(result["items"] == [] for result in workers.map(call, range(50)))
+    assert sorted(label for _, _, label in http_transports) == ["operator", "red-rail"]
+    assert len(sessions) == 2
+
+
+def test_process_exit_closes_shared_sessions_with_one_registered_cleanup(tmp_path: Path) -> None:
+    closed = tmp_path / "closed-sessions"
+    script = dedent("""\
+        import atexit
+        import gc
+        import sys
+        from pathlib import Path
+        from fastmcp import Client, FastMCP
+        from fastmcp.client import transports
+
+        registered = []
+        original_register = atexit.register
+        def register(callback, *args, **kwargs):
+            registered.append(callback)
+            return original_register(callback, *args, **kwargs)
+        atexit.register = register
+        from rail.brain import client
+
+        server = FastMCP("exit-cleanup")
+        @server.tool()
+        async def probe() -> dict:
+            return {"ok": True}
+
+        opened = []
+        def factory(url, *, auth, headers, httpx_client_factory):
+            opened.append(headers["X-Brain-Agent"])
+            return server
+        transports.StreamableHttpTransport = factory
+
+        class CountingClient(Client):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.label = opened[-1]
+
+            async def close(self):
+                await super().close()
+                with Path(sys.argv[1]).open("a") as output:
+                    output.write(self.label + "\\n")
+
+        import fastmcp
+        fastmcp.Client = CountingClient
+        for _ in range(50):
+            caller = client.BrainClient.http(
+                "http://127.0.0.1:8765/mcp", token="t", agent="red-rail"
+            )
+            assert caller.call("probe", {}) == {"ok": True}
+            assert caller.call("probe", {}, agent="operator") == {"ok": True}
+            del caller
+            gc.collect()
+        assert opened == ["red-rail", "operator"]
+        assert registered.count(client.close_all) == 1
+        assert not Path(sys.argv[1]).exists()
+        """)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(closed)],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert closed.read_text().splitlines() == ["red-rail", "operator"]
+
+
+def test_dropping_a_private_client_closes_its_sessions_and_thread(
+    sessions: list[Client], _close_brain_clients: list[BrainClient]
+) -> None:
+    threads_before = threading.active_count()
+    client, _ = _counting_client()
+    _list(client)
+    reference = weakref.ref(client)
+    _close_brain_clients.remove(client)
+    del client
+    gc.collect()
+    assert reference() is None
+    assert not sessions[0].is_connected()
+    assert threading.active_count() <= threads_before
+
+
+def test_failed_session_enter_is_not_stored_or_closed_as_a_connected_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = []
+
+    class FailingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            events.append("enter")
+            raise ConnectionError("enter failed")
+
+        async def close(self):
+            events.append("close")
+
+    monkeypatch.setattr("fastmcp.Client", FailingClient)
+    client, labels = _counting_client()
+    for _ in range(2):
+        with pytest.raises(BrainUnreachable, match="enter failed"):
+            _list(client)
+    client.close()
+    assert events == ["enter", "enter"]
+    assert labels == ["red-rail", "red-rail"]
 
 
 def test_call_returns_the_structured_content() -> None:
@@ -38,6 +350,8 @@ def test_the_agent_label_can_be_set_per_call() -> None:
     assert brain.agent == "red-rail"
     client.call("brain_delivery_list", {"actor_project": "red-probe", "limit": 1}, agent="operator")
     assert brain.agent == "operator"
+    client.call("brain_delivery_list", {"actor_project": "red-probe", "limit": 1})
+    assert brain.agent == "red-rail"
 
 
 def test_a_refusal_keeps_its_code_and_message() -> None:
@@ -272,7 +586,9 @@ def test_a_dangling_sites_symlink_is_refused_instead_of_using_loopback(
 
 
 def test_a_client_from_settings_redacts_a_transport_failure_and_its_traceback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    http_transports: list[tuple[str, str, str]],
 ) -> None:
     _token(tmp_path, monkeypatch)
     monkeypatch.setenv(
@@ -282,10 +598,10 @@ def test_a_client_from_settings_redacts_a_transport_failure_and_its_traceback(
     settings = BrainSettings.from_environment(os.environ, route_of=lambda address: "wg0")
     client = BrainClient.from_settings(settings, agent="red-rail")
 
-    async def fail(name: str, arguments: dict, agent: str) -> dict:
+    async def fail(self, *args, **kwargs):
         raise RuntimeError(f"connect to {settings.url} failed")
 
-    monkeypatch.setattr(client, "_call", fail)
+    monkeypatch.setattr(Client, "call_tool", fail)
     with pytest.raises(BrainUnreachable, match="http://brain:8765/mcp") as caught:
         client.call("brain_delivery_list", {})
     assert V4 not in "".join(traceback.format_exception(caught.value))
@@ -640,3 +956,69 @@ def test_settings_hand_the_declared_interface_to_the_client(
     import socket
 
     assert asyncio.run(options()) == [(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"wg0")]
+
+
+def test_a_hung_call_says_it_timed_out() -> None:
+    """The pool's wait used to fire first with an empty `TimeoutError`, so a spooled
+    attestation carried an empty cause (review finding)."""
+    client = BrainClient.in_memory(FakeBrain(), agent="red-rail")
+    client.timeout = 0.2
+
+    async def hang(*args: object) -> dict:
+        await asyncio.sleep(30)
+        return {}
+
+    client._pool._call = hang  # type: ignore[method-assign]
+    try:
+        with pytest.raises(BrainUnreachable, match=r"brain_delivery_list: no answer within 0\.2 s"):
+            client.call("brain_delivery_list", {})
+    finally:
+        client.close()
+
+
+def test_closing_a_pool_from_its_own_loop_thread_does_not_deadlock() -> None:
+    """A finalizer may run on the loop thread itself (review finding): it must stop the loop
+    without waiting on it."""
+    client = BrainClient.in_memory(FakeBrain(), agent="red-rail")
+    client.call("brain_delivery_list", {"actor_project": "red-probe", "limit": 1})
+    pool = client._pool
+    loop, thread = pool._loop, pool._thread
+    assert loop is not None and thread is not None
+    done = threading.Event()
+    loop.call_soon_threadsafe(lambda: (pool.close(), done.set()))
+    assert done.wait(5), "close() from the loop thread blocked"
+    thread.join(5)
+    assert not thread.is_alive()
+    assert pool._sessions == {} and loop.is_closed()  # sessions closed before the loop stopped
+
+
+def test_the_guard_runs_before_a_reused_session_is_called() -> None:
+    """With sessions reused, a regression moving the guard into the session's opening would
+    let a second call through an open session (review finding)."""
+    verdicts = iter(
+        [None, PrivateFileError("site brain: the kernel gives no route to its address")]
+    )
+
+    def guard() -> None:
+        verdict = next(verdicts)
+        if verdict is not None:
+            raise verdict
+
+    client = BrainClient.in_memory(FakeBrain(), agent="red-rail")
+    client.guard = guard
+    try:
+        client.call("brain_delivery_list", {"actor_project": "red-probe", "limit": 1})
+        session = client._pool._sessions["red-rail"]
+        calls = []
+        original = session.call_tool
+
+        async def counted(*args: object, **kwargs: object) -> object:
+            calls.append(args)
+            return await original(*args, **kwargs)
+
+        session.call_tool = counted  # type: ignore[method-assign]
+        with pytest.raises(BrainUnreachable, match="no route"):
+            client.call("brain_delivery_list", {"actor_project": "red-probe", "limit": 1})
+        assert calls == []
+    finally:
+        client.close()

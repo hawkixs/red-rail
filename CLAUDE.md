@@ -108,6 +108,7 @@ comments, test names. The conversation with the operator stays in French.
   its confidentiality is the tunnel's, so the rail checks the kernel's route before every call
   and binds the client's sockets to that interface (`SO_BINDTODEVICE`), ignores proxies and
   never follows redirects.
+  The client keeps one MCP session per label per process, reused across calls and closed at exit.
 - `src/rail/contracts/` — brain-v42's published contracts vendored as data at the tag in
   `pins.py` (`delivery-attestations-v1.0`: 43 finding codes, the attestation API v1.0), frozen
   by `tests/test_boundary.py` (digests in CI, parity with the sibling checkout on the host).

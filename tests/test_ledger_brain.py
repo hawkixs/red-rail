@@ -367,6 +367,7 @@ def test_an_unreachable_brain_is_unattested_too(tmp_path: Path) -> None:
     def down(agent: str) -> object:
         raise OSError("down")
 
+    ledger.client.close()
     ledger.client.transport_factory = down
     with pytest.raises(Unattested) as exc:
         ledger.attest(
