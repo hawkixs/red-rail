@@ -83,18 +83,19 @@ def heredoc(name: str, text: str) -> str:
 def lock_preamble(root: str, release: str) -> list[str]:
     """The first lines of every remote script: strict mode, the release directory, the
     target's lock — `LOCKED` when another deployment holds it — then into the release.
-    `releases/` and the release get an explicit 0755, whatever the ssh session's umask: a unit
-    running as its own user must traverse them to reach `current` (a 007 umask left them 0770
-    and the first red-backup run failed with 203/EXEC)."""
+    `releases/` and the release are created with an explicit 0755, whatever the ssh session's
+    umask: a unit running as its own user must traverse them to reach `current` (a 007 umask
+    left them 0770 and the first red-backup run failed with 203/EXEC). The chmod is idempotent
+    and also repairs a directory an earlier deployment left 0770."""
     return [
         "set -euo pipefail",
         f"root={root}",
         f"release={release}",
         'mkdir -p "$release"',
+        'chmod 0755 "$root/releases" "$release"',
         'exec 9>"$root/.deploy.lock"',
         f'flock -n 9 || {{ echo "another deployment holds $root/.deploy.lock" >&2; '
         f"exit {LOCKED}; }}",
-        'chmod 0755 "$root/releases" "$release"',
         'cd "$release"',
     ]
 

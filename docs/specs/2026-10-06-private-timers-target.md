@@ -68,7 +68,7 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
    `current` symlink points at the live release; `.deploy.lock` is the lock. Each unit is linked
    once at migration, `/etc/systemd/system/<unit>` → `<stack_root>/<project>/current/<unit>`, so
    moving `current` moves every unit with the payload, a rollback included. `releases/` and
-   each `releases/<version>/` are set to 0755 under the lock, whatever the deploy session's
+   each `releases/<version>/` are set to 0755 where they are created, whatever the deploy session's
    umask: the units run as the project's own user, which must traverse them (a 007 umask left
    them 0770 and the first run failed with 203/EXEC — ticket 2adbbadb). A timer's boot link,
    `/etc/systemd/system/timers.target.wants/<timer>`, must read `/etc/systemd/system/<timer>`:
