@@ -67,7 +67,15 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
    `release.env` (`VERSION`, `GIT_SHA`, `IMAGE_DIGEST`, `IMAGE_REFERENCE`, never a secret). The
    `current` symlink points at the live release; `.deploy.lock` is the lock. Each unit is linked
    once at migration, `/etc/systemd/system/<unit>` → `<stack_root>/<project>/current/<unit>`, so
-   moving `current` moves every unit with the payload, a rollback included.
+   moving `current` moves every unit with the payload, a rollback included. `releases/` and
+   each `releases/<version>/` are set to 0755 where they are created, whatever the deploy session's
+   umask: the units run as the project's own user, which must traverse them (a 007 umask left
+   them 0770 and the first run failed with 203/EXEC — ticket 2adbbadb). A timer's boot link,
+   `/etc/systemd/system/timers.target.wants/<timer>`, must read `/etc/systemd/system/<timer>`:
+   `systemctl enable` writes the resolved path inside one release instead, which dangles once
+   that release is gone. The remote script refuses, before any change, a boot link that reads
+   anything else; no link at all is accepted, since the timers are enabled after the first
+   delivery.
 
 5. **One remote script, run as the deploy account under the lock.** In order:
    1. If any declared unit is `activating` or `active`, stop before any change, naming it. A
@@ -192,9 +200,11 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
    lists exactly those commands.
 3. Immediately before the first `rail deploy`, link the seven units (decision 4). Until the
    first delivery creates `current`, the links point at nothing.
-4. Right after the first delivery, `systemctl enable` the three timers (their `[Install]`
-   section is `WantedBy=timers.target` only, decision 7), so they survive a reboot; the
-   deployment itself already started them.
+4. Right after the first delivery, enable the three timers (their `[Install]` section is
+   `WantedBy=timers.target` only, decision 7) by writing each boot link by hand,
+   `ln -sfn /etc/systemd/system/<timer> /etc/systemd/system/timers.target.wants/<timer>`,
+   never with `systemctl enable`, which links the resolved path inside the release (decision
+   4); the deployment itself already started them.
 5. Add the seven units to red-monitor's agent configuration on that host (decision 9).
 
 The first drill needs two red-backup releases.
