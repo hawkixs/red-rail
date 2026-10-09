@@ -397,6 +397,26 @@ def timer_refusals(text: str, *, unit: str, declared: frozenset[str]) -> list[st
     return refusals
 
 
+def wants_link_checks(timer: str, unit_dir: str = "/etc/systemd/system") -> list[str]:
+    """Refuse, before any change, a boot link that does not name the timer's stable path.
+    `systemctl enable` writes `timers.target.wants/<timer>` to the RESOLVED unit, inside one
+    release: once that release is gone the link dangles and the timer no longer starts at boot
+    (ticket 2adbbadb). The link must read `<unit_dir>/<timer>`, which follows `current`; no link
+    yet is fine — the migration enables the timers after the first delivery."""
+    wants = f"{unit_dir}/timers.target.wants/{timer}"
+    stable = f"{unit_dir}/{timer}"
+    return [
+        f"if [ -e {wants} ] || [ -L {wants} ]; then",
+        f"  wants=$(readlink {wants} || true)",
+        f'  if [ "$wants" != "{stable}" ]; then',
+        f'    echo "{wants} points at ${{wants:-no link target}}, not {stable}: replace it '
+        f'with ln -sfn {stable} {wants}" >&2',
+        "    exit 1",
+        "  fi",
+        "fi",
+    ]
+
+
 def remote_script(
     project: str,
     artefact: Artefact,
@@ -409,6 +429,8 @@ def remote_script(
     root = f"{params.stack_root}/{project}"
     release = f"{root}/releases/{artefact.version}"
     lines = lock_preamble(root, release)
+    for timer in timers:
+        lines.extend(wants_link_checks(timer))
     # a timer is always `active` while it waits: only a service can be in the middle of a run
     running_check = [
         line

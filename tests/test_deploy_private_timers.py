@@ -16,6 +16,7 @@ from rail.deploy.private_timers import (
     PrivateTimers,
     service_refusals,
     timer_refusals,
+    wants_link_checks,
 )
 from rail.ledger import RECEIPTS_DIR, AttestationKind
 from rail.ledger.file import FileLedger
@@ -713,3 +714,44 @@ def test_an_identity_file_cannot_supply_its_own_release_env(tmp_path: Path) -> N
     answer = _answer(forged, digest="sha256:" + "d" * 64)
     with pytest.raises(DeployError):
         _target(repo, tmp_path, run=RecordingHost(answer)).apply(artefact)
+
+
+# -- the timers' boot links (ticket 2adbbadb) -----------------------------------------------
+
+
+def _wants(tmp_path: Path, target: str | None) -> subprocess.CompletedProcess[str]:
+    """Run the boot-link check of `red-backup.timer` against a fake unit directory."""
+    unit_dir = tmp_path / "system"
+    (unit_dir / "timers.target.wants").mkdir(parents=True)
+    if target is not None:
+        (unit_dir / "timers.target.wants" / "red-backup.timer").symlink_to(target)
+    script = "\n".join(["set -euo pipefail", *wants_link_checks("red-backup.timer", str(unit_dir))])
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+
+def test_a_timer_not_enabled_yet_passes_the_boot_link_check(tmp_path: Path) -> None:
+    """Before the migration enables the timers, the first deploy has no link to check."""
+    assert _wants(tmp_path, None).returncode == 0
+
+
+def test_a_boot_link_to_the_stable_unit_path_passes(tmp_path: Path) -> None:
+    assert _wants(tmp_path, str(tmp_path / "system" / "red-backup.timer")).returncode == 0
+
+
+def test_a_boot_link_into_a_release_is_refused(tmp_path: Path) -> None:
+    """`systemctl enable` writes the resolved path: pruning that release would leave the
+    timer unstarted at boot."""
+    result = _wants(tmp_path, "/opt/red-backup/releases/0.1.0/red-backup.timer")
+    assert result.returncode == 1
+    assert "red-backup.timer" in result.stderr and "releases/0.1.0" in result.stderr
+
+
+def test_a_dangling_boot_link_is_refused(tmp_path: Path) -> None:
+    assert _wants(tmp_path, str(tmp_path / "gone" / "red-backup.timer")).returncode == 1
+
+
+def test_the_boot_links_are_checked_before_any_change(tmp_path: Path) -> None:
+    script = _script(tmp_path)
+    check = "/etc/systemd/system/timers.target.wants/red-backup.timer"
+    assert script.index("flock -n 9") < script.index(check) < script.index("cat >")
+    assert "timers.target.wants/red-backup.service" not in script
