@@ -755,3 +755,21 @@ def test_the_boot_links_are_checked_before_any_change(tmp_path: Path) -> None:
     check = "/etc/systemd/system/timers.target.wants/red-backup.timer"
     assert script.index("flock -n 9") < script.index(check) < script.index("cat >")
     assert "timers.target.wants/red-backup.service" not in script
+
+
+# -- MemorySwapMax= (ticket e5fc2591) ------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["0", "512M"])
+def test_a_bounded_memory_swap_max_is_accepted(value: str) -> None:
+    """A unit holding clear data in memory may forbid swap for itself (`MemorySwapMax=0`):
+    the same bounded byte count `MemoryMax=` takes, zero included."""
+    assert (
+        _service(SERVICE.replace("MemoryMax=1G\n", f"MemoryMax=1G\nMemorySwapMax={value}\n")) == []
+    )
+
+
+@pytest.mark.parametrize("value", ["infinity", "50%", ""])
+def test_an_unbounded_memory_swap_max_is_refused(value: str) -> None:
+    refusals = _service(SERVICE.replace("MemoryMax=1G\n", f"MemoryMax=1G\nMemorySwapMax={value}\n"))
+    assert any("MemorySwapMax=" in r for r in refusals), refusals

@@ -104,8 +104,9 @@ The first delivery covers red-backup's core only: the run, the brain restore dri
    something other than the release.** The parser and its allow-list stance are shared with
    `private-systemd`. Each refusal names the unit and the rule.
    - A service: `Type=oneshot`; `User=` set to a plain name other than root; `MemoryMax=` a byte
-     count (no swap on the host); `TimeoutStartSec=` (or `TimeoutSec=`) a positive duration,
-     since it bounds a oneshot run; every `Exec*=` program under `<stack_root>/<project>/current/app/`;
+     count (no swap on the host); `MemorySwapMax=`, optional, `0` or a byte count, so a unit
+     holding clear data forbids swap for itself (ticket e5fc2591); `TimeoutStartSec=` (or
+     `TimeoutSec=`) a positive duration, since it bounds a oneshot run; every `Exec*=` program under `<stack_root>/<project>/current/app/`;
      `EnvironmentFile=<stack_root>/<project>/current/release.env` without the `-` prefix; no
      `+`, `!` or `!!` prefix and no `PermissionsStartOnly=`; no quoting, backslash or `;` that
      would make systemd read another command; no invisible character; `RemainAfterExit=`
