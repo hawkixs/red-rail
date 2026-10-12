@@ -350,12 +350,14 @@ def bindings_of(ledger: Ledger, project: str, repository: str, number: int) -> l
     ]
 
 
-def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
+def open_ledger(repo: Path, *, client: Any = None, agent: str = "red-rail") -> Ledger:
     """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a missing or bad
     manifest — this is a write path, and it stays fail-closed without one. `ledger: brain`
     needs the `brain` extra, the operator's token and the ticket. Gates that must still work
     without a manifest observe the default file ledger themselves
-    (`FileLedger(repo / RECEIPTS_DIR)`), never through here."""
+    (`FileLedger(repo / RECEIPTS_DIR)`), never through here. `agent` labels every call of the
+    brain client built here, reads included: a caller holding another credential (the
+    reviewer) names itself, since brain admits only the credential's own issuers."""
     from rail.ledger.file import FileLedger
     from rail.ledger.spool import spool_directory
     from rail.model import LedgerBackend, load_rail_config
@@ -380,7 +382,7 @@ def open_ledger(repo: Path, *, client: Any = None) -> Ledger:
             settings = BrainSettings.from_environment()
         except PrivateFileError as exc:
             raise LedgerError(str(exc)) from exc  # the refusal names its cause
-        client = BrainClient.from_settings(settings, agent="red-rail")
+        client = BrainClient.from_settings(settings, agent=agent)
     assert cfg.ticket is not None  # guaranteed by the manifest validator
     return BrainLedger(
         client, ticket=cfg.ticket, project=cfg.project, spool_dir=spool_directory(cfg.project)

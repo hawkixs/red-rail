@@ -67,7 +67,7 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
     from rail.ledger import LedgerError
     from rail.model import IGNORED_GLOBS, MANIFEST_NAME, load_rail_config
     from rail.reviewer.github import GitHubApp, GitHubError
-    from rail.reviewer.service import pending_reviews, review_pull
+    from rail.reviewer.service import REVIEWER_IDENTITY, pending_reviews, review_pull
 
     github = GitHubApp(
         app_id=config.app_id,
@@ -91,7 +91,7 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
                     "it is merged."
                 )
             cfg = load_rail_config(repository.path)
-            ledger = open_ledger(repository.path)
+            ledger = open_ledger(repository.path, agent=REVIEWER_IDENTITY)
             # the generated files this repository declares no judge reads, ADDED to the host's
             # list (ticket f0aa9c29), as merged on origin/main, never as the working tree says
             policy = config.policy

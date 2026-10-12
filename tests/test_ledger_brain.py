@@ -850,3 +850,29 @@ def test_a_whole_delivery_in_brain_mode_leaves_no_file_anywhere(tmp_path: Path) 
     assert flow.unattested == [] and flow.failures == []
     assert ledger.pending() == [] and not list(tmp_path.rglob("*.json"))
     assert len(brain.attestations) == 6
+
+
+def test_open_ledger_labels_its_client_with_the_agent_it_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rail's own label by default; a caller holding another credential (the reviewer)
+    names its own, which then labels every call, reads included."""
+    repo = conforming_tree(tmp_path, "red-probe", "dev")
+    write_manifest(repo, project="red-probe", tier="dev")
+    (repo / "rail.yaml").write_text(
+        (repo / "rail.yaml")
+        .read_text()
+        .replace("ledger: file\n", "ledger: brain\nticket: 04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f\n")
+    )
+    labels = []
+    brain = FakeBrain(agent="operator")
+
+    def from_settings(settings, *, agent):
+        labels.append(agent)
+        return BrainClient.in_memory(brain, agent=agent)
+
+    monkeypatch.setattr("rail.brain.settings.BrainSettings.from_environment", lambda: object())
+    monkeypatch.setattr(BrainClient, "from_settings", staticmethod(from_settings))
+    open_ledger(repo)
+    open_ledger(repo, agent="red-rail-reviewer")
+    assert labels == ["red-rail", "red-rail-reviewer"]

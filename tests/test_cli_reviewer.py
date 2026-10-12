@@ -393,3 +393,22 @@ def test_rule_writes_a_review_ruling_in_brain_mode(tmp_path: Path, monkeypatch) 
     assert len(rulings) == 1
     assert rulings[0]["payload"]["finding"] == "F-7-1"
     assert rulings[0]["issuer_identity"] == "operator"
+
+
+def test_the_reviewer_reads_and_writes_its_ledger_as_itself(tmp_path: Path, monkeypatch) -> None:
+    """Under brain credentials an issuer label is admitted only when it is the credential's
+    client_id or one of its patterns: the reviewer's token admits `red-rail-reviewer` alone, so
+    every call of its pass, the reads included, carries that label — not the rail's default
+    `red-rail` (403 on brain_delivery_get at the red-base cutover, 2026-10-12)."""
+    from rail.ledger import open_ledger as real_open_ledger
+    from rail.reviewer.service import REVIEWER_IDENTITY
+
+    agents = []
+
+    def recording_open_ledger(repo, **kwargs):
+        agents.append(kwargs.get("agent"))
+        return real_open_ledger(repo, **kwargs)
+
+    monkeypatch.setattr("rail.commands.reviewer.open_ledger", recording_open_ledger)
+    _policy_seen(tmp_path, monkeypatch)
+    assert agents == [REVIEWER_IDENTITY]
