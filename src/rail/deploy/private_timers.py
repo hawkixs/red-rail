@@ -91,6 +91,7 @@ _SERVICE_KEYS = frozenset(
         "UMask",
         "MemoryMax",
         "MemoryHigh",
+        "MemorySwapMax",
         "TasksMax",
         "CPUQuota",
         "Nice",
@@ -316,6 +317,13 @@ def service_refusals(text: str, *, unit: str, current: str, declared: frozenset[
         f"{unit}: MemoryMax={value} must be a bounded byte count (got {value!r})"
         for value in memories
         if not _memory_ok(value)
+    )
+    # optional; a unit holding clear data in memory forbids swap for itself with `0` (ticket
+    # e5fc2591), so only a bounded byte count is accepted, never `infinity` or a percentage
+    refusals.extend(
+        f"{unit}: MemorySwapMax={value} must be a bounded byte count, 0 included (got {value!r})"
+        for value in service.get("MemorySwapMax", [])
+        if value != "0" and not _memory_ok(value)
     )
 
     timeouts = [
