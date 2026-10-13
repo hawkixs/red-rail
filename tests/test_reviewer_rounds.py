@@ -75,6 +75,13 @@ def ruling(minutes: int, finding: str, as_: str = "fix", pr: int = 7) -> Record:
 # --- C1: the transitions ---------------------------------------------------------------
 
 
+def test_a_receipt_without_partial_view_keys_still_loads_its_last_status() -> None:
+    record = verdict(1, 1, [_finding(1, status="fixed")], decision="approve")
+    assert "unseen_files" not in record.data and "not_reviewed" not in record.data
+    state = rounds.loop_state([record], [])
+    assert [(f.id, f.status) for f in state.findings] == [("F-7-1", "fixed")]
+
+
 @pytest.mark.parametrize(
     ("verdicts", "rulings", "expected"),
     [

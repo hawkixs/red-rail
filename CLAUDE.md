@@ -124,7 +124,9 @@ comments, test names. The conversation with the operator stays in French.
   seat, `guard.sh` for agy), `github.py` (minimal App client), `carry.py` (the `## Carry-forwards`
   section a code pull request writes in its body, one line per id), `rounds.py` (the review
   loop's state from receipts only: round number, open findings, open carry-forwards),
-  `service.py` (one review per head SHA, fail-closed, verdict attested; converges — a later head
+  `service.py` (one review per head SHA, fail-closed, verdict attested; a word on an earlier
+  finding counts only from a judge that saw its location, with unseen files and findings not
+  re-verified named in the verdict — spec 2026-10-13-reviewer-partial-view; converges — a later head
   is judged `incremental` on the delta since the last verdict, rounds 1 normal, 2 exhaustive,
   3 closure (`rounds.py`, from the receipts); after round 3 an open blocker awaits
   `rail reviewer rule`, then one closure check (spec 2026-09-25-review-loop-closure)),

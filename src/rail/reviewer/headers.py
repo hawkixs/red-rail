@@ -8,9 +8,31 @@ sides count: a rename's new path is as much the change as its old one."""
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 
 HEADER = re.compile(r"^diff --git a/(?P<a>\S+) b/(?P<b>\S+)$", re.MULTILINE)
 ANY_HEADER = re.compile(r"^diff --git ", re.MULTILINE)
+
+
+class Ambiguous:
+    """More than one header path matches a finding's spelling (spec D2)."""
+
+
+AMBIGUOUS = Ambiguous()
+
+
+def resolve(spelling: str, paths: Collection[str]) -> str | None | Ambiguous:
+    """Strip at most one prefix: a directory can be named `a` or `b` legitimately
+    (spec 2026-10-13-reviewer-partial-view, D2)."""
+    candidates = {spelling}
+    for prefix in ("./", "a/", "b/"):
+        if spelling.startswith(prefix):
+            candidates.add(spelling[len(prefix) :])
+            break
+    matches = candidates.intersection(paths)
+    if len(matches) > 1:
+        return AMBIGUOUS
+    return next(iter(matches), None)
 
 
 def paths(diff: str) -> list[str]:

@@ -31,7 +31,7 @@ from rail.reviewer.judges import (
     round_instructions,
 )
 from rail.reviewer.policy import ReviewPolicy, producer_providers
-from rail.reviewer.split import oversized, split_diff
+from rail.reviewer.split import Sight, oversized, sight_of, split_diff
 from rail.reviewer.verdict import CarryForwards, Finding, PreviousAnswer, ReviewVerdict
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
@@ -150,45 +150,60 @@ def _part_notes(notes: str, index: int, chunks: list[str]) -> str:
     return f"{notes}\n\n{part}".strip()
 
 
-def _path(name: str) -> str:
-    """A judge's spelling of a path, as the diff header writes it."""
-    for prefix in ("./", "a/", "b/"):
-        if name.startswith(prefix):
-            return name[len(prefix) :]
-    return name
+def _seen(sight: Sight | None, path: str, line: int | None) -> bool:
+    """A cut file is seen only inside a fully visible hunk (spec
+    2026-10-13-reviewer-partial-view, D2)."""
+    return (
+        sight is None
+        or path in sight.complete
+        or (line is not None and any(lo <= line <= hi for lo, hi in sight.cut.get(path, ())))
+    )
 
 
 def _within_part(
-    reply: JudgeReply, chunk: str, blind: Mapping[str, str] | None = None
+    reply: JudgeReply,
+    chunk: str,
+    known: Collection[str] = (),
+    *,
+    judged_files: Collection[str] | None = None,
+    outside_is_unseen: bool = True,
 ) -> JudgeReply:
-    """A judge that read one part cannot block on a file it did not read (measured on #46: three
-    "missing" findings about code that sat in other parts). Such a finding stays, as important;
-    a reply left with no blocking finding approves. A part with a header we cannot read keeps
-    every finding: its unread file is one the judge did read (ticket b1df8461).
+    """Demote new claims at unseen locations in either path (spec
+    2026-10-13-reviewer-partial-view, D5). Preserve the judge's actual cut; an unreadable
+    piece keeps new claims blocking because we cannot name what the judge read (D6).
 
-    `blind` maps the id of an earlier finding to its file when no excerpt of that file reached
-    the judges. A judge whose part lacks the file has not verified such a finding: its answer,
-    either way, is dropped, so a "still_open" never outvotes a judge that read the file
-    (measured on red-ha#4, where three of four judges kept a false blocker open this way) and
-    a "fixed" never closes what nobody read. When no judge read the file, no answer remains
-    and the finding stays open (`rounds.assign`)."""
-    if reply.verdict is None or not _headers_parsed(chunk):
+    A piece is part of the judged diff: a file outside it is unseen by that judge
+    (`outside_is_unseen`, measured on #46). The single piece IS the judged diff, so there a
+    file outside it keeps today's rule (the rubric caps such a doubt at important) and only a
+    location the judge's cut hid is demoted."""
+    if reply.sight is None:
+        reply = replace(reply, sight=sight_of(chunk, chunk))
+    if reply.verdict is None or not headers.parsed(chunk):
         return reply
-    files = _files(chunk)
-    reply = _without_blind_answers(reply, files, blind or {})
-    moved = False
-    findings: list[Finding] = []
+    paths = _files(chunk) if judged_files is None else judged_files
+    findings = []
     for f in reply.verdict.findings:
-        if f.severity == "blocking" and _path(f.file) not in files:
-            moved = True
+        path = headers.resolve(f.file, paths)
+        # The description is supplied separately in every prompt, not a repository file.
+        # Its judge-minted claims remain governed by _finish's mechanical-location rule.
+        if (
+            f.id not in known
+            and not carry.is_mechanical(f)
+            and (
+                (path is None and outside_is_unseen)
+                or path is headers.AMBIGUOUS
+                or (isinstance(path, str) and not _seen(reply.sight, path, f.line))
+            )
+        ):
             f = f.model_copy(
                 update={
                     "severity": "important",
+                    "klass": "note",
                     "evidence": f"{f.evidence} [not in the part this judge read]",
                 }
             )
         findings.append(f)
-    if not moved:
+    if findings == reply.verdict.findings:
         return reply
     verdict = reply.verdict.model_copy(update={"findings": findings})
     if not any(f.severity == "blocking" for f in findings):
@@ -196,18 +211,44 @@ def _within_part(
     return replace(reply, verdict=verdict)
 
 
-def _without_blind_answers(
-    reply: JudgeReply, files: list[str], blind: Mapping[str, str]
-) -> JudgeReply:
-    verdict = reply.verdict
-    if verdict is None or not blind:
-        return reply
-    kept = tuple(
-        a for a in verdict.previous if not (a.id in blind and _path(blind[a.id]) not in files)
-    )
-    if len(kept) == len(verdict.previous):
-        return reply
-    return replace(reply, verdict=verdict.model_copy(update={"previous": kept}))
+def _admissible(
+    reply: JudgeReply,
+    judged_files: Collection[str],
+    known: Mapping[str, tuple[str, int | None]],
+    *,
+    readable: bool = True,
+    excerpted: Collection[str] = (),
+) -> tuple[JudgeReply, set[str]]:
+    """Drop both kinds of unverified words before they can move an earlier status (spec
+    2026-10-13-reviewer-partial-view, D2-D3). Excerpts govern only files outside the judged
+    diff, and only the finding whose own window was quoted. Unknown membership fails closed
+    (D6); neither an ambiguous spelling nor a repeated id becomes a fresh claim."""
+    if reply.verdict is None:
+        return reply, set()
+    dropped: set[str] = set()
+
+    def keep(identifier: str | None) -> bool:
+        if identifier not in known:
+            return True
+        file, line = known[identifier]
+        path = headers.resolve(file, judged_files)
+        allowed = readable and (
+            identifier in excerpted
+            if path is None
+            else isinstance(path, str) and _seen(reply.sight, path, line)
+        )
+        if not allowed:
+            dropped.add(identifier)
+        return allowed
+
+    previous = tuple(a for a in reply.verdict.previous if keep(a.id))
+    findings = [f for f in reply.verdict.findings if keep(f.id)]
+    if not dropped:
+        return reply, dropped
+    verdict = reply.verdict.model_copy(update={"previous": previous, "findings": findings})
+    if not any(f.severity == "blocking" for f in findings):
+        verdict = verdict.model_copy(update={"verdict": "approve"})
+    return replace(reply, verdict=verdict), dropped
 
 
 def previous_verdicts(ledger: Ledger, project: str, pr: PullRequest) -> list[Record]:
@@ -351,9 +392,10 @@ def _head_excerpts(
     pr: PullRequest,
     github: GitHubLike,
     pr_files: Collection[str],
-) -> tuple[str, dict[str, str]]:
+) -> tuple[str, dict[str, str], set[str]]:
     """The current code of every open earlier finding, at the pull request's head, as data for
-    the judges; and the findings (id -> file) no excerpt could be made for. A fetch failure
+    the judges; the findings (id -> file) no excerpt could be made for; and the ids whose
+    own window was quoted (spec 2026-10-13-reviewer-partial-view, D2). A fetch failure
     never fails the review: the finding is named, and no answer keeps it open as before.
 
     Only a file of the pull request's own diff (`pr_files`, the WHOLE diff, not a delta) is
@@ -362,12 +404,14 @@ def _head_excerpts(
     by_file: dict[str, list[Finding]] = {}
     for f in findings:
         if f.status in ("new", "still_open"):
-            by_file.setdefault(_path(f.file), []).append(f)
+            path = headers.resolve(f.file, pr_files)
+            by_file.setdefault(path if isinstance(path, str) else f.file, []).append(f)
     if not by_file:
-        return "", {}
+        return "", {}, set()
     blocks: list[str] = []
     missing: list[str] = []
     blind: dict[str, str] = {}
+    excerpted: set[str] = set()
     used = 0
     for path, group in by_file.items():
         reason = ""
@@ -392,6 +436,7 @@ def _head_excerpts(
         if block:
             blocks.append(block)
             used += len(block.encode("utf-8"))
+            excerpted.update(f.id for f in group if f.id)
             continue
         for f in group:
             missing.append(f"- {f.id or f.title} ({path!r}): no excerpt: {reason}")
@@ -404,7 +449,7 @@ def _head_excerpts(
     ]
     if missing:
         parts.append("No excerpt could be made for:\n" + "\n".join(missing))
-    return "\n\n".join(parts), blind
+    return "\n\n".join(parts), blind, excerpted
 
 
 def _context(state: rounds.LoopState, *, cf_open: list[str], cf_addressed: list[str]) -> str:
@@ -532,10 +577,17 @@ def _render(verdict: ReviewVerdict) -> str:
         where = f"{f.file}:{f.line}" if f.line else f.file
         tag = f.klass or f.severity
         lines.append(f"- {f.id or ''} [{tag}/{f.status}] {where} — {f.title}: {f.evidence}")
-    if verdict.diff_truncated:
-        lines.append(
-            "\n_The diff was truncated by the reviewer; the verdict covers the first part only._"
-        )
+    if verdict.unseen_files:
+        shown = verdict.unseen_files[:10]
+        left = max(verdict.unseen_count, len(verdict.unseen_files)) - len(shown)
+        names = ", ".join(shown) + (f" and {left} more" if left else "")
+        lines.append(f"\nNot read whole: {names}")
+    statuses = {f.id: f.status for f in verdict.findings}
+    for identifier in verdict.not_reviewed:
+        if identifier in statuses:
+            lines.append(
+                f"{identifier}: not re-verified (file not seen), keeps {statuses[identifier]}"
+            )
     return "\n".join(lines)
 
 
@@ -1022,9 +1074,9 @@ def _review_started(
         notes = _notes(pr, state.last_judged, github=github)
     else:
         notes = ""
-    blind: dict[str, str] = {}
+    excerpted: set[str] = set()
     if context_state.findings:
-        excerpts, blind = _head_excerpts(
+        excerpts, _, excerpted = _head_excerpts(
             context_state.findings, pr=pr, github=github, pr_files=set(_files(whole))
         )
         if excerpts:
@@ -1071,15 +1123,18 @@ def _review_started(
         pr, policy, chain, criteria=criteria, notes=notes, instructions=instructions
     )
     diff = drop_ignored(diff, policy)
+    judged_files = _files(diff)
+    known = {f.id: (f.file, f.line) for f in judged_state.findings if f.id}
     chunks = split_diff(diff, budget=budget)
     unbounded = oversized(chunks, budget=budget)
     truncated = bool(unbounded)
+    light_note = ""
     if len(chunks) > 1:
         replies = []
         for index, chunk in enumerate(chunks, start=1):
             part = _part_notes(notes, index, chunks)
             replies.extend(
-                _within_part(reply, chunk, blind)
+                _within_part(reply, chunk, known, judged_files=judged_files)
                 for reply in _judge_chain(
                     pr,
                     chunk,
@@ -1090,9 +1145,7 @@ def _review_started(
                     **{**common, "notes": part},
                 )
             )
-        merged = _merge(replies, mode, truncated) if any(r.verdict for r in replies) else None
     else:
-        light_note = ""
         if light:
             replies = _judge_chain(pr, diff, policy, chain, tier="light", wanted=1, **common)
         else:
@@ -1125,8 +1178,35 @@ def _review_started(
                         and r.provider in deep_chain
                         and r.provider not in answered
                     ]
-        merged = _merge(replies, mode, truncated) if any(r.verdict for r in replies) else None
-        if merged is not None and light_note:
+        replies = [
+            _within_part(r, diff, known, judged_files=judged_files, outside_is_unseen=False)
+            for r in replies
+        ]
+
+    # Only replies retained after arbitration can govern findings or count as read (D3-D4).
+    dropped: set[str] = set()
+    kept: set[str] = set()
+    filtered = []
+    for reply in replies:
+        reply, removed = _admissible(
+            reply, judged_files, known, readable=headers.parsed(diff), excerpted=excerpted
+        )
+        dropped.update(removed)
+        if reply.verdict is not None:
+            kept.update(a.id for a in reply.verdict.previous)
+            kept.update(f.id for f in reply.verdict.findings if f.id)
+        filtered.append(reply)
+    seen = {path for r in filtered if r.verdict and r.sight for path in r.sight.complete}
+    unseen = sorted(set(judged_files) - seen)
+    coverage = {
+        "unseen_files": tuple(unseen[:50]),
+        "unseen_count": len(unseen),
+        "not_reviewed": tuple(sorted(dropped - kept))[:_MAX_FINDINGS],
+    }
+    merged = _merge(filtered, mode, truncated) if any(r.verdict for r in filtered) else None
+    if merged is not None:
+        merged = merged.model_copy(update=coverage)
+        if len(chunks) <= 1 and light_note:
             merged = merged.model_copy(
                 update={"summary": f"{merged.summary} | {light_note}"[:4000]}
             )
@@ -1149,7 +1229,7 @@ def _review_started(
             diff_truncated=truncated,
             round="no_verdict",
             artifact=artifact,
-        )
+        ).model_copy(update=coverage)
         title = "no verdict"
     else:
         verdict = _finish(

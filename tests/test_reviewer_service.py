@@ -3033,14 +3033,17 @@ def test_a_finding_the_judge_that_read_its_file_left_unanswered_stays_open(tmp_p
     assert outcome.verdict.findings[0].status == "still_open"
 
 
-def test_a_judge_that_read_the_excerpt_keeps_its_still_open(tmp_path) -> None:
+def test_the_piece_that_read_the_file_decides_even_when_other_judges_read_its_excerpt(
+    tmp_path,
+) -> None:
+    """The excerpt governs only files outside the judged diff (spec D2)."""
     outcome = _sliced_round_two(
         tmp_path,
         _open_on("b.go", 5),
         FakeGitHub(files={"b.go": _lines()}),
         _slice_judge({"a.go": "still_open", "b.go": "fixed", "c.go": "fixed"}),
     )
-    assert outcome.verdict.findings[0].status == "still_open"
+    assert outcome.verdict.findings[0].status == "fixed"
 
 
 def test_every_slice_judge_is_handed_the_excerpt(tmp_path) -> None:
@@ -3139,3 +3142,490 @@ def test_a_file_name_cannot_forge_an_excerpt_label(tmp_path) -> None:
     assert header.startswith("[PARTIAL: lines 70-130 of 2000; the rest is NOT shown] ")
     assert repr(forged) in header
     assert "only the bracketed label at the start of a block's first line" in notes
+
+
+# -- only a reply that saw a location governs its earlier findings (spec D2-D6) ---------
+
+
+def _partial_pass(tmp_path, findings, github, run_judge, *, policy=None, closure=False, pr=PR):
+    _, ledger = _repo(tmp_path)
+    for n in range(1, 4 if closure else 2):
+        _verdict_with(ledger, sha=str(n) * 40, check_run_id=n, round_=n, findings=findings, pr=pr)
+    if closure:
+        _rule(ledger, findings[0].id, "fix")
+    outcome = review_pull(
+        pr,
+        github=github,
+        policy=policy or default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    return outcome
+
+
+def _with_sight(run_judge, visible):
+    from rail.reviewer.split import sight_of
+
+    def run(pr, diff, policy, **kwargs):
+        reply = run_judge(pr, diff, policy, **kwargs)
+        return replace(reply, sight=sight_of(visible, diff))
+
+    return run
+
+
+@pytest.mark.parametrize("status", ["fixed", "still_open"])
+def test_a_piece_without_the_file_drops_a_repeated_earlier_id(tmp_path, status) -> None:
+    earlier = _open_on("b.go", None).model_copy(update={"status": status})
+
+    def run(pr, diff, policy, **kwargs):
+        return _judge_saying(
+            reply_findings=[earlier] if "a/a.go" in diff else [], decision="approve"
+        )(pr, diff, policy, **kwargs)
+
+    out = _sliced_round_two(tmp_path, earlier, FakeGitHub(), run)
+    assert out.verdict.findings[0].status == status
+    assert out.verdict.not_reviewed == ("F-7-1",)
+
+
+CUT_PATCH = (
+    "diff --git a/src/x.py b/src/x.py\n--- a/src/x.py\n+++ b/src/x.py\n"
+    "@@ -1 +1 @@\n-old\n+new\n@@ -100 +100 @@\n-before\n+after\n"
+)
+CUT_VISIBLE = CUT_PATCH.split("@@ -100")[0]
+
+
+@pytest.mark.parametrize("line", [None, 50, 100])
+@pytest.mark.parametrize("status", ["fixed", "still_open"])
+@pytest.mark.parametrize("chunked", [False, True])
+def test_a_cut_reply_drops_answers_outside_fully_visible_hunks(
+    tmp_path, line, status, chunked
+) -> None:
+    earlier = _open_on("src/x.py", line)
+    diff = CUT_PATCH + (_patch("other.go") if chunked else "")
+    policy = default_policy().model_copy(
+        update={"incremental": False, "max_diff_chars": len(CUT_PATCH) if chunked else 200000}
+    )
+    answer = _judge_saying(previous=[PreviousAnswer(id=earlier.id, status=status)])
+    out = _partial_pass(
+        tmp_path,
+        [earlier],
+        FakeGitHub(diff_text=diff),
+        _with_sight(answer, CUT_VISIBLE),
+        policy=policy,
+    )
+    assert out.verdict.findings[0].status == "still_open"
+    assert out.verdict.not_reviewed == (earlier.id,)
+    assert "src/x.py" in out.verdict.unseen_files
+
+
+@pytest.mark.parametrize("line", [1, 100])
+def test_a_fully_seen_location_still_moves_findings_both_ways(tmp_path, line) -> None:
+    earlier = _open_on("src/x.py", line)
+    answer = _judge_saying(previous=[PreviousAnswer(id=earlier.id, status="fixed")])
+    out = _partial_pass(
+        tmp_path,
+        [earlier],
+        FakeGitHub(diff_text=CUT_PATCH),
+        answer,
+        policy=default_policy().model_copy(update={"incremental": False}),
+    )
+    assert out.verdict.findings[0].status == "fixed"
+    assert out.verdict.not_reviewed == ()
+    repeated = earlier.model_copy(update={"status": "fixed"})
+    out = _partial_pass(
+        tmp_path / "regression",
+        [repeated],
+        FakeGitHub(diff_text=CUT_PATCH),
+        _judge_saying(reply_findings=[repeated]),
+        policy=default_policy().model_copy(update={"incremental": False}),
+    )
+    assert out.verdict.findings[0].status == "still_open"
+
+
+def test_a_cut_reply_can_close_a_finding_inside_a_fully_visible_hunk(tmp_path) -> None:
+    earlier = _open_on("src/x.py", 1)
+    answer = _judge_saying(previous=[PreviousAnswer(id=earlier.id, status="fixed")])
+    out = _partial_pass(
+        tmp_path,
+        [earlier],
+        FakeGitHub(diff_text=CUT_PATCH),
+        _with_sight(answer, CUT_VISIBLE),
+        policy=default_policy().model_copy(update={"incremental": False}),
+    )
+    assert out.verdict.findings[0].status == "fixed"
+    assert out.verdict.not_reviewed == ()
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_an_earlier_path_is_resolved_against_exact_header_paths(tmp_path, ambiguous) -> None:
+    earlier = _open_on("b/src/x.py", 1)
+    diff = DIFF + (_patch("b/src/x.py") if ambiguous else "")
+    out = _partial_pass(
+        tmp_path,
+        [earlier],
+        FakeGitHub(diff_text=diff),
+        _judge_saying(previous=[PreviousAnswer(id=earlier.id, status="fixed")]),
+        policy=default_policy().model_copy(update={"incremental": False}),
+    )
+    assert out.verdict.findings[0].status == ("still_open" if ambiguous else "fixed")
+    assert out.verdict.not_reviewed == ((earlier.id,) if ambiguous else ())
+
+
+def test_a_rename_seen_whole_governs_the_stored_old_path(tmp_path) -> None:
+    earlier = _open_on("docs/specs/x.md", 1)
+    out = _partial_pass(
+        tmp_path,
+        [earlier],
+        FakeGitHub(diff_text=RENAME_TO_CODE),
+        _judge_saying(previous=[PreviousAnswer(id=earlier.id, status="fixed")]),
+        policy=default_policy().model_copy(update={"incremental": False}),
+    )
+    assert out.verdict.findings[0].status == "fixed"
+
+
+@pytest.mark.parametrize("word", ["answer", "repeat"])
+@pytest.mark.parametrize("excerpt", [False, True])
+def test_a_finding_outside_the_delta_needs_its_own_excerpt(tmp_path, word, excerpt) -> None:
+    earlier = _open_on("src/y.py", 50)
+    run = _judge_saying(
+        reply_findings=[earlier] if word == "repeat" else [],
+        previous=[PreviousAnswer(id=earlier.id, status="fixed")] if word == "answer" else [],
+    )
+    out = _round_two(
+        tmp_path, [earlier], FakeGitHub(file_error=not excerpt, files={"src/y.py": _lines()}), run
+    )
+    assert out.verdict.not_reviewed == (() if excerpt else (earlier.id,))
+    assert out.verdict.findings[0].status == (
+        "fixed" if excerpt and word == "answer" else "still_open"
+    )
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_a_fixed_id_outside_the_delta_never_borrows_an_open_findings_excerpt(
+    tmp_path, shared
+) -> None:
+    fixed = _open_on("src/y.py", 1500).model_copy(update={"status": "fixed"})
+    findings = [fixed, _open_on("src/y.py", 50, 2)] if shared else [fixed]
+    seen = []
+    out = _round_two(
+        tmp_path,
+        findings,
+        FakeGitHub(files={"src/y.py": _lines(2000)}),
+        _judge_saying(reply_findings=[fixed], seen=seen),
+    )
+    assert out.verdict.findings[0].status == "fixed"
+    assert out.verdict.not_reviewed == (fixed.id,)
+    if shared:
+        assert "lines 20-80" in seen[0]["notes"]
+        assert "1500 |" not in seen[0]["notes"]
+
+
+@pytest.mark.parametrize("artifact", ["code", "spec_plan"])
+@pytest.mark.parametrize("line", [None, 50, 100])
+def test_an_unseen_new_blocker_is_a_note_through_finish(tmp_path, artifact, line) -> None:
+    path = "src/x.py" if artifact == "code" else "docs/specs/x.md"
+    patch = CUT_PATCH.replace("src/x.py", path)
+    visible = CUT_VISIBLE.replace("src/x.py", path)
+    finding = _open_on(path, line).model_copy(update={"id": None})
+    out = _partial_pass(
+        tmp_path,
+        [],
+        FakeGitHub(diff_text=patch),
+        _with_sight(_judge_saying(reply_findings=[finding]), visible),
+        policy=default_policy().model_copy(update={"incremental": False}),
+    )
+    assert out.verdict.artifact == artifact
+    assert (out.verdict.findings[0].severity, out.verdict.findings[0].klass) == (
+        "important",
+        "note",
+    )
+    assert out.verdict.verdict == "approve"
+
+
+@pytest.mark.parametrize("artifact", ["code", "spec_plan"])
+def test_an_unreadable_piece_keeps_its_new_blocker_through_finish(artifact) -> None:
+    from rail.reviewer import rounds
+    from rail.reviewer.service import _finish, _within_part
+
+    kept = _within_part(_blocking_on("codex", "deep", "unreadable file"), SPACED)
+    assert kept.verdict is not None
+    out = _finish(
+        kept.verdict,
+        pr=PR,
+        state=rounds.loop_state([], []),
+        step="round",
+        round_=1,
+        artifact=artifact,
+        delta=None,
+        whole=SPACED,
+        cf_open=[],
+        section={},
+    )
+    assert out.verdict == "request_changes" and out.findings[0].open_blocker
+
+
+@pytest.mark.parametrize("word", ["answer", "repeat"])
+def test_an_unreadable_header_drops_every_word_on_earlier_findings(tmp_path, word) -> None:
+    earlier = _open().model_copy(update={"status": "fixed" if word == "repeat" else "still_open"})
+    out = _partial_pass(
+        tmp_path,
+        [earlier],
+        FakeGitHub(diff_text=DIFF + SPACED),
+        _judge_saying(
+            reply_findings=[earlier] if word == "repeat" else [],
+            previous=[PreviousAnswer(id=earlier.id, status="fixed")] if word == "answer" else [],
+        ),
+        policy=default_policy().model_copy(update={"incremental": False}),
+    )
+    assert out.verdict.findings[0].status == earlier.status
+    assert out.verdict.not_reviewed == (earlier.id,)
+
+
+@pytest.mark.parametrize("failed_deep", [False, True])
+def test_only_the_replies_retained_after_deep_arbitration_count_as_seen(
+    tmp_path, failed_deep
+) -> None:
+    from rail.reviewer.split import sight_of
+
+    earlier = _open()
+    calls = []
+
+    def run(pr, diff, policy, *, provider, tier, **kwargs):
+        calls.append((provider, tier))
+        if tier == "deep" and failed_deep and provider == "codex":
+            return fail(provider, tier)
+        seen = tier == "light" and len(calls) == 1
+        reply = _judge_saying(
+            previous=[PreviousAnswer(id=earlier.id, status="fixed")],
+            decision="request_changes" if seen else "approve",
+        )(pr, diff, policy, provider=provider, tier=tier, **kwargs)
+        return replace(reply, sight=sight_of(diff if seen else "", diff))
+
+    out = _partial_pass(
+        tmp_path,
+        [earlier],
+        FakeGitHub(),
+        run,
+        # a whole-PR pass (no incremental delta), large enough for the deep tier
+        policy=default_policy().model_copy(
+            update={"providers": ("codex", "agy"), "incremental": False}
+        ),
+        pr=replace(PR, additions=1200),
+    )
+    assert any(tier == "deep" for _, tier in calls)
+    assert out.verdict.findings[0].status == ("fixed" if failed_deep else "still_open")
+    assert out.verdict.not_reviewed == (() if failed_deep else (earlier.id,))
+    assert out.verdict.unseen_files == (() if failed_deep else ("src/x.py",))
+
+
+def test_a_fix_ruled_closure_drops_an_answer_on_an_unseen_location(tmp_path) -> None:
+    earlier = _open()
+    answer = _judge_saying(previous=[PreviousAnswer(id=earlier.id, status="fixed")])
+    out = _partial_pass(tmp_path, [earlier], FakeGitHub(), _with_sight(answer, ""), closure=True)
+    assert out.verdict.round == "closure"
+    assert out.verdict.findings[0].status == "still_open"
+    assert out.verdict.not_reviewed == (earlier.id,)
+
+
+def test_a_no_verdict_pass_names_every_unseen_file(tmp_path) -> None:
+    out = _partial_pass(tmp_path, [_open()], FakeGitHub(), _dead)
+    assert out.verdict.round == "no_verdict"
+    assert out.verdict.unseen_files == ("src/x.py",)
+    assert out.verdict.unseen_count == 1
+
+
+@pytest.mark.parametrize("cut_stage", ["prompt", "argv"])
+def test_a_single_piece_real_judge_cut_drops_its_unseen_previous_answer(tmp_path, cut_stage):
+    patch = (
+        "diff --git a/src/x.py b/src/x.py\n--- a/src/x.py\n+++ b/src/x.py\n"
+        "@@ -0,0 +1,2000 @@\n" + "+fixture row\n" * 2000
+    )
+    earlier = _open_on("src/x.py", 1500)
+    policy = default_policy().model_copy(
+        update={
+            "providers": ("codex",),
+            "incremental": False,
+            "max_diff_chars": 2000 if cut_stage == "prompt" else 200000,
+            "prompt_limits": {} if cut_stage == "prompt" else {"codex": 10000},
+        }
+    )
+    calls = []
+
+    def run(pr, diff, policy, *, provider, tier, **kwargs):
+        calls.append(diff)
+        report = ReviewVerdict(
+            verdict="approve",
+            summary="fixed claim",
+            previous=(PreviousAnswer(id=earlier.id, status="fixed"),),
+        ).model_dump_json(by_alias=True)
+        reply = judge(
+            pr,
+            diff,
+            policy,
+            provider=provider,
+            tier=tier,
+            runner=lambda p, spec: (0, report),
+            **kwargs,
+        )
+        assert reply.sight is not None and "src/x.py" in reply.sight.cut
+        return reply
+
+    out = _partial_pass(tmp_path, [earlier], FakeGitHub(diff_text=patch), run, policy=policy)
+    assert calls == [patch]
+    assert out.verdict.findings[0].status == "still_open"
+    assert out.verdict.not_reviewed == (earlier.id,)
+
+
+@pytest.mark.parametrize("artifact", ["code", "spec_plan"])
+def test_a_new_blocker_outside_its_piece_cannot_block_either_artifact(artifact) -> None:
+    from rail.reviewer import rounds
+    from rail.reviewer.service import _finish, _within_part
+
+    own = "src/own.py" if artifact == "code" else "docs/specs/own.md"
+    other = "src/other.py" if artifact == "code" else "docs/specs/other.md"
+    reply = _blocking_on("codex", "deep", other)
+    reply = replace(
+        reply,
+        verdict=reply.verdict.model_copy(
+            update={
+                "findings": [
+                    f.model_copy(update={"klass": "blocker"}) for f in reply.verdict.findings
+                ]
+            }
+        ),
+    )
+    kept = _within_part(reply, _patch(own))
+    out = _finish(
+        kept.verdict,
+        pr=PR,
+        state=rounds.loop_state([], []),
+        step="round",
+        round_=1,
+        artifact=artifact,
+        delta=None,
+        whole=_patch(own) + _patch(other),
+        cf_open=[],
+        section={},
+    )
+    assert out.verdict == "approve"
+    assert (out.findings[0].severity, out.findings[0].klass) == ("important", "note")
+
+
+@pytest.mark.parametrize("count", [0, 3, 12, 50])
+def test_the_check_names_unseen_files_and_caps_its_list_at_ten(count) -> None:
+    paths = tuple(f"src/file{i}.py" for i in range(count))
+    verdict = ReviewVerdict(
+        verdict="approve",
+        summary="s",
+        diff_truncated=True,
+        unseen_files=paths,
+        unseen_count=500 if count == 50 else count,
+    )
+    text = _render(verdict)
+    assert "first part only" not in text
+    if count:
+        expected = "Not read whole: " + ", ".join(paths[:10])
+        remaining = verdict.unseen_count - min(count, 10)
+        if remaining:
+            expected += f" and {remaining} more"
+        assert expected in text
+        assert "src/file10.py" not in text
+    else:
+        assert "Not read whole:" not in text
+
+
+@pytest.mark.parametrize("status", ["fixed", "still_open"])
+def test_a_not_reviewed_line_names_the_kept_status(status) -> None:
+    finding = _open(status=status)
+    verdict = ReviewVerdict(
+        verdict="approve", summary="s", findings=[finding], not_reviewed=(finding.id,)
+    )
+    assert f"{finding.id}: not re-verified (file not seen), keeps {status}" in _render(verdict)
+
+
+@pytest.fixture
+def regression_376(tmp_path):
+    """Rebuild the three-piece shape of brain-v42#376 without copying its real diff
+    (spec 2026-10-13-reviewer-partial-view, criterion 1)."""
+    from rail.reviewer.judges import diff_budget
+    from rail.reviewer.split import split_diff
+
+    migration = "alembic/versions/065_programmes.py"
+    tables = "src/brain_v42/db/tables.py"
+
+    def patch(path, count):
+        return (
+            f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+            f"@@ -0,0 +1,{count} @@\n" + "+fixture row\n" * count
+        )
+
+    pieces = [patch(migration, 110), patch("src/unrelated.py", 110), patch(tables, 2000)]
+    whole = "".join(pieces)
+    policy = default_policy().model_copy(
+        update={"providers": ("codex",), "incremental": False, "max_diff_chars": 2000}
+    )
+    pr = replace(PR, number=376, additions=2200, changed_files=3)
+    findings = [
+        _open_on(migration, 109).model_copy(update={"id": "F-376-1", "status": "fixed"}),
+        _open_on(tables, None).model_copy(update={"id": "F-376-2", "status": "fixed"}),
+    ]
+    budget = diff_budget(pr, policy, ("codex",), criteria=None)
+    assert split_diff(whole, budget=budget) == pieces
+
+    def run(reopen_migration=False):
+        seen = []
+
+        def run_judge(pr, diff, policy, *, provider, tier, **kwargs):
+            seen.append(diff)
+            if diff == pieces[2]:
+                report = ReviewVerdict(
+                    verdict="request_changes",
+                    summary="repeated tables claim",
+                    findings=[findings[1]],
+                ).model_dump_json(by_alias=True)
+                reply = judge(
+                    pr,
+                    diff,
+                    policy,
+                    provider=provider,
+                    tier=tier,
+                    runner=lambda p, spec: (0, report),
+                    **kwargs,
+                )
+                assert reply.sight is not None
+                assert tables in reply.sight.cut and tables not in reply.sight.complete
+                return reply
+            repeated = findings[:1] if diff == pieces[1] or reopen_migration else []
+            return _judge_saying(reply_findings=repeated, decision="approve")(
+                pr, diff, policy, provider=provider, tier=tier, **kwargs
+            )
+
+        out = _partial_pass(
+            tmp_path, findings, FakeGitHub(diff_text=whole), run_judge, policy=policy, pr=pr
+        )
+        assert seen == pieces
+        return out.verdict
+
+    return run
+
+
+def test_376_a_piece_without_the_migration_cannot_reopen_its_fixed_id(regression_376) -> None:
+    verdict = regression_376()
+    assert verdict.findings[0].status == "fixed"
+    assert "F-376-1" in verdict.not_reviewed
+
+
+def test_376_a_cut_tables_piece_cannot_reopen_a_fixed_id_without_a_line(regression_376) -> None:
+    verdict = regression_376()
+    assert verdict.findings[1].status == "fixed"
+    assert "F-376-2" in verdict.not_reviewed
+
+
+def test_376_a_piece_that_saw_the_migration_whole_can_reopen_a_real_regression(
+    regression_376,
+) -> None:
+    verdict = regression_376(reopen_migration=True)
+    assert verdict.findings[0].status == "still_open"
+    assert "F-376-1" not in verdict.not_reviewed
