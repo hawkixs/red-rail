@@ -20,6 +20,7 @@ JSON = "application/vnd.github+json"
 DIFF = "application/vnd.github.diff"
 RAW = "application/vnd.github.raw+json"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_COMMIT_PAGES = 3  # GitHub lists at most 250 commits on a pull request, 100 per page
 MAX_FILE_PAGES = 30  # GitHub lists at most 3000 files on a pull request, 100 per page
 TIMEOUT_SECONDS = 10.0
 RENEW_MARGIN = timedelta(seconds=60)
@@ -246,11 +247,21 @@ class GitHubApp:
         )
 
     def commit_shas(self, repository: str, number: int) -> list[str]:
-        """The pull request's own commits: what it already publishes."""
-        data = self._request(
-            "GET", f"/repos/{repository}/pulls/{number}/commits", params={"per_page": "100"}
-        )
-        return [str(item["sha"]) for item in data]
+        """The pull request's own commits, every page of them: what it already publishes.
+        GitHub lists at most 250 commits on a pull request."""
+        shas: list[str] = []
+        for page in range(1, MAX_COMMIT_PAGES + 1):
+            listed = self._request(
+                "GET",
+                f"/repos/{repository}/pulls/{number}/commits",
+                params={"per_page": "100", "page": str(page)},
+            )
+            if not isinstance(listed, list) or not listed:
+                break
+            shas.extend(str(item["sha"]) for item in listed)
+            if len(listed) < 100:
+                break
+        return shas
 
     def commit_messages(self, repository: str, number: int) -> list[str]:
         data = self._request(
