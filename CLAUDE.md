@@ -108,7 +108,8 @@ comments, test names. The conversation with the operator stays in French.
   `X-Brain-Agent` label sent per call = the record's issuer) and `settings.py` (loopback by
   default, or the host's `brain` site from `sites.yaml`, with its address never shown;
   the bearer is read from a private file only — `RAIL_BRAIN_TOKEN_FILE`, default
-  `~/.config/red-rail/brain-token` — never from an environment variable holding the value).
+  `~/.config/red-rail/brain-token` (`rail reviewer` defaults to
+  `~/.config/red-rail/brain-token-reviewer`) — never from an environment variable holding the value).
   A private `brain` site declares its tunnel's `interface`: the bearer travels as plain HTTP and
   its confidentiality is the tunnel's, so the rail checks the kernel's route before every call
   and binds the client's sockets to that interface (`SO_BINDTODEVICE`), ignores proxies and

@@ -36,8 +36,9 @@ uv run rail upgrade --repo ../red-probe   # re-apply the template's latest tag
 
 `rail.yaml` names the delivery ticket (`ticket: <uuid>`, the canonical ticket is
 `red → <project>`). The bearer token is read from a private file only — `~/.config/red-rail/brain-token`
-(0600, one line), path overridable with `RAIL_BRAIN_TOKEN_FILE` — never from an environment
-variable holding the value. Every attestation is written as a receipt in `docs/receipts/` first
+(0600, one line), path overridable with `RAIL_BRAIN_TOKEN_FILE`; `rail reviewer` defaults to
+`~/.config/red-rail/brain-token-reviewer` — never from an environment variable holding the value.
+Every attestation is written as a receipt in `docs/receipts/` first
 (the mirror), then sent to brain; a refusal leaves the mirror and exits 2 with the exact replay
 command. `integrated` and `fulfilled` are brain milestones read from the ticket, never attested
 from the rail. brain-v42's published contracts are vendored under `src/rail/contracts/` at the tag

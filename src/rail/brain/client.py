@@ -13,9 +13,15 @@ import concurrent.futures
 import threading
 import weakref
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from rail.brain.settings import BrainSettings, is_reachable
+from rail.brain.settings import (
+    DEFAULT_REVIEWER_TOKEN_FILE,
+    DEFAULT_TOKEN_FILE,
+    BrainSettings,
+    is_reachable,
+)
 
 if TYPE_CHECKING:
     from fastmcp import Client, FastMCP
@@ -27,6 +33,10 @@ CALL_TIMEOUT_SECONDS = 10.0
 
 class BrainUnreachable(Exception):
     """No answer from brain: transport, timeout, unknown tool, unreadable result."""
+
+
+class BrainForbidden(BrainUnreachable):
+    """brain rejected the credential rather than failing to answer."""
 
 
 class BrainToolError(Exception):
@@ -44,6 +54,28 @@ def parse_tool_error(text: str) -> tuple[str, str]:
     if not sep or not code or " " in code:
         return "delivery_unavailable", text.strip()
     return code, message.strip()
+
+
+def _contains_http_403(error: BaseException) -> bool:
+    """Find a typed 403 anywhere in a bounded exception graph from transport wrappers."""
+    import httpx
+
+    pending = [error]
+    seen: set[int] = set()
+    while pending and len(seen) < 256:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, httpx.HTTPStatusError) and current.response.status_code == 403:
+            return True
+        if isinstance(current, ExceptionGroup):
+            pending.extend(current.exceptions)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return False
 
 
 def _http_client_factory(interface: str | None) -> Callable[..., Any]:
@@ -271,10 +303,12 @@ class BrainClient:
         timeout: float = CALL_TIMEOUT_SECONDS,
         redact: Callable[[str], str] | None = None,
         guard: Callable[[], None] | None = None,
+        token_file: Path | None = None,
         _pool: _SessionPool | None = None,
     ) -> None:
         self.transport_factory = transport_factory
         self.guard = guard
+        self.token_file = token_file
         self.agent = agent
         self.timeout = timeout
         self.redact = redact if redact is not None else lambda text: text
@@ -297,6 +331,7 @@ class BrainClient:
         redact: Callable[[str], str] | None = None,
         guard: Callable[[], None] | None = None,
         interface: str | None = None,
+        token_file: Path | None = None,
     ) -> BrainClient:
         from fastmcp.client import transports
 
@@ -316,7 +351,7 @@ class BrainClient:
             pool = _http_pools.get(identity)
             if pool is None:
                 pool = _http_pools[identity] = _SessionPool()
-        return cls(factory, agent, redact=redact, guard=guard, _pool=pool)
+        return cls(factory, agent, redact=redact, guard=guard, token_file=token_file, _pool=pool)
 
     @classmethod
     def from_settings(cls, settings: BrainSettings, *, agent: str) -> BrainClient:
@@ -327,6 +362,7 @@ class BrainClient:
             redact=settings.redact,
             guard=settings.guard,
             interface=settings.interface,
+            token_file=settings.token_file,
         )
 
     @classmethod
@@ -368,6 +404,16 @@ class BrainClient:
             raise
         except Exception as exc:
             # The transport's traceback may quote the private address too.
+            if _contains_http_403(exc):
+                path = f" read from {self.token_file}" if self.token_file is not None else ""
+                raise BrainForbidden(
+                    self.redact(
+                        f"brain refused the credential{path} for {name} (403 Forbidden); "
+                        f"the reviewer reads {DEFAULT_REVIEWER_TOKEN_FILE}, other "
+                        f"commands {DEFAULT_TOKEN_FILE}; RAIL_BRAIN_TOKEN_FILE "
+                        "overrides either"
+                    )
+                ) from None
             raise BrainUnreachable(self.redact(f"{name}: {exc}")) from None
 
     def close(self) -> None:

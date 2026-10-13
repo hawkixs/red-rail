@@ -39,6 +39,8 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from rail.brain.settings import DEFAULT_TOKEN_FILE
+
 RECEIPTS_DIR = "docs/receipts"
 SCHEMA_VERSION = 1
 
@@ -350,10 +352,17 @@ def bindings_of(ledger: Ledger, project: str, repository: str, number: int) -> l
     ]
 
 
-def open_ledger(repo: Path, *, client: Any = None, agent: str = "red-rail") -> Ledger:
+def open_ledger(
+    repo: Path,
+    *,
+    client: Any = None,
+    agent: str = "red-rail",
+    token_file: str = DEFAULT_TOKEN_FILE,
+) -> Ledger:
     """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a missing or bad
     manifest — this is a write path, and it stays fail-closed without one. `ledger: brain`
-    needs the `brain` extra, the operator's token and the ticket. Gates that must still work
+    needs the `brain` extra, a private token (`token_file`, unless RAIL_BRAIN_TOKEN_FILE names
+    another) and the ticket. Gates that must still work
     without a manifest observe the default file ledger themselves
     (`FileLedger(repo / RECEIPTS_DIR)`), never through here. `agent` labels every call of the
     brain client built here, reads included: a caller holding another credential (the
@@ -379,7 +388,7 @@ def open_ledger(repo: Path, *, client: Any = None, agent: str = "red-rail") -> L
         from rail.private import PrivateFileError
 
         try:
-            settings = BrainSettings.from_environment()
+            settings = BrainSettings.from_environment(default_token_file=token_file)
         except PrivateFileError as exc:
             raise LedgerError(str(exc)) from exc  # the refusal names its cause
         client = BrainClient.from_settings(settings, agent=agent)

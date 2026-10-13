@@ -10,6 +10,7 @@ from pathlib import Path
 
 import click
 
+from rail.brain.settings import DEFAULT_REVIEWER_TOKEN_FILE
 from rail.commands._actor import resolve_or_exit
 from rail.ledger import open_ledger
 from rail.private import PrivateFileError
@@ -92,7 +93,9 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
                     "it is merged."
                 )
             cfg = load_rail_config(repository.path)
-            ledger = open_ledger(repository.path, agent=REVIEWER_IDENTITY)
+            ledger = open_ledger(
+                repository.path, agent=REVIEWER_IDENTITY, token_file=DEFAULT_REVIEWER_TOKEN_FILE
+            )
             # the generated files this repository declares no judge reads, ADDED to the host's
             # list (ticket f0aa9c29), as merged on origin/main, never as the working tree says
             policy = config.policy
@@ -299,6 +302,8 @@ def rule(
             raise click.UsageError(why)
         proof["sha"] = sha  # the full sha the pull request knows
     project = load_rail_config(repo_path).project
+    # the rail's own token, not the reviewer's: the ruling is issued as the actor (operator or
+    # agent:…), a label brain admits on the red-rail credential only (decision 4f5faa51)
     ledger = open_ledger(repo_path)
     target = _PR(repository=repository, number=pr)
     state = rounds.loop_state(

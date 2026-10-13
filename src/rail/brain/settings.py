@@ -20,6 +20,7 @@ BRAIN_SITE = "brain"
 BRAIN_PORT = 8765
 DEFAULT_URL = f"http://127.0.0.1:{BRAIN_PORT}/mcp"
 DEFAULT_TOKEN_FILE = "~/.config/red-rail/brain-token"  # the rail's own private file
+DEFAULT_REVIEWER_TOKEN_FILE = "~/.config/red-rail/brain-token-reviewer"
 
 
 # Where brain may live: loopback, or the private ranges of RFC 1918 and RFC 4193 — an explicit
@@ -128,6 +129,7 @@ class BrainSettings:
         environ: Mapping[str, str] | None = None,
         *,
         route_of: Callable[[Address], str | None] | None = None,
+        default_token_file: str = DEFAULT_TOKEN_FILE,
     ) -> BrainSettings:
         env = os.environ if environ is None else environ
         url = env.get("RAIL_BRAIN_URL")
@@ -172,12 +174,17 @@ class BrainSettings:
                 raise PrivateFileError(str(exc)) from None
             except (OSError, RuntimeError) as exc:
                 raise PrivateFileError(f"site {BRAIN_SITE}: {exc}") from None
-        path = Path(env.get("RAIL_BRAIN_TOKEN_FILE", DEFAULT_TOKEN_FILE)).expanduser()
+        path = Path(env.get("RAIL_BRAIN_TOKEN_FILE", default_token_file)).expanduser()
         try:
             token = private_token(path)
         except PrivateFileError as exc:
             # each refusal names its own cause: the token here, the site or the URL above
-            raise PrivateFileError(f"brain token: {exc}") from exc
+            hint = (
+                ""
+                if "RAIL_BRAIN_TOKEN_FILE" in env
+                else "; set RAIL_BRAIN_TOKEN_FILE to override this path"
+            )
+            raise PrivateFileError(f"brain token: {exc}{hint}") from exc
         settings = cls(
             url=url,
             token=token,
