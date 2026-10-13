@@ -236,6 +236,8 @@ class BrainLedger:
                 if row is not None:
                     return self._settle(record, receipt, row)
             raise Unattested(receipt, exc.code) from exc
+        except BrainForbidden as exc:  # brain answered: the credential is the cause
+            raise Unattested(receipt, "forbidden") from exc
         except BrainUnreachable as exc:
             raise Unattested(receipt, "unreachable") from exc
         if str(row.get("digest")) != brain_digest(data):
@@ -347,6 +349,8 @@ class BrainLedger:
             return self._row_by_key(kind, key)
         except BrainToolError as exc:
             raise Unattested(receipt, exc.code) from exc
+        except BrainForbidden as exc:  # brain answered: the credential is the cause
+            raise Unattested(receipt, "forbidden") from exc
         except BrainUnreachable as exc:
             raise Unattested(receipt, "unreachable") from exc
 

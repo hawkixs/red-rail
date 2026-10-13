@@ -39,7 +39,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from rail.brain.settings import DEFAULT_TOKEN_FILE
+from rail.brain.settings import DEFAULT_REVIEWER_TOKEN_FILE, DEFAULT_TOKEN_FILE
 
 RECEIPTS_DIR = "docs/receipts"
 SCHEMA_VERSION = 1
@@ -350,6 +350,18 @@ def bindings_of(ledger: Ledger, project: str, repository: str, number: int) -> l
         for r in ledger.list(project, kind=RecordKind.BINDING)
         if r.payload.get("repository") == repository and int(r.payload.get("number") or 0) == number
     ]
+
+
+def issuer_identity(issuer: str) -> dict[str, str]:
+    """The `open_ledger` identity a receipt is replayed under (ticket 3b27419f). brain admits a
+    label only under its own credential, and a replay looks its key up and attests under one
+    label: a receipt the independent reviewer issued goes through as the reviewer, with the
+    reviewer's token; every other issuer through the rail's own identity."""
+    from rail.policy import GATE_DEFAULTS
+
+    if issuer == GATE_DEFAULTS["review.reviewer_identity"]:
+        return {"agent": issuer, "token_file": DEFAULT_REVIEWER_TOKEN_FILE}
+    return {}
 
 
 def open_ledger(

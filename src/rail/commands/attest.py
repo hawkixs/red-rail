@@ -22,6 +22,7 @@ from rail.ledger import (
     RecordKind,
     Unattested,
     idempotency_key_for,
+    issuer_identity,
     open_ledger,
 )
 from rail.ledger.file import load_receipt, receipt_filename
@@ -106,13 +107,12 @@ def command(
             "awaits a ruling; `rail attest review_ruling --from <receipt>` only replays one"
         )
     try:
-        ledger = open_ledger(repo)
         project = load_rail_config(repo).project
         if replay is not None:
             source = load_receipt(replay)
             if source.kind is not RecordKind.ATTESTATION or source.attestation is not attestation:
                 raise click.UsageError(f"{replay.name} is not a {kind} attestation")
-            record = ledger.attest(
+            record = open_ledger(repo, **issuer_identity(source.issuer)).attest(
                 project,
                 attestation,
                 source.data,
@@ -124,7 +124,7 @@ def command(
             data = parse_data(pairs, data_json)
             emitted_at = datetime.now(UTC)
             key = idempotency_key or idempotency_key_for(attestation, data, emitted_at=emitted_at)
-            record = ledger.attest(
+            record = open_ledger(repo).attest(
                 project,
                 attestation,
                 data,
