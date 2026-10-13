@@ -118,7 +118,7 @@ comments, test names. The conversation with the operator stays in French.
   `pins.py` (`delivery-attestations-v1.0`: 43 finding codes, the attestation API v1.0), frozen
   by `tests/test_boundary.py` (digests in CI, parity with the sibling checkout on the host).
 - `src/rail/reviewer/` — the independent reviewer (ADR-0003): `policy.py` (data: provider chain
-  `agy, glm, codex, claude`, with glm pinned to GLM 5.3 Flash via opencode (`GLM_FLASH`),
+  `glm, codex, claude, agy (agy secondary)`, with glm pinned to GLM 5.3 Flash via opencode (`GLM_FLASH`),
   models per tier, light/deep thresholds, producers read from the `Co-Authored-By` and `Implemented-by` trailers, every one excluded from the judges),
   `verdict.py` (enum-valued `ReviewVerdict`), `judges.py` (one headless run per judge, isolated
   seat, `guard.sh` for agy), `github.py` (minimal App client), `carry.py` (the `## Carry-forwards`
