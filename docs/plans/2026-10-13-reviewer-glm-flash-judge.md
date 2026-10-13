@@ -69,6 +69,14 @@ Tests (`tests/test_reviewer_judges.py` or the module that tests `build_spec` / `
 - A contract test imports `headless_agents.providers.opencode.OpenCodeProvider` from the pinned
   dependency, so a renamed class fails CI instead of every glm run.
 
+Tests, `tests/test_reviewer_service.py`, arbitration history: the four arbitration tests that
+start around lines 244, 272, 297 and 323 (ticket `4cdeaed9` and its follow-ups) build their
+policy with the OLD chain fixed explicitly, `ReviewPolicy(providers=("agy", "codex", "claude"))`,
+so they keep proving what they were written for; each gains a GLM variant on the default chain
+(the disputants are then agy and glm, and the dissent of a judge whose deep run fails still holds).
+A test drives a glm runner that returns the fallback exit code with an empty report and asserts
+the failure is `provider_fallback` and the pass fails closed when glm was the last judge left.
+
 Tests, `tests/test_reviewer_service.py`: the two scenarios that pin the old chain (the light
 disagreement arbitrated at deep, around line 238, and the timeout fallback, around line 372)
 keep their meaning under the new default chain: with an unknown producer the chain is

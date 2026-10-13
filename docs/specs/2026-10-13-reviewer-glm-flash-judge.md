@@ -65,10 +65,13 @@ the cost of the full GLM model is the operator's stated reason to never use it.
    the judges that answered. Without it nobody outside the host can tell which GLM model judged
    a pull request, and the operator's cost rule could not be audited from GitHub.
 
-8. **Its reply is read like the others'.** The adapter writes the model's final text to the
-   report log; the reviewer parses it with the existing `parse_verdict` (first JSON object), and
-   a missing or unparsable reply is `unparsable`, a provider failure is `provider_fallback`, as
-   for agy and codex.
+8. **Its reply is read like the others', with the adapter's own failure codes.** The adapter
+   writes the model's final text to the report log; the reviewer parses it with the existing
+   `parse_verdict` (first JSON object), and a reply with no JSON verdict is `unparsable`. An
+   opencode run that ends WITHOUT a final report is refused by the adapter itself, which returns
+   the fallback exit code (`headless_agents/providers/opencode.py`, "opencode exited 0 without a
+   final report"): the reviewer records it as `provider_fallback`, like an agy fallback. Both
+   outcomes fail closed; the reviewer adds no translation of the adapter's codes.
 
 ## Non-goals
 
