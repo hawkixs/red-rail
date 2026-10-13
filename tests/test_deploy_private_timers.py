@@ -351,6 +351,8 @@ class RecordingHost:
         self.argv.append(list(args))
         if args[0] == "ssh":
             script = kwargs["input"]
+            if isinstance(script, bytes):  # `apply` sends bytes, the identity read text
+                script = script.decode()
             self.scripts.append(script)
             if IDENTITY_FILE in script:
                 if self.error is not None:

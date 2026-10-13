@@ -100,6 +100,15 @@ def migration_refusal(text: str) -> MigrationRefusal | None:
     )
 
 
+def _decoded(output: bytes | str | None) -> str:
+    """Captured output as text, with its line endings exactly as the remote wrote them."""
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
+
+
 def _tail(text: str) -> str:
     """The last `TAIL_LIMIT` characters of the remote's stderr/stdout. When the cut actually
     removes a prefix, the partial first token — text up to and including the first
@@ -264,11 +273,12 @@ class RemoteTarget:
     def apply(self, artefact: Artefact) -> LiveVersion:
         step = self.steps(artefact)[0]
         try:
+            # bytes, decoded below: text mode would turn a `\r` into a line break before the
+            # refusal grammar sees the line (review of #102)
             done = self._run(
                 list(step.argv),
-                input=step.stdin,
+                input=(step.stdin or "").encode("utf-8"),
                 capture_output=True,
-                text=True,
                 check=False,
                 timeout=self.params.remote_timeout,
             )
@@ -280,10 +290,11 @@ class RemoteTarget:
             ) from exc
         except (FileNotFoundError, OSError) as exc:
             raise DeployError(f"ssh is not available on this host: {exc}") from exc
+        stdout, stderr = _decoded(done.stdout), _decoded(done.stderr)
         if done.returncode == LOCKED:
-            raise Locked((done.stderr or done.stdout).strip())
+            raise Locked((stderr or stdout).strip())
         if done.returncode != 0:
-            refusal = migration_refusal(f"{done.stderr or ''}\n{done.stdout or ''}")
+            refusal = migration_refusal(f"{stderr}\n{stdout}")
             # the CLI prints this message as it is: behind a site, never the site's address
             if refusal is not None:
                 raise DeployError(
@@ -292,7 +303,7 @@ class RemoteTarget:
                         f"migration preflight (exit {done.returncode}): {refusal.describe()}"
                     )
                 )
-            detail = _tail(done.stderr or done.stdout)
+            detail = _tail(stderr or stdout)
             raise DeployError(
                 self.redact(
                     f"remote deployment of {artefact.version} failed "

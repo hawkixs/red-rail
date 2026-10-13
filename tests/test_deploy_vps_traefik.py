@@ -55,7 +55,7 @@ class FakeHost:
     def __call__(self, args, **kwargs):
         self.argv.append(list(args))
         if args[0] == "ssh":
-            self.scripts.append(kwargs.get("input") or "")
+            self.scripts.append((kwargs.get("input") or b"").decode())
             default = "locked" if self.exit_code == LOCKED else ""
             return subprocess.CompletedProcess(
                 args,
@@ -339,3 +339,25 @@ def test_an_out_of_contract_refusal_line_keeps_the_ordinary_tail(tmp_path: Path)
     with pytest.raises(DeployError) as caught:
         target.apply(artefact)
     assert "failed (exit 1): migration_refused reason=x" in str(caught.value)
+
+
+def test_a_carriage_return_inside_a_refusal_line_is_not_a_refusal(tmp_path: Path) -> None:
+    """Review of #102: a real subprocess captured as text turns `\\r` into a line break, so
+    `reason=x\\r extra=1` read as a valid refusal of `x`. The output is decoded without
+    newline translation and the line stays out of the grammar."""
+    repo = _repo(tmp_path)
+    cfg = load_rail_config(repo)
+    artefact = _artefact(repo)
+
+    def real_shell(args, **kwargs):
+        if args[0] == "ssh":
+            script = "printf 'migration_refused reason=x\\r extra=1\\n' >&2; exit 1"
+            return subprocess.run(["sh", "-c", script], **kwargs)
+        return subprocess.run(args, **kwargs)
+
+    target = VpsTraefik(repo, cfg, run=real_shell, http=FakeWeb(_live(artefact)))
+    with pytest.raises(DeployError) as caught:
+        target.apply(artefact)
+    message = str(caught.value)
+    assert "refused by the project's migration preflight" not in message
+    assert "failed (exit 1)" in message
