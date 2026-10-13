@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from rail.deploy import Artefact, DeployError, Locked, domain_of
+from rail.deploy.remote import migration_refusal
 from rail.deploy.vps_traefik import LOCKED, Parameters, VpsTraefik, env_file, remote_script
 from rail.http import HttpError
 from rail.model import load_rail_config
@@ -54,7 +55,7 @@ class FakeHost:
     def __call__(self, args, **kwargs):
         self.argv.append(list(args))
         if args[0] == "ssh":
-            self.scripts.append(kwargs.get("input") or "")
+            self.scripts.append((kwargs.get("input") or b"").decode())
             default = "locked" if self.exit_code == LOCKED else ""
             return subprocess.CompletedProcess(
                 args,
@@ -263,3 +264,100 @@ def test_a_remote_session_that_hangs_is_killed_and_reported(tmp_path: Path) -> N
     target = VpsTraefik(repo, load_rail_config(repo), run=hanging, http=FakeWeb(_live(artefact)))
     with pytest.raises(DeployError, match="timed out after 900s"):
         target.apply(artefact)
+
+
+REFUSAL = (
+    "migration_refused reason=merge_chains_present tables=learnings,decisions "
+    'remedy="run scripts/repair_merge_chains.py"'
+)
+
+
+def test_a_migration_refusal_reads_as_the_project_preflight_not_a_generic_failure(
+    tmp_path: Path,
+) -> None:
+    """Ticket c14acfea: a project's migration preflight prints one contract line; the rail
+    renders its fields verbatim instead of the tail, and the deploy stays failed."""
+    repo = _repo(tmp_path)
+    cfg = load_rail_config(repo)
+    artefact = _artefact(repo)
+    stderr = f"pulling image\n{REFUSAL}\ncontainer migrate exited (1)\n"
+    target = VpsTraefik(
+        repo, cfg, run=FakeHost(exit_code=1, stderr=stderr), http=FakeWeb(_live(artefact))
+    )
+    with pytest.raises(DeployError) as caught:
+        target.apply(artefact)
+    message = str(caught.value)
+    assert "refused by the project's migration preflight (exit 1)" in message
+    assert "reason=merge_chains_present" in message
+    assert "tables: learnings, decisions" in message
+    assert "remedy: run scripts/repair_merge_chains.py" in message
+    assert "pulling image" not in message
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (
+            REFUSAL,
+            (
+                "merge_chains_present",
+                ("learnings", "decisions"),
+                "run scripts/repair_merge_chains.py",
+            ),
+        ),
+        (
+            "migration_refused reason=database_not_initialized",
+            ("database_not_initialized", (), None),
+        ),
+        ("  migration_refused reason=image_head_missing  ", None),
+        ("migration_refused reason=x\v extra=1", None),
+        ("migration_refused reason=x\f", None),
+        ("migration_refused reason=Bad-Code", None),
+        ('migration_refused reason=x remedy="say "hi""', None),
+        ("migration_refused reason=x tables=a, b", None),
+        ("migration_refused reason=x extra=1", None),
+        ("note: migration_refused reason=x", None),
+        ("", None),
+    ],
+)
+def test_migration_refusal_parses_exactly_the_contract_grammar(line, expected) -> None:
+    found = migration_refusal(f"noise\n{line}\nmore noise")
+    if expected is None:
+        assert found is None
+    else:
+        assert (found.reason, found.tables, found.remedy) == expected
+
+
+def test_an_out_of_contract_refusal_line_keeps_the_ordinary_tail(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    cfg = load_rail_config(repo)
+    artefact = _artefact(repo)
+    stderr = 'migration_refused reason=x remedy="unterminated\n'
+    target = VpsTraefik(
+        repo, cfg, run=FakeHost(exit_code=1, stderr=stderr), http=FakeWeb(_live(artefact))
+    )
+    with pytest.raises(DeployError) as caught:
+        target.apply(artefact)
+    assert "failed (exit 1): migration_refused reason=x" in str(caught.value)
+
+
+def test_a_carriage_return_inside_a_refusal_line_is_not_a_refusal(tmp_path: Path) -> None:
+    """Review of #102: a real subprocess captured as text turns `\\r` into a line break, so
+    `reason=x\\r extra=1` read as a valid refusal of `x`. The output is decoded without
+    newline translation and the line stays out of the grammar."""
+    repo = _repo(tmp_path)
+    cfg = load_rail_config(repo)
+    artefact = _artefact(repo)
+
+    def real_shell(args, **kwargs):
+        if args[0] == "ssh":
+            script = "printf 'migration_refused reason=x\\r extra=1\\n' >&2; exit 1"
+            return subprocess.run(["sh", "-c", script], **kwargs)
+        return subprocess.run(args, **kwargs)
+
+    target = VpsTraefik(repo, cfg, run=real_shell, http=FakeWeb(_live(artefact)))
+    with pytest.raises(DeployError) as caught:
+        target.apply(artefact)
+    message = str(caught.value)
+    assert "refused by the project's migration preflight" not in message
+    assert "failed (exit 1)" in message

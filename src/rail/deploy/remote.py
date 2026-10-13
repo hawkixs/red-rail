@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from collections.abc import Callable
@@ -54,6 +55,58 @@ class Parameters:
 
 def env_lines(pairs: tuple[tuple[str, str], ...]) -> str:
     return "".join(f"{key}={value}\n" for key, value in pairs)
+
+
+# A project's migration preflight refusal (ticket c14acfea, contract agreed with brain-v42):
+# one whole line, `migration_refused reason=<code> [tables=<a,b>] [remedy="<text>"]`. The rail
+# learns no project's internals: it renders the project's own fields, never its own remedy.
+# Anything off this grammar is not a refusal and stays in the ordinary tail (fail closed).
+_REFUSAL = re.compile(
+    r"migration_refused reason=(?P<reason>[a-z0-9_]+)"
+    r"(?: tables=(?P<tables>[a-z0-9_]+(?:,[a-z0-9_]+)*))?"
+    r'(?: remedy="(?P<remedy>[^"\n]*)")?'
+)
+
+
+@dataclass(frozen=True)
+class MigrationRefusal:
+    reason: str
+    tables: tuple[str, ...]
+    remedy: str | None
+
+    def describe(self) -> str:
+        parts = [f"reason={self.reason}"]
+        if self.tables:
+            parts.append("tables: " + ", ".join(self.tables))
+        if self.remedy:
+            parts.append(f"remedy: {self.remedy}")
+        return "; ".join(parts)
+
+
+def migration_refusal(text: str) -> MigrationRefusal | None:
+    """The last line of the remote output that is exactly a refusal line, or None. Lines are
+    split on `\n` only and never stripped: padding, a vertical tab or a form feed makes the
+    line something else, which stays in the ordinary tail (review of #102)."""
+    found = None
+    for line in text.split("\n"):
+        match = _REFUSAL.fullmatch(line)
+        if match is not None:
+            found = match
+    if found is None:
+        return None
+    tables = found["tables"]
+    return MigrationRefusal(
+        found["reason"], tuple(tables.split(",")) if tables else (), found["remedy"]
+    )
+
+
+def _decoded(output: bytes | str | None) -> str:
+    """Captured output as text, with its line endings exactly as the remote wrote them."""
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
 
 
 def _tail(text: str) -> str:
@@ -220,11 +273,12 @@ class RemoteTarget:
     def apply(self, artefact: Artefact) -> LiveVersion:
         step = self.steps(artefact)[0]
         try:
+            # bytes, decoded below: text mode would turn a `\r` into a line break before the
+            # refusal grammar sees the line (review of #102)
             done = self._run(
                 list(step.argv),
-                input=step.stdin,
+                input=(step.stdin or "").encode("utf-8"),
                 capture_output=True,
-                text=True,
                 check=False,
                 timeout=self.params.remote_timeout,
             )
@@ -236,12 +290,25 @@ class RemoteTarget:
             ) from exc
         except (FileNotFoundError, OSError) as exc:
             raise DeployError(f"ssh is not available on this host: {exc}") from exc
+        stdout, stderr = _decoded(done.stdout), _decoded(done.stderr)
         if done.returncode == LOCKED:
-            raise Locked((done.stderr or done.stdout).strip())
+            raise Locked((stderr or stdout).strip())
         if done.returncode != 0:
-            detail = _tail(done.stderr or done.stdout)
+            refusal = migration_refusal(f"{stderr}\n{stdout}")
+            # the CLI prints this message as it is: behind a site, never the site's address
+            if refusal is not None:
+                raise DeployError(
+                    self.redact(
+                        f"remote deployment of {artefact.version} refused by the project's "
+                        f"migration preflight (exit {done.returncode}): {refusal.describe()}"
+                    )
+                )
+            detail = _tail(stderr or stdout)
             raise DeployError(
-                f"remote deployment of {artefact.version} failed (exit {done.returncode}): {detail}"
+                self.redact(
+                    f"remote deployment of {artefact.version} failed "
+                    f"(exit {done.returncode}): {detail}"
+                )
             )
         return self.verify(artefact)
 
