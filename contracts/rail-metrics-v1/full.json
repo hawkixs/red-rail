@@ -410,7 +410,7 @@
     "not_measured": [
       {
         "what": "operator_questions_and_decisions",
-        "why": "not recorded anywhere yet (ticket c5231125, T1)"
+        "why": "not recorded anywhere yet (T1)"
       },
       {
         "what": "human_active_and_waiting_time",
