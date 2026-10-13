@@ -18,9 +18,8 @@ RoundLabel = Literal[1, 2, 3, "awaiting_ruling", "closure", "no_verdict", "mecha
 Artifact = Literal["spec_plan", "code", "records"]
 FINDING_ID = r"^F-\d+-\d+$"
 ANY_ID = r"^(F|CF)-\d+-\d+$"
-# bytes of canonical JSON the findings list may take in a review_verdict payload: brain refuses
-# a payload over 65536 (delivery_attestations.json, max_canonical_bytes); the rest of the payload
-# is well under 1 KiB
+# Bytes of the whole verdict data: leave room for the attestation envelope below brain's
+# 65536-byte limit (spec 2026-10-13-reviewer-partial-view, D4).
 RECEIPT_BUDGET = 60_000
 _FILE_MAX = 200
 _EVIDENCE_MAX = 300
@@ -79,6 +78,9 @@ class ReviewVerdict(BaseModel):
     providers: tuple[str, ...] = ()
     models: dict[str, str] = Field(default_factory=dict)
     diff_truncated: bool = False
+    unseen_files: tuple[str, ...] = ()
+    unseen_count: int = Field(default=0, ge=0)
+    not_reviewed: tuple[str, ...] = ()
     round: RoundLabel | None = None
     artifact: Artifact | None = None
     previous: tuple[PreviousAnswer, ...] = ()
@@ -110,15 +112,31 @@ class ReviewVerdict(BaseModel):
             "finding_count": len(self.findings),
             "blocking": self.blocking,
             "diff_truncated": self.diff_truncated,
+            "unseen_files": list(self.unseen_files[:50]),
+            "unseen_count": max(self.unseen_count, len(self.unseen_files)),
+            "not_reviewed": list(self.not_reviewed[:100]),
             "round": self.round,
             "artifact": self.artifact,
-            "findings": receipt_findings(self.findings),
+            "findings": [],
         }
         if self.carry_forwards is not None:
             data["carry_forwards"] = {
                 "addressed": list(self.carry_forwards.addressed),
                 "deferred": list(self.carry_forwards.deferred),
             }
+        # Reserve all metadata before trimming findings: budgeting only the findings could
+        # overflow the attestation once unseen paths are named (spec D4). Exceptionally long
+        # paths reduce the named list further; unseen_count still reports every unseen file.
+        while True:
+            data["findings"] = []
+            data["findings"] = receipt_findings(
+                self.findings, budget=max(0, RECEIPT_BUDGET - _size(data))
+            )
+            if _size(data) <= RECEIPT_BUDGET:
+                break
+            if not data["unseen_files"]:
+                raise ValueError("review verdict exceeds the attestation budget")
+            data["unseen_files"].pop()
         return data
 
 

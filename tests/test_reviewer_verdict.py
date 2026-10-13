@@ -118,3 +118,50 @@ def test_a_previous_answer_names_a_finding_or_a_carry_forward() -> None:
 def test_budget_mode_is_gone() -> None:
     with pytest.raises(ValidationError):
         ReviewVerdict(verdict="approve", summary="s", mode="budget")
+
+
+def test_the_attestation_names_unseen_files_and_not_reviewed_findings() -> None:
+    verdict = ReviewVerdict(
+        verdict="approve",
+        summary="s",
+        unseen_files=("src/x.py",),
+        unseen_count=1,
+        not_reviewed=("F-7-1",),
+    )
+    data = verdict.as_attestation_data(sha="a" * 40, check_run_id=9, repository="o/r", pr=7)
+    assert data["unseen_files"] == ["src/x.py"]
+    assert data["unseen_count"] == 1
+    assert data["not_reviewed"] == ["F-7-1"]
+
+
+def test_old_verdict_constructions_default_to_no_unseen_locations() -> None:
+    verdict = ReviewVerdict(verdict="approve", summary="s")
+    assert verdict.unseen_files == verdict.not_reviewed == ()
+    assert verdict.unseen_count == 0
+
+
+def test_five_hundred_unseen_paths_are_capped_and_the_whole_payload_fits() -> None:
+    paths = tuple(f"src/{'é' * 150}/file{i}.py" for i in range(500))
+    findings = [
+        _finding(
+            id=f"F-7-{i}",
+            klass="blocker",
+            file="d/" * 250,
+            title="t" * 200,
+            evidence="é" * 2000,
+        )
+        for i in range(1, 101)
+    ]
+    verdict = ReviewVerdict(
+        verdict="request_changes",
+        summary="s",
+        findings=findings,
+        unseen_files=paths,
+        not_reviewed=tuple(f.id for f in findings),
+    )
+    data = verdict.as_attestation_data(sha="a" * 40, check_run_id=9, repository="o/r", pr=7)
+    assert data["unseen_files"] == list(paths[:50])
+    assert data["unseen_count"] == 500
+    assert len(data["findings"]) == 100
+    assert _canonical(data) <= RECEIPT_BUDGET
+    assert _canonical({"kind": "review_verdict", "data": data}) < 65536

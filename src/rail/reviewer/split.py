@@ -13,8 +13,61 @@ Pure text in, list of chunks out: no network, no model, nothing to stub.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+from rail.reviewer import headers
 
 FILE_HEADER = re.compile(r"^diff --git ", re.MULTILINE)
+HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@[^\n]*\n", re.MULTILINE)
+
+
+@dataclass(frozen=True, slots=True)
+class Sight:
+    """Only the patches and hunk ranges actually shown count as seen (spec D1)."""
+
+    complete: frozenset[str]
+    cut: Mapping[str, tuple[tuple[int, int], ...]]
+
+
+def sight_of(visible: str, whole: str) -> Sight:
+    """Compare patches, independently of their order after prioritising the diff.
+
+    Exact header paths and both sides of a rename count (spec
+    2026-10-13-reviewer-partial-view, D2); unreadable headers give no sight (D6).
+    """
+    if not headers.parsed(visible) or not headers.parsed(whole):
+        return Sight(frozenset(), {})
+    patches = {}
+    for patch in _files(whole):
+        if match := headers.HEADER.match(patch):
+            patches[(match["a"], match["b"])] = patch
+    complete: set[str] = set()
+    cut: dict[str, tuple[tuple[int, int], ...]] = {}
+    for patch in _files(visible):
+        match = headers.HEADER.match(patch)
+        if match is None:
+            continue
+        paths = (match["a"], match["b"])
+        original = patches.get(paths)
+        if original is None:
+            continue
+        if patch == original:
+            complete.update(paths)
+            continue
+        hunks = list(HUNK_HEADER.finditer(original))
+        is_prefix = original.startswith(patch)
+        ranges = []
+        for index, hunk in enumerate(hunks):
+            end = hunks[index + 1].start() if index + 1 < len(hunks) else len(original)
+            count = int(hunk[2]) if hunk[2] is not None else 1
+            # Comparing through the whole body excludes even a cut inside its last line.
+            if count and is_prefix and end <= len(patch):
+                start = int(hunk[1])
+                ranges.append((start, start + count - 1))
+        for path in paths:
+            cut[path] = tuple(ranges)
+    return Sight(frozenset(complete), cut)
 
 
 class OversizedFile(Exception):
