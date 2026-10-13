@@ -1,0 +1,10 @@
+[Unit]
+Description=Publish red-rail metrics hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=rail-metrics-publish.service
+
+[Install]
+WantedBy=timers.target

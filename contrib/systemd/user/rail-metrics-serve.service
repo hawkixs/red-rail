@@ -1,0 +1,10 @@
+[Unit]
+Description=Serve red-rail metrics for local probes
+
+[Service]
+ExecStart=%h/.local/bin/rail metrics serve
+Restart=on-failure
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
