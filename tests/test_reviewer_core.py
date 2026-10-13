@@ -39,7 +39,7 @@ def test_default_policy_is_the_measured_data() -> None:
         "glm": "openrouter/z-ai/glm-5.3-flash",
     }
     assert policy.models["deep"] == {
-        "agy": "gemini-3.1-pro-high",
+        "agy": "gemini-3.8-flash-high",
         "codex": "gpt-6-astra",
         "claude": "claude-opus-5",
         "glm": "openrouter/z-ai/glm-5.3-flash",
@@ -236,6 +236,11 @@ CODEX_LIMIT = json.dumps(
         "Sep 26th, 2026 11:27 AM.",
     }
 )
+# agy 1.3.4 dropped gemini-3.1-pro-high, then red-rail's deep default (ticket 7dc34128)
+AGY_UNKNOWN_MODEL = (
+    'Error: invalid model selection (--model "gemini-3.1-pro-high"): the model is not recognized\n'
+)
+MODEL_UNKNOWN = "model not available on the provider: check the reviewer's models"
 CODEX_REVOKED = "ERROR: unexpected status 401 Unauthorized: token_revoked\n"
 CODEX_SESSION = json.dumps(
     {
@@ -252,6 +257,7 @@ CODEX_SESSION = json.dumps(
         ("", CODEX_LIMIT, "quota exhausted, try again at Sep 26th, 2026 11:27 AM"),
         (CODEX_REVOKED, "", "auth expired: re-login on the host"),
         ("", CODEX_SESSION, "auth expired: re-login on the host"),
+        (AGY_UNKNOWN_MODEL, "", MODEL_UNKNOWN),
     ],
 )
 def test_a_known_failure_is_classified(stderr: str, events: str, reason: str) -> None:
@@ -757,3 +763,26 @@ def test_discount_records_also_downgrades_the_class_of_a_receipt_finding(tmp_pat
     assert reply.verdict is not None
     finding = reply.verdict.findings[0]
     assert finding.klass == "note" and finding.severity == "minor"
+
+
+def test_a_config_models_override_merges_with_the_defaults(tmp_path: Path) -> None:
+    """A host `reviewer.yaml` that names one model keeps every other default (ticket 7dc34128):
+    a `models` key used to REPLACE the defaults on this path, so a host override that forgot a
+    provider made the whole configuration fail to load."""
+    from rail.reviewer.config import load_reviewer_config
+    from rail.reviewer.policy import DEFAULT_MODELS
+
+    key = tmp_path / "app.pem"
+    key.write_text("-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n")
+    key.chmod(0o600)
+    config = tmp_path / "reviewer.yaml"
+    config.write_text(
+        f"app_id: 1\ninstallation_id: 2\nprivate_key_file: {key}\n"
+        f"repositories:\n  - slug: hawkixs/red-alpha\n    path: {tmp_path}\n"
+        "policy:\n  models:\n    deep: {agy: gemini-3.8-flash-medium}\n"
+    )
+    config.chmod(0o600)
+    policy = load_reviewer_config(config).policy
+    assert policy.models["deep"]["agy"] == "gemini-3.8-flash-medium"
+    assert policy.models["deep"]["codex"] == DEFAULT_MODELS["deep"]["codex"]
+    assert policy.models["light"] == DEFAULT_MODELS["light"]

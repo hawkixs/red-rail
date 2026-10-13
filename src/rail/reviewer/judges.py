@@ -148,6 +148,14 @@ _QUOTA = re.compile(r"RESOURCE_EXHAUSTED|quota (?:reached|exceeded)|usage limit|
 _AUTH = re.compile(
     r"token_revoked|refresh_token_invalidated|session has ended|\b401\b|unauthorized", re.I
 )
+# agy 1.3.4 on a model it no longer lists (ticket 7dc34128): the cause is configuration, so the
+# check names it instead of hiding it behind the seat's logs
+_MODEL = re.compile(
+    r"invalid model selection|model\b[^\n]{0,80}\bnot (?:recognized|found|available)|"
+    r"unknown model",
+    re.I,
+)
+MODEL_UNKNOWN = "model not available on the provider: check the reviewer's models"
 _RESETS_IN = re.compile(r"resets in ((?:\d+[hms]){1,3})", re.I)
 _TRY_AGAIN = re.compile(
     r"try again at ([A-Z][a-z]{2,8} \d{1,2}(?:st|nd|rd|th)?, \d{4},? \d{1,2}:\d{2} ?[AP]M)"
@@ -187,6 +195,8 @@ def failure_reason(stderr: str, events: str) -> str:
         return "quota exhausted"
     if _AUTH.search(text):
         return "auth expired: re-login on the host"
+    if _MODEL.search(text):
+        return MODEL_UNKNOWN
     return UNCLASSIFIED
 
 

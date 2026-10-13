@@ -9,7 +9,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from rail.private import read_private_file
-from rail.reviewer.policy import ReviewPolicy
+from rail.reviewer.policy import ReviewPolicy, with_default_models
 
 DEFAULT_CONFIG = Path("~/.config/red-rail/reviewer.yaml")
 
@@ -47,4 +47,6 @@ class ReviewerConfig(BaseModel):
 
 def load_reviewer_config(path: Path = DEFAULT_CONFIG) -> ReviewerConfig:
     raw = yaml.safe_load(read_private_file(path.expanduser())) or {}
+    if isinstance(raw.get("policy"), dict):
+        raw["policy"] = with_default_models(raw["policy"])
     return ReviewerConfig.model_validate(raw)
