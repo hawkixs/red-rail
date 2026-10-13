@@ -11,8 +11,9 @@ from datetime import datetime
 from pathlib import Path
 
 from pydantic import ValidationError
-from yaml import YAMLError
+from yaml import YAMLError, safe_load
 
+from rail import gitrepo
 from rail.autonomy import (
     SINCE,
     ProjectFacts,
@@ -25,6 +26,7 @@ from rail.autonomy import (
 )
 from rail.brain.settings import DEFAULT_REVIEWER_TOKEN_FILE
 from rail.ledger import Ledger, LedgerError
+from rail.ledger.committed import MAIN_REF, CommittedLedger
 from rail.metrics import delivery_window
 from rail.metrics_contract import (
     Answer,
@@ -39,7 +41,7 @@ from rail.metrics_contract import (
     NotMeasured,
     encode,
 )
-from rail.model import Tier, load_rail_config
+from rail.model import LedgerBackend, RailConfig, Tier, load_rail_config
 from rail.reviewer.config import ReviewerConfig
 from rail.reviewer.github import GitHubApp, GitHubError
 from rail.reviewer.service import REVIEWER_IDENTITY
@@ -76,17 +78,29 @@ def collect(
     samples: dict[int, list[Samples]] = {7: [], 30: []}
     for repository in config.repositories:
         try:
-            cfg = load_rail_config(repository.path)
+            if not gitrepo.fetch_main(repository.path):
+                raise OSError("origin/main fetch failed")
+            manifest = gitrepo.file_at(repository.path, MAIN_REF, "rail.yaml")
+            if manifest is None:
+                raise OSError("origin/main manifest is unreadable")
+            cfg = RailConfig.model_validate(safe_load(manifest) or {})
+            committed = cfg.ledger is LedgerBackend.FILE
+            if not committed:
+                cfg = load_rail_config(repository.path)
         except (OSError, UnicodeDecodeError, ValidationError, YAMLError):
             tail = repository.slug.rsplit("/", 1)[-1].lower()
             name = re.sub(r"[^a-z0-9]+", "-", tail).strip("-")[:64].rstrip("-")
             missing.append(name or "unknown")
             continue
         try:
-            ledger = open_ledger(
-                repository.path,
-                agent=REVIEWER_IDENTITY,
-                token_file=DEFAULT_REVIEWER_TOKEN_FILE,
+            ledger = (
+                CommittedLedger(repository.path)
+                if committed
+                else open_ledger(
+                    repository.path,
+                    agent=REVIEWER_IDENTITY,
+                    token_file=DEFAULT_REVIEWER_TOKEN_FILE,
+                )
             )
             records = ledger.list(cfg.project)
             branch = github.default_branch(repository.slug)
@@ -103,7 +117,12 @@ def collect(
             delivery = (
                 {
                     days: delivery_window(
-                        ledger, cfg.project, repository.path, now=now, window_days=days
+                        ledger,
+                        cfg.project,
+                        repository.path,
+                        now=now,
+                        window_days=days,
+                        config=cfg,
                     )
                     for days in (7, 30)
                 }
