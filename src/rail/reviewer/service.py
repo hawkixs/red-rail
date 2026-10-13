@@ -30,7 +30,7 @@ from rail.reviewer.judges import (
     judge,
     round_instructions,
 )
-from rail.reviewer.policy import ReviewPolicy, producer_provider
+from rail.reviewer.policy import ReviewPolicy, producer_providers
 from rail.reviewer.split import oversized, split_diff
 from rail.reviewer.verdict import CarryForwards, Finding, PreviousAnswer, ReviewVerdict
 
@@ -1033,8 +1033,8 @@ def _review_started(
     else:
         diff = whole
         light = policy.mode_for(pr, docs_only=docs_only(diff, policy)) == "light"
-    producer = producer_provider(github.commit_messages(pr.repository, pr.number))
-    chain = policy.chain_for(producer=producer)
+    producers = producer_providers(github.commit_messages(pr.repository, pr.number))
+    chain = policy.chain_for(producers=producers)
     criteria = _criteria(ledger, project, pr)
     instructions = round_instructions(
         "closure" if step == "closure" else "round",
