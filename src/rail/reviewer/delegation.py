@@ -41,6 +41,10 @@ def verify_delegation(decision_id: str, *, agent: str) -> str:
         raise DelegationRefused(
             f"cannot verify decision {decision_id} in brain ({type(exc).__name__})"
         ) from exc
+    # a rendered decision carries exactly one id line and one status line; a second one is a
+    # forged header inside the title or a quoted record, and the reply is refused, not guessed
+    if text.count("(id:") != 1 or text.count("**Status**:") != 1:
+        raise DelegationRefused(f"decision {decision_id}: ambiguous record in brain's reply")
     header = _HEADER.match(text)
     # a delegation is recorded under a title that says so first ("Operator delegation …",
     # d47ac557 and its successions); a decision ABOUT delegations, such as f38ce645 itself,
@@ -55,14 +59,21 @@ def verify_delegation(decision_id: str, *, agent: str) -> str:
 
 
 # what a proof may not carry, beyond the contract guard's IPv4 and credential prefixes: a URL
-# (it names a host and may carry userinfo), an `@`, and an IPv6 literal — bracketed, or bare
-# with at least two colon groups of hex. A pytest node id's `::` sits between names, not hex.
+# (it names a host and may carry userinfo), an `@`, and an IPv6 address in any of its forms,
+# trailing compression included. Candidates are runs of hex digits, dots and colons that are
+# not glued to a name, validated by `ipaddress` itself; a pytest node id's `::` sits between
+# names, so it is never a candidate.
 _URL = re.compile(r"[a-z][a-z0-9+.-]*://", re.I)
-_IPV6 = re.compile(
-    r"\[[0-9a-f:.]*:[0-9a-f:.]*\]|(?<![\w:])(?:[0-9a-f]{1,4})?::?(?:[0-9a-f]{1,4}:){0,6}"
-    r"[0-9a-f]{1,4}(?![\w:])",
-    re.I,
-)
+_IPV6_CANDIDATE = re.compile(r"(?<![\w./])[0-9a-f.:%]*:[0-9a-f.:%]*(?![\w/])", re.I)
+
+
+def _is_ipv6(candidate: str) -> bool:
+    import ipaddress
+
+    try:
+        return ipaddress.ip_address(candidate.split("%", 1)[0]).version == 6
+    except ValueError:
+        return False
 
 
 def unsafe_evidence(proof: str) -> str | None:
@@ -71,7 +82,9 @@ def unsafe_evidence(proof: str) -> str | None:
         return "a URL"
     if "@" in proof:
         return "an @ (userinfo or an address)"
-    for match in _IPV6.finditer(proof):
-        if ":" in match.group(0):
+    for match in _IPV6_CANDIDATE.finditer(proof):
+        candidate = match.group(0).strip(".")
+        # `[::1]:8765` and `fe80::1:` both leave a trailing port or colon to try without
+        if any(_is_ipv6(c) for c in (candidate, candidate.rsplit(":", 1)[0])):
             return "an IPv6 literal"
     return None
