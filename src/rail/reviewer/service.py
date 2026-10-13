@@ -497,6 +497,7 @@ def _merge(replies: list[JudgeReply], mode: str, truncated: bool) -> ReviewVerdi
         findings=_capped(findings),
         mode=mode,
         providers=tuple(r.provider for r in replies if r.verdict),
+        models={r.provider: r.model for r in replies if r.verdict},
         diff_truncated=truncated or any(v.diff_truncated for v in verdicts),
         previous=tuple(previous),
     )
@@ -518,12 +519,15 @@ def _render(verdict: ReviewVerdict) -> str:
     lines = []
     if verdict.round is not None:
         lines.append(f"Round: {verdict.round} ({verdict.artifact})")
-    lines += [
-        f"**{verdict.verdict}** ({verdict.mode}, judges: {', '.join(verdict.providers) or 'none'})",
-        "",
-        verdict.summary,
-        "",
-    ]
+    lines.append(
+        f"**{verdict.verdict}** ({verdict.mode}, judges: {', '.join(verdict.providers) or 'none'})"
+    )
+    if verdict.models:
+        lines.append(
+            "Models: "
+            + ", ".join(f"{provider}={model}" for provider, model in verdict.models.items())
+        )
+    lines += ["", verdict.summary, ""]
     for f in verdict.findings:
         where = f"{f.file}:{f.line}" if f.line else f.file
         tag = f.klass or f.severity

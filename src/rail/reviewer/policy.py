@@ -14,13 +14,25 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rail.reviewer.github import PullRequest
 
-Provider = Literal["agy", "codex", "claude"]
+Provider = Literal["agy", "codex", "claude", "glm"]
 Tier = Literal["light", "deep"]
 Mode = Literal["light", "deep"]
 
+# Operator cost rule (2026-10-13): GLM Flash only, never the full model at either tier.
+GLM_FLASH = "openrouter/z-ai/glm-5.3-flash"
 DEFAULT_MODELS: dict[str, dict[str, str]] = {
-    "light": {"agy": "gemini-3.8-flash-high", "codex": "gpt-5.6-luna", "claude": "claude-sonnet-5"},
-    "deep": {"agy": "gemini-3.1-pro-high", "codex": "gpt-6-astra", "claude": "claude-opus-5"},
+    "light": {
+        "agy": "gemini-3.8-flash-high",
+        "codex": "gpt-5.6-luna",
+        "claude": "claude-sonnet-5",
+        "glm": GLM_FLASH,
+    },
+    "deep": {
+        "agy": "gemini-3.1-pro-high",
+        "codex": "gpt-6-astra",
+        "claude": "claude-opus-5",
+        "glm": GLM_FLASH,
+    },
 }
 TRAILER = re.compile(r"^co-authored-by:\s*(?P<who>.+?)\s*<", re.IGNORECASE | re.MULTILINE)
 # ha-delegate's trailer on a commit integrated from a ha worker: `<provider>/<model> (ha <run>)`
@@ -33,13 +45,17 @@ PRODUCERS: tuple[tuple[str, Provider], ...] = (
     ("antigravity", "agy"),
     ("gemini", "agy"),
     ("agy", "agy"),  # the provider id itself, as an `Implemented-by` trailer writes it
+    ("glm", "glm"),
+    ("z-ai", "glm"),
+    ("zhipu", "glm"),
+    ("opencode", "glm"),
 )
 
 
 class ReviewPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    providers: tuple[Provider, ...] = ("agy", "codex", "claude")
+    providers: tuple[Provider, ...] = ("glm", "codex", "claude", "agy")
     models: dict[Tier, dict[Provider, str]] = Field(
         default_factory=lambda: {tier: dict(models) for tier, models in DEFAULT_MODELS.items()}
     )
@@ -49,9 +65,9 @@ class ReviewPolicy(BaseModel):
     # the rest; docs come last and generated lockfiles are never judged
     diff_priority: tuple[str, ...] = ("src/", "tests/", "workflows/", "skills/", "template/")
     ignored_globs: tuple[str, ...] = ("uv.lock", "*.lock", "package-lock.json")
-    # bytes of prompt a provider accepts: agy takes its prompt in argv (headless-agents refuses
-    # more than 120000 bytes); codex and claude read stdin
-    prompt_limits: dict[str, int] = Field(default_factory=lambda: {"agy": 115_000})
+    # bytes of prompt a provider accepts: agy and glm take their prompt in argv (headless-agents
+    # refuses more than 120000 bytes); codex and claude read stdin
+    prompt_limits: dict[str, int] = Field(default_factory=lambda: {"agy": 115_000, "glm": 115_000})
     # when no trailer names the producer, the ecosystem's default producer is still excluded:
     # ReD's sessions are Claude Code (found by the independent reviewer on PR #3)
     unknown_producer_excludes: tuple[Provider, ...] = ("claude",)
@@ -84,6 +100,16 @@ class ReviewPolicy(BaseModel):
             missing = [p for p in self.providers if p not in self.models.get(tier, {})]
             if missing:
                 raise ValueError(f"no {tier} model for {missing}")
+        return self
+
+    @model_validator(mode="after")
+    def _glm_flash_only(self) -> ReviewPolicy:
+        for models in self.models.values():
+            if "glm" in models and models["glm"] != GLM_FLASH:
+                raise ValueError(
+                    "the glm judge runs GLM 5.3 Flash only (GLM_FLASH), operator cost rule "
+                    f"2026-10-13: got {models['glm']}"
+                )
         return self
 
     def chain_for(self, *, producers: frozenset[Provider]) -> tuple[Provider, ...]:

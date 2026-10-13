@@ -9,9 +9,9 @@ import pytest
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable, PullRequestRef
 from rail.ledger.file import FileLedger
 from rail.reviewer.github import CheckRun, PullRequest
-from rail.reviewer.judges import JudgeReply, build_prompt
-from rail.reviewer.policy import default_policy
-from rail.reviewer.service import _DELTA_NOTE, docs_only, needs_review, review_pull
+from rail.reviewer.judges import JudgeReply, build_prompt, judge
+from rail.reviewer.policy import GLM_FLASH, ReviewPolicy, default_policy
+from rail.reviewer.service import _DELTA_NOTE, _render, docs_only, needs_review, review_pull
 from rail.reviewer.verdict import Finding, PreviousAnswer, ReviewVerdict
 from tests.helpers import added_receipt_diff, conforming_tree
 
@@ -71,6 +71,7 @@ class FakeGitHub:
     def complete_check(self, repository, check_id, *, conclusion, title, summary, text=""):
         self.calls.append(("complete", check_id, conclusion, title))
         self.check_summaries[check_id] = summary
+        self.check_texts[check_id] = text
         return CheckRun(id=check_id, status="completed", conclusion=conclusion)
 
     def review(self, repository, number, *, commit_id, event, body):
@@ -180,6 +181,25 @@ def _bind(ledger: FileLedger, pr: PullRequest = PR) -> None:
     )
 
 
+@pytest.mark.parametrize("models", [{}, {"glm": GLM_FLASH}], ids=["no_judge", "answered"])
+def test_models_are_rendered_only_when_a_judge_answered(models: dict[str, str]) -> None:
+    verdict = ReviewVerdict(
+        verdict="approve",
+        summary="clean",
+        findings=[],
+        mode="light",
+        providers=tuple(models),
+        models=models,
+    )
+    text = _render(verdict)
+    if models:
+        assert f"Models: glm={GLM_FLASH}" in text.splitlines()
+        assert text.index("judges: glm") < text.index("Models:")
+    else:
+        assert "judges: none" in text
+        assert "Models:" not in text
+
+
 def test_light_review_approves_publishes_and_attests(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
     _bind(ledger)
@@ -200,7 +220,7 @@ def test_light_review_approves_publishes_and_attests(tmp_path: Path) -> None:
         run_judge=run_judge,
         root=tmp_path,
     )
-    assert seen == [("agy", "light", ("tests pass",))]  # never the producer (claude), light mode
+    assert seen == [("glm", "light", ("tests pass",))]  # never the producer (claude), light mode
     assert outcome.verdict.verdict == "approve" and outcome.check_run_id == 99
     assert ("complete", 99, "success", "approve") in github.calls
     assert ("review", 7, "APPROVE") in github.calls
@@ -221,7 +241,7 @@ def test_deep_review_escalates_on_disagreement_and_the_deep_judge_wins(tmp_path:
         seen.append((provider, tier))
         if tier == "deep":
             return block(provider, tier)
-        return approve(provider, tier) if provider == "agy" else block(provider, tier)
+        return approve(provider, tier) if provider == "glm" else block(provider, tier)
 
     outcome = review_pull(
         big,
@@ -233,30 +253,37 @@ def test_deep_review_escalates_on_disagreement_and_the_deep_judge_wins(tmp_path:
         run_judge=run_judge,
         root=tmp_path,
     )
-    # unknown producer → claude excluded; no provider is left unused, so the arbitration is
-    # every provider of the chain at deep tier, never one of the two disputants alone (4cdeaed9)
-    assert seen == [("agy", "light"), ("codex", "light"), ("agy", "deep"), ("codex", "deep")]
+    # unknown producer → claude excluded; agy is the fresh deep arbitrator
+    assert seen == [("glm", "light"), ("codex", "light"), ("agy", "deep")]
     assert outcome.verdict.verdict == "request_changes" and outcome.verdict.mode == "deep"
     assert ("complete", 99, "failure", "request_changes") in github.calls
     assert ("review", 7, "REQUEST_CHANGES") in github.calls
 
 
-def test_a_dissent_is_never_arbitrated_by_one_disputant_alone(tmp_path: Path) -> None:
+@pytest.mark.parametrize("glm", [False, True], ids=["historical", "glm"])
+def test_a_dissent_is_never_arbitrated_by_one_disputant_alone(tmp_path: Path, glm: bool) -> None:
     """Ticket 4cdeaed9, measured on red-rail#80: agy approved and codex blocked at light tier;
     the deep arbitration fell back to agy alone and codex's blocker vanished from the verdict,
     the check and the attestation. Both providers now judge at deep tier, a request_changes
     from either holds, and the light verdicts that led there stay in the summary."""
     repo, ledger = _repo(tmp_path)
     big = replace(PR, additions=900)
-    github = FakeGitHub(messages=["chore: plain"])
+    policy = default_policy() if glm else ReviewPolicy(providers=("agy", "codex", "claude"))
+    approver = "glm" if glm else "agy"
+    dissenter = "agy" if glm else "codex"
+    github = FakeGitHub(
+        messages=["Co-Authored-By: Claude <n@a>\nImplemented-by: codex/m"]
+        if glm
+        else ["chore: plain"]
+    )
 
     def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
-        return approve(provider, tier) if provider == "agy" else block(provider, tier)
+        return approve(provider, tier) if provider == approver else block(provider, tier)
 
     outcome = review_pull(
         big,
         github=github,
-        policy=default_policy(),
+        policy=policy,
         ledger=ledger,
         project="red-alpha",
         repo_path=repo,
@@ -265,24 +292,34 @@ def test_a_dissent_is_never_arbitrated_by_one_disputant_alone(tmp_path: Path) ->
     )
     verdict = outcome.verdict
     assert verdict.verdict == "request_changes"
-    assert set(verdict.providers) == {"agy", "codex"}
-    assert "light: agy approve, codex request_changes" in verdict.summary
+    assert set(verdict.providers) == {approver, dissenter}
+    assert f"light: {approver} approve, {dissenter} request_changes" in verdict.summary
 
 
-def test_an_agreeing_deep_arbitration_still_records_the_light_dissent(tmp_path: Path) -> None:
+@pytest.mark.parametrize("glm", [False, True], ids=["historical", "glm"])
+def test_an_agreeing_deep_arbitration_still_records_the_light_dissent(
+    tmp_path: Path, glm: bool
+) -> None:
     repo, ledger = _repo(tmp_path)
     big = replace(PR, additions=900)
-    github = FakeGitHub(messages=["chore: plain"])
+    policy = default_policy() if glm else ReviewPolicy(providers=("agy", "codex", "claude"))
+    approver = "glm" if glm else "agy"
+    dissenter = "agy" if glm else "codex"
+    github = FakeGitHub(
+        messages=["Co-Authored-By: Claude <n@a>\nImplemented-by: codex/m"]
+        if glm
+        else ["chore: plain"]
+    )
 
     def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
         if tier == "deep":
             return approve(provider, tier)
-        return approve(provider, tier) if provider == "agy" else block(provider, tier)
+        return approve(provider, tier) if provider == approver else block(provider, tier)
 
     outcome = review_pull(
         big,
         github=github,
-        policy=default_policy(),
+        policy=policy,
         ledger=ledger,
         project="red-alpha",
         repo_path=repo,
@@ -290,26 +327,34 @@ def test_an_agreeing_deep_arbitration_still_records_the_light_dissent(tmp_path: 
         root=tmp_path,
     )
     assert outcome.verdict.verdict == "approve"
-    assert set(outcome.verdict.providers) == {"agy", "codex"}
-    assert "light: agy approve, codex request_changes" in outcome.verdict.summary
+    assert set(outcome.verdict.providers) == {approver, dissenter}
+    assert f"light: {approver} approve, {dissenter} request_changes" in outcome.verdict.summary
 
 
-def test_a_dissenter_whose_deep_run_fails_keeps_its_light_request_changes(tmp_path) -> None:
+@pytest.mark.parametrize("glm", [False, True], ids=["historical", "glm"])
+def test_a_dissenter_whose_deep_run_fails_keeps_its_light_request_changes(tmp_path, glm) -> None:
     """If the dissenting provider's deep run fails, the other disputant must not decide alone:
     the dissenter's light request_changes joins the merge (fail-closed)."""
     repo, ledger = _repo(tmp_path)
     big = replace(PR, additions=900)
-    github = FakeGitHub(messages=["chore: plain"])
+    policy = default_policy() if glm else ReviewPolicy(providers=("agy", "codex", "claude"))
+    approver = "glm" if glm else "agy"
+    dissenter = "agy" if glm else "codex"
+    github = FakeGitHub(
+        messages=["Co-Authored-By: Claude <n@a>\nImplemented-by: codex/m"]
+        if glm
+        else ["chore: plain"]
+    )
 
     def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
-        if provider == "codex":
+        if provider == dissenter:
             return fail(provider, tier) if tier == "deep" else block(provider, tier)
         return approve(provider, tier)
 
     outcome = review_pull(
         big,
         github=github,
-        policy=default_policy(),
+        policy=policy,
         ledger=ledger,
         project="red-alpha",
         repo_path=repo,
@@ -317,20 +362,28 @@ def test_a_dissenter_whose_deep_run_fails_keeps_its_light_request_changes(tmp_pa
         root=tmp_path,
     )
     assert outcome.verdict.verdict == "request_changes"
-    assert set(outcome.verdict.providers) == {"agy", "codex"}
+    assert set(outcome.verdict.providers) == {approver, dissenter}
 
 
-def test_a_fresh_deep_arbitrator_decides_and_the_light_dissent_stays_named(tmp_path) -> None:
+@pytest.mark.parametrize("glm", [False, True], ids=["historical", "glm"])
+def test_a_fresh_deep_arbitrator_decides_and_the_light_dissent_stays_named(tmp_path, glm) -> None:
     """F-84-1: when the arbitrator is a provider that did not judge at light tier, it is not a
     disputant: its verdict decides, and the light request_changes it overrules is only named in
     the summary, never carried into the merge."""
     repo, ledger = _repo(tmp_path)
     big = replace(PR, additions=900)
     github = FakeGitHub(messages=["chore: plain"])
+    policy = default_policy() if glm else ReviewPolicy(providers=("agy", "codex", "claude"))
     seen = []
 
     def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
         seen.append((provider, tier))
+        if glm:
+            return (
+                approve(provider, tier)
+                if tier == "deep" or provider == "glm"
+                else block(provider, tier)
+            )
         if provider == "agy" and tier == "light":
             return fail(provider, tier)  # agy is unused at light tier, so it arbitrates fresh
         return approve(provider, tier) if tier == "deep" else block(provider, tier)
@@ -338,16 +391,22 @@ def test_a_fresh_deep_arbitrator_decides_and_the_light_dissent_stays_named(tmp_p
     outcome = review_pull(
         big,
         github=github,
-        policy=default_policy(),
+        policy=policy,
         ledger=ledger,
         project="red-alpha",
         repo_path=repo,
         run_judge=run_judge,
         root=tmp_path,
     )
-    assert ("agy", "deep") in seen and ("codex", "deep") not in seen
+    expected = (
+        [("glm", "light"), ("codex", "light"), ("agy", "deep")]
+        if glm
+        else [("agy", "light"), ("codex", "light"), ("agy", "deep")]
+    )
+    assert seen == expected
     assert outcome.verdict.verdict == "approve"
-    assert "light: codex request_changes" in outcome.verdict.summary
+    dissent = "glm approve, codex request_changes" if glm else "codex request_changes"
+    assert f"light: {dissent}" in outcome.verdict.summary
 
 
 def test_a_failed_judge_walks_the_chain(tmp_path: Path) -> None:
@@ -357,7 +416,11 @@ def test_a_failed_judge_walks_the_chain(tmp_path: Path) -> None:
 
     def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
         seen.append(provider)
-        return fail(provider) if provider == "agy" else approve(provider)
+        return (
+            fail(provider)
+            if provider == "glm"
+            else replace(approve(provider, tier), model=policy.model(provider, tier))
+        )
 
     outcome = review_pull(
         PR,
@@ -369,8 +432,104 @@ def test_a_failed_judge_walks_the_chain(tmp_path: Path) -> None:
         run_judge=run_judge,
         root=tmp_path,
     )
-    assert seen == ["agy", "codex"] and outcome.verdict.verdict == "approve"
+    assert seen == ["glm", "codex"] and outcome.verdict.verdict == "approve"
     assert outcome.verdict.providers == ("codex",) and "timeout" in outcome.failures[0]
+    assert "Models: codex=gpt-5.6-luna" in github.check_texts[99]
+    assert "glm=" not in github.check_texts[99]
+
+
+def test_claude_and_codex_producers_leave_glm_then_agy_judges(tmp_path: Path) -> None:
+    repo, ledger = _repo(tmp_path)
+    github = FakeGitHub(messages=["Co-Authored-By: Claude <n@a>\nImplemented-by: codex/m"])
+    seen = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, **kwargs):
+        seen.append((provider, tier))
+        return replace(approve(provider, tier), model=policy.model(provider, tier))
+
+    outcome = review_pull(
+        replace(PR, additions=900),
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert seen == [("glm", "light"), ("agy", "light")]
+    assert outcome.verdict.verdict == "approve"
+    assert outcome.verdict.models == {"glm": GLM_FLASH, "agy": "gemini-3.8-flash-high"}
+    text = github.check_texts[99]
+    assert f"Models: glm={GLM_FLASH}, agy=gemini-3.8-flash-high" in text
+    assert text.index("judges: glm, agy") < text.index("Models:")
+
+
+def test_all_four_producers_leave_no_judge_and_never_call_the_runner(tmp_path: Path) -> None:
+    repo, ledger = _repo(tmp_path)
+    github = FakeGitHub(
+        messages=[
+            "Co-Authored-By: Claude <n@a>\nImplemented-by: codex/m\n"
+            "Implemented-by: agy/m\nImplemented-by: opencode-go/glm-5.3-flash"
+        ]
+    )
+    seen = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, **kwargs):
+        seen.append(provider)
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert seen == []
+    assert outcome.verdict.verdict == "request_changes"
+    assert outcome.verdict.providers == () and outcome.verdict.round == "no_verdict"
+    assert ("complete", 99, "failure", "no verdict") in github.calls
+
+
+def test_a_glm_empty_report_is_provider_fallback_and_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from headless_agents.capability import PROVIDER_FALLBACK_EXIT_CODE
+
+    monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
+    repo, ledger = _repo(tmp_path)
+    github = FakeGitHub(
+        messages=["Co-Authored-By: Claude <n@a>\nImplemented-by: codex/m\nImplemented-by: agy/m"]
+    )
+    seen = []
+
+    def runner(provider, spec):
+        seen.append(provider)
+        return PROVIDER_FALLBACK_EXIT_CODE, ""
+
+    def run_judge(pr, diff, policy, **kwargs):
+        return judge(pr, diff, policy, runner=runner, **kwargs)
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert seen == ["glm"]
+    assert outcome.verdict.verdict == "request_changes" and outcome.verdict.round == "no_verdict"
+    assert outcome.verdict.providers == ()
+    assert any("glm/light: provider_fallback" in failure for failure in outcome.failures)
+    assert "unparsable" not in " ".join(outcome.failures)
+    assert ("complete", 99, "failure", "no verdict") in github.calls
 
 
 def test_no_verdict_at_all_fails_closed(tmp_path: Path) -> None:
@@ -834,7 +993,7 @@ def test_the_split_uses_the_budget_the_judge_will_actually_enforce(tmp_path: Pat
     assert len(whole) < default_policy().max_diff_chars, "under the old budget: never split"
 
     github = FakeGitHub(diff_text=whole, messages=["chore: plain"])
-    policy = default_policy().model_copy(update={"prompt_limits": {"agy": 12_000}})
+    policy = default_policy().model_copy(update={"prompt_limits": {"glm": 12_000}})
     seen: list[str] = []
 
     def run_judge(
@@ -1371,7 +1530,7 @@ def test_disagreeing_judges_keep_a_finding_open(tmp_path) -> None:  # C1
     def run_judge(
         pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
     ):
-        status = "fixed" if provider == "agy" else "still_open"
+        status = "fixed" if provider == "glm" else "still_open"
         verdict = ReviewVerdict(
             verdict="approve",
             summary="s",
