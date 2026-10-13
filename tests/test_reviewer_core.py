@@ -36,13 +36,13 @@ def test_default_policy_is_the_measured_data() -> None:
         "agy": "gemini-3.8-flash-high",
         "codex": "gpt-5.6-luna",
         "claude": "claude-sonnet-5",
-        "glm": "openrouter/z-ai/glm-5.3-flash",
+        "glm": "opencode-go/glm-5.3-flash",
     }
     assert policy.models["deep"] == {
         "agy": "gemini-3.8-flash-high",
         "codex": "gpt-6-astra",
         "claude": "claude-opus-5",
-        "glm": "openrouter/z-ai/glm-5.3-flash",
+        "glm": "opencode-go/glm-5.3-flash",
     }
     assert policy.light_max_changed_lines == 200
     assert policy.max_diff_chars == 200_000
@@ -51,10 +51,18 @@ def test_default_policy_is_the_measured_data() -> None:
     assert policy.prompt_limits == {"agy": 115_000, "glm": 115_000}
 
 
-def test_the_glm_judge_runs_glm_flash_at_both_tiers() -> None:
+def test_the_glm_judge_runs_glm_flash_on_the_subscription_at_both_tiers() -> None:
+    """Decision 9f2947cb: GLM 5.3 Flash through opencode-go, OpenRouter only as a fallback."""
     policy = default_policy()
-    assert policy.model("glm", "light") == "openrouter/z-ai/glm-5.3-flash"
-    assert policy.model("glm", "deep") == "openrouter/z-ai/glm-5.3-flash"
+    assert policy.model("glm", "light") == "opencode-go/glm-5.3-flash"
+    assert policy.model("glm", "deep") == "opencode-go/glm-5.3-flash"
+
+
+@pytest.mark.parametrize("model", ["opencode-go/glm-5.3-flash", "openrouter/z-ai/glm-5.3-flash"])
+def test_glm_flash_is_accepted_on_either_rail(tmp_path: Path, model: str) -> None:
+    path = tmp_path / "reviewer.yaml"
+    path.write_text(f"models:\n  light:\n    glm: {model}\n")
+    assert load_policy(path).model("glm", "light") == model
 
 
 @pytest.mark.parametrize("tier", ["light", "deep"])
@@ -68,6 +76,7 @@ def test_the_glm_judge_runs_glm_flash_at_both_tiers() -> None:
         "openrouter/z-ai/glm-5.3-prime",
         "openrouter/~z-ai/glm-flash-latest",
         "opencode-go/glm-5.3",
+        "opencode-go/glm-5.2",
     ],
 )
 def test_any_other_glm_model_is_refused(tmp_path: Path, tier: str, model: str) -> None:
@@ -498,7 +507,7 @@ def test_the_glm_profile_carries_its_opencode_credentials(
 
     monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
     spec = build_spec(PR, "prompt", default_policy(), provider="glm", tier=tier, root=tmp_path)
-    assert spec.model == "openrouter/z-ai/glm-5.3-flash"
+    assert spec.model == "opencode-go/glm-5.3-flash"
     assert spec.name == f"review-hawkixs-red-probe-7-{PR.head_sha[:7]}-glm"
     assert spec.profile.credentials == CREDENTIALS["glm"]
     assert spec.profile.credentials.paths == (".local/share/opencode/auth.json",)
@@ -556,7 +565,7 @@ def test_the_glm_reply_carries_the_model_the_spec_ran(
         PR, DIFF, default_policy(), provider="glm", tier="light", runner=runner, root=tmp_path
     )
     assert reply.verdict is not None and reply.verdict.verdict == "approve"
-    assert reply.model == seen["model"] == "openrouter/z-ai/glm-5.3-flash"
+    assert reply.model == seen["model"] == "opencode-go/glm-5.3-flash"
 
 
 @pytest.mark.parametrize(
@@ -868,3 +877,90 @@ def test_build_prompt_returns_the_visible_body_without_its_truncation_marker() -
     assert built.visible == prioritise_diff(diff, policy)[:1000]
     assert truncated
     assert f"{built.visible}\n[diff truncated by the reviewer]\n\nEND DIFF\n" in prompt
+
+
+GLM_SUBSCRIPTION = "opencode-go/glm-5.3-flash"
+GLM_OPENROUTER = "openrouter/z-ai/glm-5.3-flash"
+OPENCODE_QUOTA = (
+    'level=ERROR message="stream error" providerID=opencode-go modelID=glm-5.3-flash '
+    'error.error="AI_APICallError: Go usage limit exceeded"'
+)
+
+
+def test_an_exhausted_glm_subscription_falls_back_to_openrouter(tmp_path: Path) -> None:
+    """Decision 9f2947cb: a quota alone never fails the pass closed. The subscription's quota
+    is spent, the same model runs on OpenRouter, and the reply names the model that answered."""
+    models: list[str] = []
+
+    def runner(provider, spec):
+        models.append(spec.model)
+        if spec.model == GLM_SUBSCRIPTION:
+            spec.stderr_log.write_text(OPENCODE_QUOTA)
+            return 1, ""
+        return 0, json.dumps({"verdict": "approve", "summary": "ok", "findings": []})
+
+    reply = judge(
+        PR, DIFF, default_policy(), provider="glm", tier="light", runner=runner, root=tmp_path
+    )
+    assert models == [GLM_SUBSCRIPTION, GLM_OPENROUTER]
+    assert reply.failure is None and reply.verdict and reply.verdict.verdict == "approve"
+    assert reply.model == GLM_OPENROUTER
+
+
+@pytest.mark.parametrize("exit_code", [3, 124])
+def test_glm_falls_back_on_a_dropped_or_timed_out_subscription(tmp_path, exit_code) -> None:
+    models: list[str] = []
+
+    def runner(provider, spec):
+        models.append(spec.model)
+        if spec.model == GLM_SUBSCRIPTION:
+            return exit_code, ""
+        return 0, json.dumps({"verdict": "approve", "summary": "ok", "findings": []})
+
+    reply = judge(
+        PR, DIFF, default_policy(), provider="glm", tier="deep", runner=runner, root=tmp_path
+    )
+    assert models == [GLM_SUBSCRIPTION, GLM_OPENROUTER] and reply.model == GLM_OPENROUTER
+
+
+def test_glm_never_falls_back_when_the_subscription_answered(tmp_path: Path) -> None:
+    """A reply that does not parse is the judge's failure, not the rail's: no second bill."""
+    models: list[str] = []
+
+    def runner(provider, spec):
+        models.append(spec.model)
+        return 0, "not a verdict"
+
+    reply = judge(
+        PR, DIFF, default_policy(), provider="glm", tier="light", runner=runner, root=tmp_path
+    )
+    assert models == [GLM_SUBSCRIPTION] and reply.failure == "unparsable"
+
+
+def test_glm_on_openrouter_has_no_second_fallback(tmp_path: Path) -> None:
+    path = tmp_path / "reviewer.yaml"
+    path.write_text(f"models:\n  light:\n    glm: {GLM_OPENROUTER}\n")
+    models: list[str] = []
+
+    def runner(provider, spec):
+        models.append(spec.model)
+        return 1, ""
+
+    reply = judge(
+        PR, DIFF, load_policy(path), provider="glm", tier="light", runner=runner, root=tmp_path
+    )
+    assert models == [GLM_OPENROUTER] and reply.failure == "failed"
+
+
+def test_both_glm_rails_failing_fails_the_judge_closed(tmp_path: Path) -> None:
+    models: list[str] = []
+
+    def runner(provider, spec):
+        models.append(spec.model)
+        return 1, ""
+
+    reply = judge(
+        PR, DIFF, default_policy(), provider="glm", tier="light", runner=runner, root=tmp_path
+    )
+    assert models == [GLM_SUBSCRIPTION, GLM_OPENROUTER]
+    assert reply.failure == "failed" and reply.verdict is None and reply.model == GLM_OPENROUTER

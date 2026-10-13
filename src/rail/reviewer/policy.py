@@ -18,8 +18,12 @@ Provider = Literal["agy", "codex", "claude", "glm"]
 Tier = Literal["light", "deep"]
 Mode = Literal["light", "deep"]
 
-# Operator cost rule (2026-10-13): GLM Flash only, never the full model at either tier.
-GLM_FLASH = "openrouter/z-ai/glm-5.3-flash"
+# Operator cost rules (2026-10-13): GLM Flash only, never the full model at either tier; on
+# the opencode-go subscription first, OpenRouter (billed per token) only when the subscription
+# fails (decision 9f2947cb, `judges.judge`).
+GLM_FLASH = "opencode-go/glm-5.3-flash"
+GLM_FLASH_FALLBACK = "openrouter/z-ai/glm-5.3-flash"
+GLM_MODELS = frozenset({GLM_FLASH, GLM_FLASH_FALLBACK})
 DEFAULT_MODELS: dict[str, dict[str, str]] = {
     "light": {
         "agy": "gemini-3.8-flash-high",
@@ -107,9 +111,9 @@ class ReviewPolicy(BaseModel):
     @model_validator(mode="after")
     def _glm_flash_only(self) -> ReviewPolicy:
         for models in self.models.values():
-            if "glm" in models and models["glm"] != GLM_FLASH:
+            if "glm" in models and models["glm"] not in GLM_MODELS:
                 raise ValueError(
-                    "the glm judge runs GLM 5.3 Flash only (GLM_FLASH), operator cost rule "
+                    "the glm judge runs GLM 5.3 Flash only (GLM_MODELS), operator cost rule "
                     f"2026-10-13: got {models['glm']}"
                 )
         return self
