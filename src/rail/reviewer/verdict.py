@@ -77,6 +77,7 @@ class ReviewVerdict(BaseModel):
         "light"
     )
     providers: tuple[str, ...] = ()
+    models: dict[str, str] = Field(default_factory=dict)
     diff_truncated: bool = False
     round: RoundLabel | None = None
     artifact: Artifact | None = None

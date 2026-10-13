@@ -29,6 +29,7 @@ GUARD = Path(__file__).resolve().parent / "guard.sh"
 Failure = Literal["timeout", "provider_fallback", "failed", "unparsable"]
 Runner = Callable[[str, RunSpec], tuple[int, str]]  # (provider, spec) -> (exit code, reply text)
 CREDENTIALS = {
+    "glm": Credentials(paths=(".local/share/opencode/auth.json",), mode="symlink"),
     "claude": Credentials(paths=(".claude/.credentials.json",), mode="copy"),
     "codex": Credentials(paths=(".codex/auth.json",), mode="copy"),
     # measured on brain-v42's Dream rail (agents/sandbox.py): symlinked, never copied
@@ -403,12 +404,13 @@ def build_spec(
 ) -> RunSpec:
     name = f"review-{pr.repository.replace('/', '-')}-{pr.number}-{pr.head_sha[:7]}-{provider}"
     home = _seat(root, name, provider)
-    profile = (
+    if provider == "agy":
         # AgyProvider builds its own ephemeral home from the profile's credentials
-        CapabilityProfile(guard=ToolGuard(path=GUARD), credentials=CREDENTIALS["agy"])
-        if provider == "agy"
-        else CapabilityProfile()
-    )
+        profile = CapabilityProfile(guard=ToolGuard(path=GUARD), credentials=CREDENTIALS["agy"])
+    elif provider == "glm":
+        profile = CapabilityProfile(credentials=CREDENTIALS["glm"])
+    else:
+        profile = CapabilityProfile()
     return RunSpec(
         prompt=prompt,
         name=name,
@@ -444,6 +446,10 @@ def run_provider(provider: str, spec: RunSpec) -> tuple[int, str]:
         from headless_agents.providers.agy import AgyProvider
 
         result = AgyProvider().run(spec)
+    elif provider == "glm":
+        from headless_agents.providers.opencode import OpenCodeProvider
+
+        result = OpenCodeProvider(real_home=Path.home()).run(spec)
     else:
         raise ValueError(f"unknown provider {provider!r}")
     text = (

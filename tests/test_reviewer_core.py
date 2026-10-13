@@ -31,21 +31,50 @@ DIFF = "diff --git a/src/probe.py b/src/probe.py\n+def healthz(): return 200\n"
 
 def test_default_policy_is_the_measured_data() -> None:
     policy = default_policy()
-    assert policy.providers == ("agy", "codex", "claude")
+    assert policy.providers == ("glm", "codex", "claude", "agy")
     assert policy.models["light"] == {
         "agy": "gemini-3.8-flash-high",
         "codex": "gpt-5.6-luna",
         "claude": "claude-sonnet-5",
+        "glm": "openrouter/z-ai/glm-5.3-flash",
     }
     assert policy.models["deep"] == {
         "agy": "gemini-3.1-pro-high",
         "codex": "gpt-6-astra",
         "claude": "claude-opus-5",
+        "glm": "openrouter/z-ai/glm-5.3-flash",
     }
     assert policy.light_max_changed_lines == 200
     assert policy.max_diff_chars == 200_000
     assert policy.check_name == "red-rail/review"
     assert policy.rerun_label == "rail-review:rerun"
+    assert policy.prompt_limits == {"agy": 115_000, "glm": 115_000}
+
+
+def test_the_glm_judge_runs_glm_flash_at_both_tiers() -> None:
+    policy = default_policy()
+    assert policy.model("glm", "light") == "openrouter/z-ai/glm-5.3-flash"
+    assert policy.model("glm", "deep") == "openrouter/z-ai/glm-5.3-flash"
+
+
+@pytest.mark.parametrize("tier", ["light", "deep"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "glm-5.3",
+        "z-ai/glm-5.3",
+        "openrouter/z-ai/glm-5.3",
+        "openrouter/z-ai/glm-5.3-flashx",
+        "openrouter/z-ai/glm-5.3-prime",
+        "openrouter/~z-ai/glm-flash-latest",
+        "opencode-go/glm-5.3",
+    ],
+)
+def test_any_other_glm_model_is_refused(tmp_path: Path, tier: str, model: str) -> None:
+    path = tmp_path / "reviewer.yaml"
+    path.write_text(f"models:\n  {tier}:\n    glm: {model}\n")
+    with pytest.raises(ValidationError, match="GLM 5.3 Flash only.*operator cost rule 2026-10-13"):
+        load_policy(path)
 
 
 def test_policy_file_overrides_only_what_it_names(tmp_path: Path) -> None:
@@ -78,22 +107,25 @@ def test_an_implemented_by_trailer_names_a_producer_too() -> None:
     )
     assert producer_providers([message]) == {"codex", "claude"}
     assert producer_providers(["x\n\nimplemented-by: agy/gemini-4 (ha r1)"]) == {"agy"}
-    # a worker that can never judge (an HTTP preset) excludes nothing
-    assert producer_providers(["x\n\nImplemented-by: glm/glm-5.3-flash (ha r2)"]) == frozenset()
+    assert producer_providers(["x\n\nImplemented-by: glm/glm-5.3-flash (ha r2)"]) == {"glm"}
+    assert producer_providers(["x\n\nImplemented-by: opencode-go/glm-5.3-flash (ha r3)"]) == {"glm"}
+    assert producer_providers(["x\n\nImplemented-by: opencode/other-model (ha r4)"]) == {"glm"}
+    for name in ("GLM", "Z-AI", "Zhipu"):
+        assert producer_providers([f"x\n\nCo-Authored-By: {name} <n@a>"]) == {"glm"}
     # the trailer is a line of its own, not a phrase in the body
     assert producer_providers(["x\n\nsee Implemented-by: codex/y in the thread"]) == frozenset()
 
 
 def test_chain_for_a_pr_never_includes_the_producer() -> None:
     policy = default_policy()
-    assert policy.chain_for(producers=frozenset({"claude"})) == ("agy", "codex")
+    assert policy.chain_for(producers=frozenset({"claude"})) == ("glm", "codex", "agy")
     # an unknown producer excludes the ecosystem's default producer (sessions are Claude Code):
     # found by the independent reviewer (PR #3, third pass)
-    assert policy.chain_for(producers=frozenset()) == ("agy", "codex")
-    # every producer is excluded: a change written by Claude and ha codex is judged by agy
-    assert policy.chain_for(producers=frozenset({"claude", "codex"})) == ("agy",)
+    assert policy.chain_for(producers=frozenset()) == ("glm", "codex", "agy")
+    # every producer is excluded: Claude and ha codex leave two independent judges
+    assert policy.chain_for(producers=frozenset({"claude", "codex"})) == ("glm", "agy")
     # and none is left when all wrote it: the pass fails closed, never a producer judging
-    assert policy.chain_for(producers=frozenset({"claude", "codex", "agy"})) == ()
+    assert policy.chain_for(producers=frozenset({"claude", "codex", "agy", "glm"})) == ()
     assert policy.unknown_producer_excludes == ("claude",)
     assert policy.mode_for(PR, docs_only=False) == "light"
     big = replace(PR, additions=500)
@@ -450,6 +482,75 @@ def test_the_agy_profile_carries_its_credentials(tmp_path: Path) -> None:
     assert spec.profile.credentials == CREDENTIALS["agy"] and spec.profile.guard is not None
     spec = build_spec(PR, "prompt", policy, provider="codex", tier="light", root=tmp_path)
     assert spec.profile.credentials.paths == ()
+
+
+@pytest.mark.parametrize("tier", ["light", "deep"])
+def test_the_glm_profile_carries_its_opencode_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tier: str
+) -> None:
+    from rail.reviewer.judges import CREDENTIALS, build_spec
+
+    monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
+    spec = build_spec(PR, "prompt", default_policy(), provider="glm", tier=tier, root=tmp_path)
+    assert spec.model == "openrouter/z-ai/glm-5.3-flash"
+    assert spec.name == f"review-hawkixs-red-probe-7-{PR.head_sha[:7]}-glm"
+    assert spec.profile.credentials == CREDENTIALS["glm"]
+    assert spec.profile.credentials.paths == (".local/share/opencode/auth.json",)
+    assert spec.profile.credentials.mode == "symlink"
+    assert spec.profile.mcp is None and spec.profile.guard is None
+
+
+def test_the_pinned_runtime_exports_opencode_provider() -> None:
+    from headless_agents.providers.opencode import OpenCodeProvider
+
+    assert callable(OpenCodeProvider.run)
+
+
+def test_the_glm_runner_uses_the_real_home_and_reads_the_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    import headless_agents.providers.opencode as opencode
+
+    from rail.reviewer.judges import build_spec, run_provider
+
+    real_home = tmp_path / "real-home"
+    monkeypatch.setenv("HOME", str(real_home))
+    spec = build_spec(PR, "prompt", default_policy(), provider="glm", tier="light", root=tmp_path)
+    report = '{"verdict": "approve", "summary": "clean", "findings": []}'
+    seen = {}
+
+    class StubOpenCodeProvider:
+        def __init__(self, *, real_home):
+            seen["real_home"] = real_home
+
+        def run(self, received):
+            seen["spec"] = received
+            received.report_log.write_text(report)
+            return SimpleNamespace(exit_code=0)
+
+    monkeypatch.setattr(opencode, "OpenCodeProvider", StubOpenCodeProvider)
+    assert run_provider("glm", spec) == (0, report)
+    assert seen == {"real_home": Path.home(), "spec": spec}
+    assert Path(spec.environment["HOME"]) != real_home
+
+
+def test_the_glm_reply_carries_the_model_the_spec_ran(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
+    seen = {}
+
+    def runner(provider, spec):
+        seen["model"] = spec.model
+        return 0, '{"verdict": "approve", "summary": "clean", "findings": []}'
+
+    reply = judge(
+        PR, DIFF, default_policy(), provider="glm", tier="light", runner=runner, root=tmp_path
+    )
+    assert reply.verdict is not None and reply.verdict.verdict == "approve"
+    assert reply.model == seen["model"] == "openrouter/z-ai/glm-5.3-flash"
 
 
 @pytest.mark.parametrize(
