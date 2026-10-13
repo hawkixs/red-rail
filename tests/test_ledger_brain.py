@@ -73,6 +73,8 @@ def _ledger(tmp_path: Path, *, agent: str = "op") -> tuple[BrainLedger, FakeBrai
         "null_contract",
         "missing_revision",
         "missing_created_at",
+        "invalid_created_at",
+        "invalid_revision",
         "invalid_contract",
         "null_bindings",
         "missing_receipt_id",
@@ -99,6 +101,10 @@ def test_list_rejects_malformed_delivery_view(
         del view["contract"]["contract_revision"]
     elif shape == "missing_created_at":
         del view["contract"]["created_at"]
+    elif shape == "invalid_created_at":
+        view["contract"]["created_at"] = "not-a-date"
+    elif shape == "invalid_revision":
+        view["contract"]["contract_revision"] = "x"
     elif shape == "invalid_contract":
         del view["contract"]["objective"]
     elif shape == "null_bindings":
@@ -116,7 +122,7 @@ def test_list_rejects_malformed_delivery_view(
         ledger.list("red-probe")
 
 
-def test_list_does_not_hide_computation_value_errors(
+def test_list_wraps_record_building_value_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ledger, _, _ = _ledger(tmp_path)
@@ -124,12 +130,13 @@ def test_list_does_not_hide_computation_value_errors(
         "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
     )
 
-    def fail(row):
-        raise ValueError("computation bug")
+    def fail(row: dict[str, object]) -> Record:
+        raise ValueError("invalid record value")
 
     monkeypatch.setattr(ledger, "_contract_record", fail)
-    with pytest.raises(ValueError, match="computation bug"):
+    with pytest.raises(LedgerError, match="malformed delivery view") as error:
         ledger.list("red-probe")
+    assert isinstance(error.value.__cause__, ValueError)
 
 
 class TestBrainLedgerContract(LedgerContract):
