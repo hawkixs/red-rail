@@ -112,7 +112,11 @@ one line per `not_reviewed` id: "F-x: not re-verified (file not seen), keeps <st
 
 D5 — **A judge cannot block on what it did not see.** A *new* finding is demoted when its
 location is not seen in its reply's `Sight`: a file outside the piece, a line outside the
-visible hunks of a cut file, or no line on a cut file. This applies in both paths. Demotion
+visible hunks of a cut file, or no line on a cut file. This applies in both paths. In the
+single-piece path the piece IS the judged diff, so a file outside the judged diff keeps today's
+rule there: the rubric already caps such a doubt at `important`, and the ticket is about partial
+views, not about findings on untouched files (amended at implementation, when an existing test
+showed the wider reading would change that unrelated behaviour). Demotion
 sets the severity to `important` AND the class to `note`. Today's `_within_part` lowers only
 the severity, and on `spec_plan` `rounds.enforce_class` keeps a proposed `blocker` class, so
 the finding still blocks.
