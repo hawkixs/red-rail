@@ -512,3 +512,35 @@ def test_plan_without_the_host_file_fails_before_printing_a_step(tmp_path: Path)
     assert out.exit_code == 1
     assert "site private-1" in out.output and "nowhere.yaml" in out.output
     assert "GET " not in out.output and "ssh " not in out.output
+
+
+class FailingHost(RecordingHost):
+    def __init__(self, stderr: str) -> None:
+        super().__init__()
+        self.stderr = stderr
+
+    def __call__(self, args, **kwargs):
+        if args[0] == "ssh":
+            self.argv.append(list(args))
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr=self.stderr)
+        return super().__call__(args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        f'migration_refused reason=db_unreachable remedy="check {BIND}:5432"\n' + "noise\n" * 600,
+        f"bind {BIND}:9100 failed: address already in use\n",
+    ],
+    ids=["refusal-line", "ordinary-tail"],
+)
+def test_a_failed_remote_step_never_names_the_site_address(tmp_path: Path, stderr: str) -> None:
+    """The CLI prints the failure verbatim (review of #102): behind a site, both the refusal
+    line and the ordinary tail carry the site's name, never its address."""
+    repo = _site_repo(tmp_path / "site", SITE_SAFE)
+    target = PrivateCompose(
+        repo, load_rail_config(repo), sites=_host(tmp_path), run=FailingHost(stderr)
+    )
+    with pytest.raises(DeployError) as caught:
+        target.apply(_artefact(repo))
+    assert BIND not in str(caught.value) and "private-1" in str(caught.value)

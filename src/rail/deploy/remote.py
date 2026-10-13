@@ -84,10 +84,12 @@ class MigrationRefusal:
 
 
 def migration_refusal(text: str) -> MigrationRefusal | None:
-    """The last line of the remote output that is exactly a refusal line, or None."""
+    """The last line of the remote output that is exactly a refusal line, or None. Lines are
+    split on `\n` only and never stripped: padding, a vertical tab or a form feed makes the
+    line something else, which stays in the ordinary tail (review of #102)."""
     found = None
-    for line in text.splitlines():
-        match = _REFUSAL.fullmatch(line.strip())
+    for line in text.split("\n"):
+        match = _REFUSAL.fullmatch(line)
         if match is not None:
             found = match
     if found is None:
@@ -282,14 +284,20 @@ class RemoteTarget:
             raise Locked((done.stderr or done.stdout).strip())
         if done.returncode != 0:
             refusal = migration_refusal(f"{done.stderr or ''}\n{done.stdout or ''}")
+            # the CLI prints this message as it is: behind a site, never the site's address
             if refusal is not None:
                 raise DeployError(
-                    f"remote deployment of {artefact.version} refused by the project's "
-                    f"migration preflight (exit {done.returncode}): {refusal.describe()}"
+                    self.redact(
+                        f"remote deployment of {artefact.version} refused by the project's "
+                        f"migration preflight (exit {done.returncode}): {refusal.describe()}"
+                    )
                 )
             detail = _tail(done.stderr or done.stdout)
             raise DeployError(
-                f"remote deployment of {artefact.version} failed (exit {done.returncode}): {detail}"
+                self.redact(
+                    f"remote deployment of {artefact.version} failed "
+                    f"(exit {done.returncode}): {detail}"
+                )
             )
         return self.verify(artefact)
 
