@@ -424,6 +424,12 @@ ACTIVE_DELEGATION = (
 SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
+def _trusting(config: Path, *ids: str) -> Path:
+    """The host's reviewer.yaml naming the delegations agents may rule under."""
+    config.write_text(config.read_text() + "delegations: [" + ", ".join(ids) + "]\n")
+    return config
+
+
 def _agent_rule(
     config: Path, monkeypatch, *, decision_text=ACTIVE_DELEGATION, ruling="fix", extra=None
 ):
@@ -474,6 +480,7 @@ def test_an_agent_records_a_fix_ruling_under_an_active_delegation(
     """An agent, not at a terminal, records a fix ruling that names an active delegation decision
     and carries evidence; the ruling keeps the agent's identity, the decision id and the proof."""
     repo, config = _awaiting_repo(tmp_path)
+    _trusting(config, "d47ac557")
     out, asked = _agent_rule(config, monkeypatch)
     assert out.exit_code == 0, out.output
     assert asked == [(DELEGATION, "agent:claude-code:rail")]
@@ -536,8 +543,27 @@ def test_an_agent_ruling_is_refused_without_writing(
 ) -> None:
     """carry-forward stays the operator's; a fix needs a verified active delegation and evidence."""
     repo, config = _awaiting_repo(tmp_path)
+    _trusting(config, "d47ac557")
     out, _ = _agent_rule(config, monkeypatch, **kwargs)
     assert out.exit_code == 2 and needle in out.output, out.output
+    assert not FileLedger(repo / RECEIPTS_DIR).list(
+        "red-alpha", attestation=AttestationKind.REVIEW_RULING
+    )
+
+
+@pytest.mark.parametrize("trusted", [(), ("c5773695",)], ids=["none", "another"])
+def test_an_agent_ruling_needs_a_delegation_the_host_trusts(
+    tmp_path: Path, monkeypatch, trusted: tuple[str, ...]
+) -> None:
+    """A title in brain proves nothing: any writer can log "Operator delegation …". The host's
+    reviewer.yaml names the delegations agents may rule under; another id is refused before
+    brain is even asked, and nothing is written."""
+    repo, config = _awaiting_repo(tmp_path)
+    if trusted:
+        _trusting(config, *trusted)
+    out, asked = _agent_rule(config, monkeypatch)
+    assert out.exit_code == 2 and "not one the host trusts" in out.output, out.output
+    assert asked == []
     assert not FileLedger(repo / RECEIPTS_DIR).list(
         "red-alpha", attestation=AttestationKind.REVIEW_RULING
     )

@@ -246,7 +246,7 @@ def rule(
         if not stdin_is_tty():
             raise click.UsageError("a ruling is the operator's gesture, typed at a terminal")
     elif actor.startswith("agent:"):
-        agent_evidence = _agent_fix_ruling(actor, ruling, delegation, evidence_sha, evidence)
+        agent_evidence = {}  # filled once the host's trusted delegations are read
     else:
         raise click.UsageError(f"a ruling is the operator's gesture, not {actor}'s")
     text = decision.strip()
@@ -261,6 +261,10 @@ def rule(
     except (PrivateFileError, ValueError) as exc:
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc
+    if agent_evidence is not None:
+        agent_evidence = _agent_fix_ruling(
+            actor, ruling, delegation, evidence_sha, evidence, trusted=config.delegations
+        )
     watched = {r.slug: r for r in config.repositories}
     if repository not in watched:
         raise click.UsageError(f"{repository} is not watched by the reviewer's configuration")
@@ -317,6 +321,8 @@ def _agent_fix_ruling(
     delegation: str | None,
     evidence_sha: str | None,
     evidence: str | None,
+    *,
+    trusted: tuple[str, ...],
 ) -> dict:
     """What an agent's ruling records beside the operator's fields, or a refusal: `fix` only,
     an active delegation read back from brain, a commit sha and the proof (decision f38ce645)."""
@@ -348,8 +354,16 @@ def _agent_fix_ruling(
         refuse_unwritable([proof])
     except Unwritable as exc:
         raise click.UsageError(str(exc)) from exc
+    named = (delegation or "").strip().lower()
+    if not any(named.startswith(t) or t.startswith(named) for t in trusted if len(named) >= 8):
+        raise click.UsageError(
+            f"delegation {named!r} is not one the host trusts: the operator lists the "
+            "delegations agents may rule under in reviewer.yaml (`delegations:`)"
+        )
     try:
-        decision_id = verify_delegation((delegation or "").strip(), agent=actor)
+        decision_id = verify_delegation(named, agent=actor)
     except DelegationRefused as exc:
         raise click.UsageError(str(exc)) from exc
+    if not any(decision_id.startswith(t) for t in trusted):
+        raise click.UsageError(f"decision {decision_id} is not one the host trusts")
     return {"delegation": decision_id, "evidence": {"sha": sha, "proof": proof}}
