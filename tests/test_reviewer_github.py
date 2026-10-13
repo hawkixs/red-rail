@@ -137,6 +137,36 @@ def test_diff_and_commit_messages() -> None:
     ]
 
 
+def test_commit_shas_are_the_pull_request_commits() -> None:
+    """An agent's evidence must cite one of these: what the pull request already publishes."""
+    recorder = Recorder(
+        {
+            ("POST", "/app/installations/456/access_tokens"): TOKEN,
+            ("GET", "/repos/hawkixs/red-rail/pulls/7/commits"): [
+                {"sha": "a" * 40, "commit": {"message": "feat: x"}},
+                {"sha": "b" * 40, "commit": {"message": "fix: y"}},
+            ],
+        }
+    )
+    assert _app(recorder).commit_shas("hawkixs/red-rail", 7) == ["a" * 40, "b" * 40]
+
+
+def test_commit_shas_reads_every_page() -> None:
+    """A pull request longer than one page keeps all its commits citable (codex, red-rail#96)."""
+    pages = {"1": [{"sha": f"{n:040x}"} for n in range(100)], "2": [{"sha": "f" * 40}]}
+
+    class Paged(Recorder):
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/pulls/7/commits"):
+                self.requests.append(request)
+                return httpx.Response(200, json=pages.get(request.url.params.get("page", "1"), []))
+            return super().__call__(request)
+
+    app = _app(Paged({("POST", "/app/installations/456/access_tokens"): TOKEN}))
+    shas = app.commit_shas("hawkixs/red-rail", 7)
+    assert len(shas) == 101 and shas[-1] == "f" * 40
+
+
 def test_check_run_lifecycle_and_lookup() -> None:
     recorder = Recorder(
         {

@@ -3,6 +3,7 @@ where their checkouts (and therefore their ledgers) are. Private file, never in 
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -35,6 +36,19 @@ class ReviewerConfig(BaseModel):
     repositories: list[RepositoryConfig] = Field(min_length=1)
     poll_seconds: int = Field(default=60, ge=5, le=3600)
     policy: ReviewPolicy = Field(default_factory=ReviewPolicy)
+    # the operator delegations an agent's fix ruling may stand on (decision f38ce645): brain ids,
+    # full or a unique prefix of 8 hex characters or more. A title in brain proves nothing — any
+    # writer can log one — so the host file, the operator's, names the delegations it trusts,
+    # and the coordination adds its succession's id at each handover
+    delegations: tuple[str, ...] = ()
+
+    @field_validator("delegations")
+    @classmethod
+    def _delegation_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for item in value:
+            if not re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]{0,28}", item):
+                raise ValueError(f"delegations: {item!r} is not a brain decision id")
+        return value
 
     @field_validator("private_key_file")
     @classmethod
