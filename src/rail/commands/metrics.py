@@ -8,6 +8,7 @@ from pathlib import Path
 
 import click
 from pydantic import ValidationError
+from yaml import YAMLError
 
 from rail.commands._options import json_option, repo_option
 from rail.ledger import LedgerError, open_ledger
@@ -109,9 +110,43 @@ def publish(config_path: Path | None, out: Path | None) -> None:
             github.close()
         destination = out or publication.default_output()
         size = publication.write(answer, destination)
-    except (ValueError, OSError, LedgerError, GitHubError, PrivateFileError, jwt.PyJWTError) as exc:
+    except (
+        ValueError,
+        OSError,
+        LedgerError,
+        GitHubError,
+        PrivateFileError,
+        jwt.PyJWTError,
+        YAMLError,
+    ) as exc:
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc
     assert answer.autonomy is not None
     coverage = answer.autonomy.coverage
     click.echo(f"{destination} {size} bytes {coverage.read}/{coverage.expected} read")
+
+
+@command.command("serve")
+@click.option(
+    "--file",
+    "file_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Default: $XDG_STATE_HOME/red-rail/metrics.json (or ~/.local/state/red-rail/metrics.json)."
+    ),
+)
+@click.option("--port", type=click.IntRange(0, 65535), default=9230, show_default=True)
+def serve(file_path: Path | None, port: int) -> None:
+    """Serve strictly validated metrics on 127.0.0.1 only."""
+    from rail import publish as publication
+    from rail.serve import create_server
+
+    if file_path is None:
+        file_path = publication.default_output()
+    try:
+        with create_server(file_path, port=port) as server:
+            server.serve_forever()
+    except OSError as exc:
+        click.echo(f"error: {exc}", err=True)
+        raise SystemExit(1) from exc

@@ -1,0 +1,6 @@
+[Unit]
+Description=Publish red-rail metrics
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/rail metrics publish

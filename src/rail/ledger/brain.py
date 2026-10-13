@@ -334,7 +334,7 @@ class BrainLedger:
             if kind in (None, RecordKind.ATTESTATION):
                 records.extend(self._attestation_records(attestation))
                 records.extend(self._milestone_records(view, attestation))
-        except (KeyError, TypeError, AttributeError, ValidationError) as exc:
+        except (KeyError, TypeError, AttributeError, ValidationError, ValueError) as exc:
             raise LedgerError("brain returned a malformed delivery view") from exc
         return sorted(records, key=lambda r: (r.recorded_at, r.digest))
 

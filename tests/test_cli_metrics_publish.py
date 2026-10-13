@@ -199,6 +199,42 @@ def test_publish_two_repositories(publication: dict[str, Any]) -> None:
     assert publication["github"].closed
 
 
+def test_invalid_reviewer_yaml_prints_error(publication: dict[str, Any]) -> None:
+    publication["config"].write_text("repositories: [\n")
+    publication["config"].chmod(0o600)
+    result = invoke(publication)
+    assert result.exit_code == 1
+    assert result.stderr.startswith("error: ")
+    assert "Traceback" not in result.output
+    assert isinstance(result.exception, SystemExit)
+    assert not publication["out"].exists()
+
+
+def test_computation_value_error_fails_run_and_keeps_previous_file(
+    publication: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rail import publish
+    from rail.reviewer.config import load_reviewer_config
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise ValueError("computation bug")
+
+    monkeypatch.setattr(publish, "window_samples", fail)
+    with pytest.raises(ValueError, match="computation bug"):
+        publish.collect(
+            load_reviewer_config(publication["config"]),
+            now=NOW,
+            clock=publication["clock"],
+            open_ledger=publication["open_ledger"],
+            github=publication["github"],
+        )
+    publication["out"].parent.mkdir()
+    publication["out"].write_bytes(b"previous")
+    result = invoke(publication)
+    assert result.exit_code == 1 and "error: computation bug" in result.output
+    assert publication["out"].read_bytes() == b"previous"
+
+
 def test_generated_at_is_one_clock_read_after_all_computations(
     publication: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
