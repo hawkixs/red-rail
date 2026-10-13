@@ -245,6 +245,13 @@ class GitHubApp:
             )
         )
 
+    def commit_shas(self, repository: str, number: int) -> list[str]:
+        """The pull request's own commits: what it already publishes."""
+        data = self._request(
+            "GET", f"/repos/{repository}/pulls/{number}/commits", params={"per_page": "100"}
+        )
+        return [str(item["sha"]) for item in data]
+
     def commit_messages(self, repository: str, number: int) -> list[str]:
         data = self._request(
             "GET", f"/repos/{repository}/pulls/{number}/commits", params={"per_page": "100"}

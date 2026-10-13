@@ -5,8 +5,7 @@ delegation. Anything it cannot read for certain is a refusal, never a pass."""
 from __future__ import annotations
 
 import re
-import subprocess
-from pathlib import Path
+from collections.abc import Callable
 
 # brain_get renders a decision as markdown. The record's OWN header is its first two lines, in
 # this order — the title with the id, then the status — and nothing else counts: a delegation
@@ -92,32 +91,29 @@ _PARSE = re.compile(
 )
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False, timeout=60
-    )
-
-
-def evidence_refusal(repo: Path, sha: str, proof: str) -> str | None:
-    """Why the evidence does not hold in `repo` at `sha`, or None. The grammar alone still leaves
-    names free (codex, red-rail#96: `tests/sk_live_<key>.py`), so every reference must name what
-    the repository already publishes at that commit: the file exists there, a `::test` is defined
-    in it, a `:line` is within it. A reference that names nothing real is refused; one that does
-    discloses nothing the repository does not already hold."""
-    if _git(repo, "cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
-        _git(repo, "fetch", "-q", "origin", sha)
-        if _git(repo, "cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
-            return f"--evidence-sha {sha} is not a commit of this repository or its origin"
+def evidence_refusal(
+    commits: list[str], read: Callable[[str], str | None], sha: str, proof: str
+) -> str | None:
+    """Why the evidence does not hold at `sha`, or None. The grammar alone still leaves names
+    free (codex, red-rail#96: `tests/sk_live_<key>.py`), and a commit of the host's checkout or
+    of any branch can be made to hold them (the background security review). So `sha` must be
+    one of the pull request's OWN commits (`commits`, read from GitHub), and every reference must
+    name what that commit holds (`read(path)`, GitHub's file at `sha`): the file exists, a
+    `::test` is defined in it, a `:line` is within it. A reference then names only what the
+    pull request already publishes, and the ruling discloses nothing new."""
+    full = [c for c in commits if c.startswith(sha)]
+    if len(full) != 1:
+        return f"--evidence-sha {sha} is not a commit of this pull request"
     for reference in re.split(r"[ ,]+", proof.strip()):
         parsed = _PARSE.fullmatch(reference)
         if parsed is None:
             return f"--evidence {reference!r} is not a code reference"
-        shown = _git(repo, "show", f"{sha}:{parsed.group('path')}")
-        if shown.returncode != 0:
+        text = read(parsed.group("path"))
+        if text is None:
             return f"--evidence names {parsed.group('path')}, which is not in {sha[:12]}"
-        if (line := parsed.group("line")) and int(line) > len(shown.stdout.splitlines()):
+        if (line := parsed.group("line")) and int(line) > len(text.splitlines()):
             return f"--evidence line {line} is beyond {parsed.group('path')} at {sha[:12]}"
         test = parsed.group("test")
-        if test and not re.search(rf"^\s*(?:async\s+)?def {re.escape(test)}\(", shown.stdout, re.M):
+        if test and not re.search(rf"^\s*(?:async\s+)?def {re.escape(test)}\(", text, re.M):
             return f"--evidence test {test} is not defined in {parsed.group('path')} at {sha[:12]}"
     return None

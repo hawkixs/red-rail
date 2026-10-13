@@ -274,10 +274,30 @@ def rule(
     repo_path = watched[repository].path
     if agent_evidence:
         from rail.reviewer.delegation import evidence_refusal
+        from rail.reviewer.github import GitHubApp, GitHubError
 
         proof = agent_evidence["evidence"]
-        if (why := evidence_refusal(repo_path, proof["sha"], proof["proof"])) is not None:
+        github = GitHubApp(
+            app_id=config.app_id,
+            installation_id=config.installation_id,
+            private_key_pem=config.private_key_pem(),
+        )
+        try:
+            commits = github.commit_shas(repository, pr)
+            sha = next((c for c in commits if c.startswith(proof["sha"])), proof["sha"])
+            why = evidence_refusal(
+                commits,
+                lambda path: github.file_at(repository, path, sha),
+                proof["sha"],
+                proof["proof"],
+            )
+        except GitHubError as exc:
+            raise click.UsageError(f"cannot read the evidence on GitHub: {exc}") from exc
+        finally:
+            github.close()
+        if why is not None:
             raise click.UsageError(why)
+        proof["sha"] = sha  # the full sha the pull request knows
     project = load_rail_config(repo_path).project
     ledger = open_ledger(repo_path)
     target = _PR(repository=repository, number=pr)

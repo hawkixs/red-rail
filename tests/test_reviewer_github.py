@@ -137,6 +137,20 @@ def test_diff_and_commit_messages() -> None:
     ]
 
 
+def test_commit_shas_are_the_pull_request_commits() -> None:
+    """An agent's evidence must cite one of these: what the pull request already publishes."""
+    recorder = Recorder(
+        {
+            ("POST", "/app/installations/456/access_tokens"): TOKEN,
+            ("GET", "/repos/hawkixs/red-rail/pulls/7/commits"): [
+                {"sha": "a" * 40, "commit": {"message": "feat: x"}},
+                {"sha": "b" * 40, "commit": {"message": "fix: y"}},
+            ],
+        }
+    )
+    assert _app(recorder).commit_shas("hawkixs/red-rail", 7) == ["a" * 40, "b" * 40]
+
+
 def test_check_run_lifecycle_and_lookup() -> None:
     recorder = Recorder(
         {

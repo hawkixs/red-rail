@@ -470,32 +470,35 @@ def _agent_rule(
             "--evidence",
             "tests/test_a.py::test_renamed",
         ]
-    real = _commit_evidence(config)
-    extra = [real if value == SHA else value for value in extra]
+    _pull_request_on_github(monkeypatch)
     out = CliRunner().invoke(main, [*args, *extra], input="")
     return out, asked
 
 
-def _commit_evidence(config: Path) -> str:
-    """The files an agent's evidence names, committed in the watched repository: the commit
-    the ruling cites. `SHA` in a test's arguments stands for it."""
-    from tests.helpers import commit_all
+EVIDENCE_FILES = {
+    "tests/test_a.py": "def test_renamed():\n    assert True\n",
+    "tests/unit/test_tables.py": "def test_depends_on_keys_are_validated():\n    assert True\n",
+    "src/a.py": "".join(f"x{n} = {n}\n" for n in range(20)),
+}
 
-    repo = Path(
-        next(
-            line.split("path:", 1)[1].strip()
-            for line in config.read_text().splitlines()
-            if "path:" in line
-        )
-    )
-    (repo / "tests" / "unit").mkdir(parents=True, exist_ok=True)
-    (repo / "tests" / "test_a.py").write_text("def test_renamed():\n    assert True\n")
-    (repo / "tests" / "unit" / "test_tables.py").write_text(
-        "def test_depends_on_keys_are_validated():\n    assert True\n"
-    )
-    (repo / "src").mkdir(exist_ok=True)
-    (repo / "src" / "a.py").write_text("".join(f"x{n} = {n}\n" for n in range(20)))
-    return commit_all(repo, "test: the evidence")
+
+def _pull_request_on_github(monkeypatch) -> None:
+    """PR #7 as GitHub serves it: `SHA` is one of its commits and holds `EVIDENCE_FILES`."""
+
+    class PullRequestOnGitHub:
+        def __init__(self, **kwargs):
+            pass
+
+        def commit_shas(self, repository, number):
+            return ["1" * 40, SHA]
+
+        def file_at(self, repository, path, ref):
+            return EVIDENCE_FILES.get(path) if ref == SHA else None
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("rail.reviewer.github.GitHubApp", PullRequestOnGitHub)
 
 
 def test_an_agent_records_a_fix_ruling_under_an_active_delegation(
@@ -514,10 +517,8 @@ def test_an_agent_records_a_fix_ruling_under_an_active_delegation(
     assert ruling.issuer == "agent:claude-code:rail"
     assert ruling.data["ruling"] == "fix"
     assert ruling.data["delegation"] == DELEGATION
-    from tests.helpers import git
-
     assert ruling.data["evidence"] == {
-        "sha": git(repo, "rev-parse", "HEAD"),
+        "sha": SHA,
         "proof": "tests/test_a.py::test_renamed",
     }
 
@@ -724,7 +725,8 @@ def test_code_references_are_valid_evidence(proof: str) -> None:
         ("tests/test_a.py::test_never_written", SHA, "not defined"),
         ("src/a.py:21", SHA, "beyond"),
         ("tests/sk_live_abcdefghijklmnop.py", SHA, "not in"),
-        ("tests/test_a.py::test_renamed", "f" * 40, "not a commit"),
+        # a commit of the host's checkout or of another branch, not of the pull request
+        ("tests/test_a.py::test_renamed", "f" * 40, "not a commit of this pull request"),
     ],
 )
 def test_evidence_must_name_what_the_commit_holds(
