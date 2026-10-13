@@ -29,6 +29,15 @@ Measured on brain-v42#376 from its verdict receipts:
 The incremental passes were never cut and never flipped. Every flip came from a whole-PR pass
 in pieces, one of which held a file too large to bound.
 
+Which cut it was is NOT established. The receipts record only `diff_truncated`, not the cut
+stage. In the chunked path, `diff_truncated` comes from `oversized()`: a file whose patch exceeds
+the split budget. That budget is computed over the whole provider chain, argv-limited providers
+included. So a file can be "oversized" for splitting while a provider without an argv limit
+(codex) still receives it whole (review round 2). The most likely attribution is an oversized
+file in the chunked path, but it remains unverified. The decisions below do not depend on it:
+they govern any judge that saw less than the judged diff, whichever cut produced it. The
+red-cockpit#21 case is as reported in the ticket and is not re-measured here.
+
 Mechanism, from the code at `61b6309`:
 
 1. `fixed` is sticky in `rounds.assign` **unless a judge repeats the finding's id in its
@@ -56,15 +65,31 @@ that text, one pure function computes a `Sight`. It holds the files whose patch 
 For each file cut inside, it holds the new-side line ranges of the hunks that are fully
 visible. A `Sight` never comes from a judge's own claim.
 
-D2 — **Which findings it governs.** A reply's word on an earlier finding is *admissible* when
-any of these holds:
-- the finding's file is not in the diff being judged at all (the delta, or the whole PR). This
-  case keeps today's excerpt rule (`blind`) unchanged, so a finding on a file the change does
-  not touch is still verified against its head excerpt;
+D2 — **Which findings it governs.** Header paths are kept exactly as `headers.HEADER` reads
+them: they are repository-relative, and a directory may legitimately be named `a` or `b`. A
+renamed file counts under both its old and its new path, in the judged diff and in a `Sight`
+alike. A finding's path is a judge's spelling, resolved against the judged diff's paths. The
+candidates are the spelling itself and the spelling with ONE leading `./`, `a/` or `b/`
+removed. Exactly one candidate in the judged diff resolves the finding to that path. None means
+it lies outside the judged diff. More than one is ambiguous, and its words are inadmissible.
+A reply's word on an earlier finding is *admissible* when one of these holds:
+- every header of the judged diff (the delta, or the whole PR) is readable, the finding lies
+  outside the judged diff, AND that finding's OWN head excerpt reached the judges.
+  `_head_excerpts` quotes windows around open findings only, so a `fixed` finding never
+  qualifies, even when another finding's window covers the same file. A finding on a file the
+  change does not touch is thus verified against its own excerpt, as today; any other is
+  moved by no one;
 - the file is complete in the reply's `Sight`;
 - the file is cut in the reply's `Sight`, the finding has a line, and that line is inside a
   fully visible hunk.
-Otherwise the word is inadmissible. A finding with no line on a cut file is inadmissible.
+Otherwise the word is inadmissible. This covers a finding with no line on a cut file, and any
+finding when a header of the judged diff cannot be read, since membership is then unknown.
+
+This deliberately reverses one behaviour. Today, a judge whose piece lacks a file but which
+read that file's head excerpt can keep a finding `still_open` against the judge that read the
+file in the diff (`test_a_judge_that_read_the_excerpt_keeps_its_still_open`). Under D2, for a
+file in the judged diff, the piece that holds the file decides. The excerpt governs only files
+outside it.
 
 D3 — **Inadmissible words are dropped, both kinds.** Before `_merge`, for every reply in both
 paths (pieces and single piece), and before `rounds.assign` sees anything:
@@ -77,19 +102,26 @@ last status: `fixed` stays fixed (sticky), and anything else stays `still_open`,
 D4 — **Named, never silent.** The verdict records two lists. `unseen_files` holds the files of
 the judged diff that no reply saw complete. `not_reviewed` holds the ids of earlier findings
 that no admissible reply answered while at least one inadmissible word about them was dropped.
-Both lists are written into the receipt data as new keys; older readers ignore them. The check
+Both lists are written into the receipt data as new keys; older readers ignore them. They are
+bounded: at most 50 paths for `unseen_files`, with `unseen_count` giving the full number, and
+`not_reviewed` is bounded by the findings cap. The payload budget is checked on the whole
+attestation, not only the findings. The check
 text replaces "covers the first part only" with the file list (capped, then "and N more"), plus
 one line per `not_reviewed` id: "F-x: not re-verified (file not seen), keeps <status>".
 `diff_truncated` keeps its meaning.
 
-D5 — **Blocking stays bounded as today.** `_within_part`'s demotion of a blocking *new*
-finding on a file outside the piece stays. D2 extends it to a line outside the visible hunks of
-a cut file in the reply's `Sight`, in both paths.
+D5 — **A judge cannot block on what it did not see.** A *new* finding is demoted when its
+location is not seen in its reply's `Sight`: a file outside the piece, a line outside the
+visible hunks of a cut file, or no line on a cut file. This applies in both paths. Demotion
+sets the severity to `important` AND the class to `note`. Today's `_within_part` lowers only
+the severity, and on `spec_plan` `rounds.enforce_class` keeps a proposed `blocker` class, so
+the finding still blocks.
 
 D6 — **Fail closed on an unreadable piece.** When a piece's headers cannot be parsed (the
-`_headers_parsed` case), its `Sight` is empty. All of its words on earlier findings in the
-judged diff are then inadmissible: no flip, never a silent "seen". Its new findings are kept as
-today (ticket `b1df8461`).
+`_headers_parsed` case), its `Sight` is empty. All of its words on earlier findings are then
+inadmissible: no flip, never a silent "seen". Its NEW findings are an explicit exception to the
+D5 demotion: they are kept as today, blocking included (ticket `b1df8461`), because a judge on
+an unreadable piece read a file the reviewer could not name.
 
 ## Non-goals
 
@@ -102,11 +134,14 @@ today (ticket `b1df8461`).
 
 ## Success criteria
 
-1. Replaying brain-v42#376's 09:42 and 10:29 passes (a fixture built from their shape: a piece
-   without the migration file repeats `F-376-1`; a cut piece answers on a line past its cut)
-   leaves both findings at their last status, and lists them as `not_reviewed`.
-2. A complete file in a piece still moves its findings both ways, exactly as today (existing
-   tests stay green unchanged, beyond the new receipt keys).
+1. Replaying the shape of brain-v42#376's 09:42 and 10:29 passes leaves both findings
+   `fixed`. In the fixture, a piece without the migration file repeats `F-376-1`'s id, and a
+   piece holding a cut `tables.py` repeats `F-376-2`'s id (no line). Each of the two assertions
+   fails on main on its own.
+2. A complete file in a piece still moves its findings both ways, as today. The single existing
+   test that encodes the reversed behaviour
+   (`test_a_judge_that_read_the_excerpt_keeps_its_still_open`) is rewritten to the new rule.
+   Every other existing test stays green.
 3. In the single-piece path, a file cut by `build_prompt` or by the argv shrink is covered by
    the same rule (a test for each cut).
 4. A finding on a file outside the judged diff is still governed by the excerpt rule alone.
