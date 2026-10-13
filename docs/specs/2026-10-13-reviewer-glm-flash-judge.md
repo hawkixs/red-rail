@@ -1,4 +1,4 @@
-# Reviewer: a GLM 5.3 Flash judge next to agy
+# Reviewer: a GLM 5.3 Flash judge, agy demoted to secondary
 
 Status: approved — 2026-10-13 (operator: "juge GLM, ok, mais prends GLM Flash, pas de GLM
 normal, ça coûte trop cher", typed ~09:35Z in the coordination session, relayed under the
@@ -38,11 +38,14 @@ the cost of the full GLM model is the operator's stated reason to never use it.
    merge (success criterion 5); if openrouter names the model differently, the constant changes,
    never the rule.
 
-3. **A full judge, placed after agy.** The default chain becomes `agy, glm, codex, claude`. For
-   a Claude + codex change it is `agy, glm`: light asks one or two judges as today, and the
-   arbitration rule of ticket `4cdeaed9` is unchanged — `glm` is a provider like the others, its
-   `request_changes` holds, its approve counts. It is not a fallback that only answers when agy
-   fails: an independent second voice is the point.
+3. **The primary judge; agy becomes secondary.** The default chain becomes
+   `glm, codex, claude, agy`. Operator decision, 2026-10-13 (typed in the red-rail session, after
+   this spec's first approval): "Antigravity va commencer à dégager des relecteurs principaux […]
+   on va utiliser tout le reste, qui marche bien, et puis Antigravity, on va le mettre en
+   secondaire". agy stays in the chain, last: it judges only when every provider before it is a
+   producer or has failed. For a Claude + codex change the chain is `glm, agy`. The arbitration
+   rule of ticket `4cdeaed9` is unchanged — `glm` is a provider like the others, its
+   `request_changes` holds, its approve counts.
 
 4. **Its producer is recognised, and it never judges its own work.** `PRODUCERS` gains the
    needles `glm`, `z-ai` and `zhipu` (all → `glm`). An `Implemented-by: opencode…/…` trailer also
@@ -84,8 +87,8 @@ the cost of the full GLM model is the operator's stated reason to never use it.
 
 ## Success criteria
 
-1. `ReviewPolicy().providers == ("agy", "glm", "codex", "claude")`; `chain_for` of a
-   Claude + codex change is `("agy", "glm")`.
+1. `ReviewPolicy().providers == ("glm", "codex", "claude", "agy")`; `chain_for` of a
+   Claude + codex change is `("glm", "agy")`.
 2. `policy.model("glm", "light") == policy.model("glm", "deep") == GLM_FLASH`.
 3. Loading a policy whose `models` name any other `glm` id fails, naming the rule; a test
    iterates over `glm-5.3`, `z-ai/glm-5.3`, `openrouter/z-ai/glm-5.3`, `glm-5.3-flashx` and

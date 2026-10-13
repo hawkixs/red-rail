@@ -18,7 +18,7 @@ The pinned headless-agents v0.2.0 ships `headless_agents.providers.opencode.Open
 - `GLM_FLASH = "openrouter/z-ai/glm-5.3-flash"`, with a comment carrying the operator's cost rule
   and the date.
 - `DEFAULT_MODELS["light"]["glm"] = DEFAULT_MODELS["deep"]["glm"] = GLM_FLASH`.
-- `providers` default `("agy", "glm", "codex", "claude")`.
+- `providers` default `("glm", "codex", "claude", "agy")` (agy secondary, operator decision 2026-10-13).
 - `prompt_limits` default gains `"glm": 115_000` (argv, like agy).
 - A `model_validator` on `ReviewPolicy`: for each tier, a `glm` model other than `GLM_FLASH`
   raises `ValueError("the glm judge runs GLM 5.3 Flash only (GLM_FLASH), operator cost rule
@@ -32,7 +32,7 @@ Tests (`tests/test_reviewer_core.py`):
   `openrouter/z-ai/glm-5.3`, `openrouter/z-ai/glm-5.3-flashx`, `openrouter/z-ai/glm-5.3-prime`,
   `openrouter/~z-ai/glm-flash-latest`, `opencode-go/glm-5.3`, at light and at deep, through
   `load_policy` of a written file.
-- `test_chain_for_a_pr_never_includes_the_producer`: Claude + codex → `("agy", "glm")`; all four
+- `test_chain_for_a_pr_never_includes_the_producer`: Claude + codex → `("glm", "agy")`; all four
   producers → `()`.
 
 Verify: the new tests fail before the change (glm missing from `Provider`, unknown model) and pass after; `uv run pytest -q tests/test_reviewer_core.py` exit code 0.
