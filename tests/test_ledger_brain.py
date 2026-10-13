@@ -66,6 +66,72 @@ def _ledger(tmp_path: Path, *, agent: str = "op") -> tuple[BrainLedger, FakeBrai
     return ledger, brain, ticket
 
 
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "missing_contract",
+        "null_contract",
+        "missing_revision",
+        "missing_created_at",
+        "invalid_contract",
+        "null_bindings",
+        "missing_receipt_id",
+        "missing_issued_at",
+        "invalid_receipt",
+        "invalid_proof",
+    ],
+)
+def test_list_rejects_malformed_delivery_view(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    ledger, brain, ticket = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    brain.integrate(ticket, "a" * 40, issued_at=T0)
+    view = ledger._view(required=True)
+    assert view is not None
+    if shape == "missing_contract":
+        del view["contract"]
+    elif shape == "null_contract":
+        view["contract"] = None
+    elif shape == "missing_revision":
+        del view["contract"]["contract_revision"]
+    elif shape == "missing_created_at":
+        del view["contract"]["created_at"]
+    elif shape == "invalid_contract":
+        del view["contract"]["objective"]
+    elif shape == "null_bindings":
+        view["bindings"] = None
+    elif shape == "missing_receipt_id":
+        del view["integration_receipt"]["id"]
+    elif shape == "missing_issued_at":
+        del view["integration_receipt"]["issued_at"]
+    elif shape == "invalid_receipt":
+        view["integration_receipt"] = [1]
+    else:
+        view["integration_receipt"]["proof"] = "malformed"
+    monkeypatch.setattr(ledger, "_view", lambda **kwargs: view)
+    with pytest.raises(LedgerError, match="malformed delivery view"):
+        ledger.list("red-probe")
+
+
+def test_list_does_not_hide_computation_value_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger, _, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+
+    def fail(row):
+        raise ValueError("computation bug")
+
+    monkeypatch.setattr(ledger, "_contract_record", fail)
+    with pytest.raises(ValueError, match="computation bug"):
+        ledger.list("red-probe")
+
+
 class TestBrainLedgerContract(LedgerContract):
     """Every test of the shared suite, on brain. `make_ledger` also opens the ticket's
     delivery workflow, because brain refuses an attestation before any contract."""

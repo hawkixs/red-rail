@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from rail.brain.client import BrainClient, BrainForbidden, BrainToolError, BrainUnreachable
 from rail.ledger import (
     BRAIN_MILESTONES,
@@ -324,13 +326,16 @@ class BrainLedger:
         view = self._view(required=False, history=HISTORY)
         if view is None:
             return []
-        if kind in (None, RecordKind.CONTRACT) and attestation is None:
-            records.append(self._contract_record(view["contract"]))
-        if kind in (None, RecordKind.BINDING) and attestation is None:
-            records.extend(self._binding_records(view))
-        if kind in (None, RecordKind.ATTESTATION):
-            records.extend(self._attestation_records(attestation))
-            records.extend(self._milestone_records(view, attestation))
+        try:
+            if kind in (None, RecordKind.CONTRACT) and attestation is None:
+                records.append(self._contract_record(view["contract"]))
+            if kind in (None, RecordKind.BINDING) and attestation is None:
+                records.extend(self._binding_records(view))
+            if kind in (None, RecordKind.ATTESTATION):
+                records.extend(self._attestation_records(attestation))
+                records.extend(self._milestone_records(view, attestation))
+        except (KeyError, TypeError, AttributeError, ValidationError) as exc:
+            raise LedgerError("brain returned a malformed delivery view") from exc
         return sorted(records, key=lambda r: (r.recorded_at, r.digest))
 
     def get(self, project: str, digest: str) -> Record | None:

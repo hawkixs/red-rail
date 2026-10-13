@@ -19,15 +19,18 @@ def _fmt(value: float | None, unit: str) -> str:
     return "n/a" if value is None else f"{value:g} {unit}".rstrip()
 
 
-@click.command("metrics")
+@click.group("metrics", invoke_without_command=True)
 @repo_option
 @click.option(
     "--window", type=click.IntRange(min=1), default=30, show_default=True, help="Window in days."
 )
 @click.option("--ci", is_flag=True, help="Skip workstation-only gates in the conformance score.")
 @json_option
-def command(repo: Path, window: int, ci: bool, as_json: bool) -> None:
+@click.pass_context
+def command(ctx: click.Context, repo: Path, window: int, ci: bool, as_json: bool) -> None:
     """Lead time, deployment frequency, change failure rate, recovery time, conformance."""
+    if ctx.invoked_subcommand is not None:
+        return
     try:
         cfg = load_rail_config(repo)
         ledger = open_ledger(repo)
@@ -60,3 +63,55 @@ def command(repo: Path, window: int, ci: bool, as_json: bool) -> None:
         f"conformance                 {c.passed}/{c.applicable} "
         f"({c.exceptions} declared exception(s))"
     )
+
+
+@command.command("publish")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Default: ~/.config/red-rail/reviewer.yaml",
+)
+@click.option(
+    "--out",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Default: $XDG_STATE_HOME/red-rail/metrics.json (or ~/.local/state/red-rail/metrics.json)."
+    ),
+)
+def publish(config_path: Path | None, out: Path | None) -> None:
+    """Publish delivery and autonomy metrics from the reviewer's read-only sources."""
+    import jwt
+
+    from rail import publish as publication
+    from rail.private import PrivateFileError
+    from rail.reviewer.config import DEFAULT_CONFIG, load_reviewer_config
+    from rail.reviewer.github import GitHubApp, GitHubError
+
+    try:
+        config = load_reviewer_config(config_path or DEFAULT_CONFIG)
+        github = GitHubApp(
+            app_id=config.app_id,
+            installation_id=config.installation_id,
+            private_key_pem=config.private_key_pem(),
+        )
+        try:
+            answer = publication.collect(
+                config,
+                now=datetime.now(UTC),
+                clock=lambda: datetime.now(UTC),
+                open_ledger=open_ledger,
+                github=github,
+            )
+        finally:
+            github.close()
+        destination = out or publication.default_output()
+        size = publication.write(answer, destination)
+    except (ValueError, OSError, LedgerError, GitHubError, PrivateFileError, jwt.PyJWTError) as exc:
+        click.echo(f"error: {exc}", err=True)
+        raise SystemExit(1) from exc
+    assert answer.autonomy is not None
+    coverage = answer.autonomy.coverage
+    click.echo(f"{destination} {size} bytes {coverage.read}/{coverage.expected} read")
