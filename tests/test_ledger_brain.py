@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from rail.brain.client import BrainClient, BrainForbidden
+from rail.brain.client import BrainClient, BrainForbidden, BrainToolError
 from rail.contracts import ATTESTATION_CONTRACT, TOOL_ERROR_CODES
 from rail.ledger import (
     AttestationKind,
@@ -552,6 +552,83 @@ def test_record_from_row_is_the_documented_mapping() -> None:
     assert record.attestation is AttestationKind.RELEASED and record.issuer == "operator"
     assert record.recorded_at == T0 and record.data == {"version": "1.0.0"}
     assert record.verify()
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        {},
+        {"items": None},
+        {"items": {}},
+        {"items": [None]},
+        {"items": [], "next_cursor": ""},
+        {"items": [], "next_cursor": 5},
+    ],
+)
+def test_malformed_attestation_pages_fail_the_read(tmp_path: Path, page: dict) -> None:
+    ledger, _, _ = _ledger(tmp_path)
+    ledger._call = lambda *args, **kwargs: page  # type: ignore[method-assign]
+    with pytest.raises(LedgerError, match="malformed page"):
+        ledger._attestation_records(None)
+
+
+def test_malformed_key_lookup_page_fails_the_read(tmp_path: Path) -> None:
+    ledger, _, _ = _ledger(tmp_path)
+    ledger._call = lambda *args, **kwargs: {}  # type: ignore[method-assign]
+    with pytest.raises(LedgerError, match="malformed page"):
+        ledger._row_by_key(AttestationKind.RELEASED, "r1")
+
+
+@pytest.mark.parametrize(
+    ("second_page", "message"),
+    [
+        ({"items": [{}], "next_cursor": None}, "malformed attestation"),
+        ({"items": None}, "malformed page"),
+    ],
+)
+def test_malformed_second_attestation_page_fails_the_read(
+    tmp_path: Path, second_page: dict, message: str
+) -> None:
+    ledger, _, _ = _ledger(tmp_path)
+    first = {"items": [], "next_cursor": "more"}
+    pages = iter((first, second_page))
+    ledger._call = lambda *args, **kwargs: next(pages)  # type: ignore[method-assign]
+    with pytest.raises(LedgerError, match=message):
+        ledger._attestation_records(None)
+
+
+def test_malformed_lookup_after_reused_key_keeps_receipt_spooled(tmp_path: Path) -> None:
+    ledger, _, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    real_call = ledger.client.call
+
+    def refuse_attest_then_return_malformed_page(name, arguments, *, agent=None):
+        if name == "brain_delivery_attest":
+            raise BrainToolError("idempotency_key_reused", "reused")
+        if name == "brain_delivery_attestation_list":
+            return {"items": None}
+        return real_call(name, arguments, agent=agent)
+
+    ledger.client.call = refuse_attest_then_return_malformed_page
+    with pytest.raises(LedgerError, match="malformed page"):
+        ledger.attest(
+            "red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1"
+        )
+    assert len(ledger.pending()) == 1
+
+
+def test_none_cursor_on_last_page_returns_all_records(tmp_path: Path) -> None:
+    ledger, brain, _ = _ledger(tmp_path)
+    ledger.contract_set(
+        "red-probe", CONTRACT, reason="bootstrap", issuer="op", idempotency_key="c0"
+    )
+    ledger.attest("red-probe", AttestationKind.RELEASED, RELEASE, issuer="op", idempotency_key="r1")
+    row = brain.attestations[-1]
+    pages = iter(({"items": [], "next_cursor": "more"}, {"items": [row], "next_cursor": None}))
+    ledger._call = lambda *args, **kwargs: next(pages)  # type: ignore[method-assign]
+    assert len(ledger._attestation_records(AttestationKind.RELEASED)) == 1
 
 
 def test_open_ledger_builds_the_brain_backend_from_the_manifest(

@@ -74,7 +74,10 @@ def record_from_row(project: str, row: dict[str, Any]) -> Record | None:
     """A brain attestation row as a red-rail record; None for a kind the rail does not
     know. The digest brain computed is cross-checked against the payload."""
     try:
-        kind = AttestationKind(str(row["kind"]))
+        kind_value = str(row["kind"])
+        kind = AttestationKind(kind_value)
+    except KeyError as exc:
+        raise LedgerError("brain returned a malformed attestation") from exc
     except ValueError:
         return None
     try:
@@ -91,8 +94,23 @@ def record_from_row(project: str, row: dict[str, Any]) -> Record | None:
             payload={"kind": kind.value, "data": data},
             recorded_at=_instant(row["emitted_at"]),
         )
-    except (KeyError, TypeError, ValueError) as exc:
-        raise LedgerError(f"brain row out of shape: {exc}") from exc
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise LedgerError("brain returned a malformed attestation") from exc
+
+
+def _page_items(page: Any) -> tuple[list[dict[str, Any]], str | None]:
+    """Reject malformed list responses so a partial ledger read cannot look complete."""
+    if not isinstance(page, dict):
+        raise LedgerError("brain returned a malformed page")
+    items = page.get("items")
+    cursor = page.get("next_cursor")
+    if (
+        not isinstance(items, list)
+        or any(not isinstance(row, dict) for row in items)
+        or (cursor is not None and (not isinstance(cursor, str) or not cursor))
+    ):
+        raise LedgerError("brain returned a malformed page")
+    return items, cursor
 
 
 class BrainLedger:
@@ -366,12 +384,13 @@ class BrainLedger:
                 "cursor": cursor,
             }
             page = self._call("brain_delivery_attestation_list", arguments)
-            for row in page.get("items", []):
+            items, next_cursor = _page_items(page)
+            for row in items:
                 # the contract already filters by issuer_project; the local check is a defence
                 if row.get("idempotency_key") == key and row.get("issuer_project") == self.project:
                     return row
-            cursor = page.get("next_cursor")
-            if not cursor:
+            cursor = next_cursor
+            if cursor is None:
                 return None
 
     def _settle(self, record: Record, receipt: Path, row: dict[str, Any]) -> Record:
@@ -491,12 +510,13 @@ class BrainLedger:
                 page = self._call("brain_delivery_attestation_list", arguments)
             except (BrainToolError, BrainUnreachable) as exc:
                 raise LedgerError(f"brain_delivery_attestation_list: {exc}") from exc
-            for row in page.get("items", []):
+            items, next_cursor = _page_items(page)
+            for row in items:
                 record = record_from_row(self.project, row)
                 if record is not None:
                     records.append(record)
-            cursor = page.get("next_cursor")
-            if not cursor:
+            cursor = next_cursor
+            if cursor is None:
                 return records
 
     def _milestone_record(self, receipt: dict[str, Any], kind: AttestationKind) -> Record:
