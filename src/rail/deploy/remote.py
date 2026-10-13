@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from collections.abc import Callable
@@ -54,6 +55,47 @@ class Parameters:
 
 def env_lines(pairs: tuple[tuple[str, str], ...]) -> str:
     return "".join(f"{key}={value}\n" for key, value in pairs)
+
+
+# A project's migration preflight refusal (ticket c14acfea, contract agreed with brain-v42):
+# one whole line, `migration_refused reason=<code> [tables=<a,b>] [remedy="<text>"]`. The rail
+# learns no project's internals: it renders the project's own fields, never its own remedy.
+# Anything off this grammar is not a refusal and stays in the ordinary tail (fail closed).
+_REFUSAL = re.compile(
+    r"migration_refused reason=(?P<reason>[a-z0-9_]+)"
+    r"(?: tables=(?P<tables>[a-z0-9_]+(?:,[a-z0-9_]+)*))?"
+    r'(?: remedy="(?P<remedy>[^"\n]*)")?'
+)
+
+
+@dataclass(frozen=True)
+class MigrationRefusal:
+    reason: str
+    tables: tuple[str, ...]
+    remedy: str | None
+
+    def describe(self) -> str:
+        parts = [f"reason={self.reason}"]
+        if self.tables:
+            parts.append("tables: " + ", ".join(self.tables))
+        if self.remedy:
+            parts.append(f"remedy: {self.remedy}")
+        return "; ".join(parts)
+
+
+def migration_refusal(text: str) -> MigrationRefusal | None:
+    """The last line of the remote output that is exactly a refusal line, or None."""
+    found = None
+    for line in text.splitlines():
+        match = _REFUSAL.fullmatch(line.strip())
+        if match is not None:
+            found = match
+    if found is None:
+        return None
+    tables = found["tables"]
+    return MigrationRefusal(
+        found["reason"], tuple(tables.split(",")) if tables else (), found["remedy"]
+    )
 
 
 def _tail(text: str) -> str:
@@ -239,6 +281,12 @@ class RemoteTarget:
         if done.returncode == LOCKED:
             raise Locked((done.stderr or done.stdout).strip())
         if done.returncode != 0:
+            refusal = migration_refusal(f"{done.stderr or ''}\n{done.stdout or ''}")
+            if refusal is not None:
+                raise DeployError(
+                    f"remote deployment of {artefact.version} refused by the project's "
+                    f"migration preflight (exit {done.returncode}): {refusal.describe()}"
+                )
             detail = _tail(done.stderr or done.stdout)
             raise DeployError(
                 f"remote deployment of {artefact.version} failed (exit {done.returncode}): {detail}"
