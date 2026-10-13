@@ -59,12 +59,12 @@ def verify_delegation(decision_id: str, *, agent: str) -> str:
 
 
 # what a proof may not carry, beyond the contract guard's IPv4 and credential prefixes: a URL
-# (it names a host and may carry userinfo), an `@`, and an IPv6 address in any of its forms,
-# trailing compression included. Candidates are runs of hex digits, dots and colons that are
-# not glued to a name, validated by `ipaddress` itself; a pytest node id's `::` sits between
-# names, so it is never a candidate.
+# (it names a host and may carry userinfo), an `@`, and an IPv6 address in any of its forms. Every
+# maximal run of hex digits, dots, colons and `%` holding two colons or more is a candidate,
+# whatever surrounds it (a `/` before it or a `/64` after it hid one), and `ipaddress` decides.
+# The one exemption is a pytest node id: a run that starts with `::` right after a name.
 _URL = re.compile(r"[a-z][a-z0-9+.-]*://", re.I)
-_IPV6_CANDIDATE = re.compile(r"(?<![\w./])[0-9a-f.:%]*:[0-9a-f.:%]*(?![\w/])", re.I)
+_HEX_RUN = re.compile(r"[0-9a-f.:%]+", re.I)
 
 
 def _is_ipv6(candidate: str) -> bool:
@@ -76,15 +76,36 @@ def _is_ipv6(candidate: str) -> bool:
         return False
 
 
+def _ipv6_in(proof: str) -> bool:
+    for match in _HEX_RUN.finditer(proof):
+        run = match.group(0)
+        if run.count(":") < 2:
+            continue
+        glued = match.start() > 0 and (
+            proof[match.start() - 1].isalnum() or proof[match.start() - 1] in "._"
+        )
+        if run.startswith("::") and glued:
+            # `module.py::name` is a test id; what follows the `::` is still checked, so
+            # `module.py::fe80::1` cannot hide an address behind the exemption
+            run = run[2:]
+            if run.count(":") < 1:
+                continue
+        trimmed = run.strip(".:")
+        candidates = {run, trimmed, run.rstrip(".")}
+        # a trailing `:port` or a leading `x.` glued in the run
+        candidates |= {c.rsplit(":", 1)[0] for c in list(candidates)}
+        candidates |= {c.split(".", 1)[1] for c in list(candidates) if "." in c}
+        if any(_is_ipv6(c) for c in candidates if c):
+            return True
+    return False
+
+
 def unsafe_evidence(proof: str) -> str | None:
     """Why `proof` cannot be published with a ruling, or None."""
     if _URL.search(proof):
         return "a URL"
     if "@" in proof:
         return "an @ (userinfo or an address)"
-    for match in _IPV6_CANDIDATE.finditer(proof):
-        candidate = match.group(0).strip(".")
-        # `[::1]:8765` and `fe80::1:` both leave a trailing port or colon to try without
-        if any(_is_ipv6(c) for c in (candidate, candidate.rsplit(":", 1)[0])):
-            return "an IPv6 literal"
+    if _ipv6_in(proof):
+        return "an IPv6 literal"
     return None

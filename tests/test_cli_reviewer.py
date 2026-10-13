@@ -623,6 +623,10 @@ def test_a_decision_is_read_as_one_record_bound_to_the_named_id(
         "tests/test_network.py:42 proves route to fe80::",
         "the documentation range 2001:db8:: is reachable",
         "binds :: on all interfaces",
+        "route/2001:db8::1",
+        "2001:db8::1/64",
+        "x.2001:db8::1",
+        "tests/a.py::2001:db8::1",
     ],
 )
 def test_evidence_never_publishes_an_address_or_a_url(tmp_path: Path, monkeypatch, proof) -> None:
@@ -656,3 +660,18 @@ def test_a_pytest_node_id_is_valid_evidence(tmp_path: Path, monkeypatch) -> None
         ],
     )
     assert out.exit_code == 0, out.output
+
+
+@pytest.mark.parametrize(
+    "proof",
+    [
+        "tests/unit/test_tables.py::test_depends_on_keys_are_validated",
+        "tests/a.py::abc",
+        "src/rail/reviewer/policy.py:42",
+        "line 10:5 of the plan",
+    ],
+)
+def test_names_and_lines_are_not_addresses(proof: str) -> None:
+    from rail.reviewer.delegation import unsafe_evidence
+
+    assert unsafe_evidence(proof) is None
