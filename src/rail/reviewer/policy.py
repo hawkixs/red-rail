@@ -28,7 +28,9 @@ DEFAULT_MODELS: dict[str, dict[str, str]] = {
         "glm": GLM_FLASH,
     },
     "deep": {
-        "agy": "gemini-3.1-pro-high",
+        # agy 1.3.4 lists no pro model any more: gemini-3.1-pro-high ended every deep pass in a
+        # provider_fallback (ticket 7dc34128), so deep uses its strongest listed model
+        "agy": "gemini-3.8-flash-high",
         "codex": "gpt-6-astra",
         "claude": "claude-opus-5",
         "glm": GLM_FLASH,
@@ -131,14 +133,21 @@ def default_policy() -> ReviewPolicy:
     return ReviewPolicy()
 
 
+def with_default_models(raw: dict) -> dict:
+    """A `models` override is partial, per tier: never a silent drop of a provider. Every path
+    that reads a policy from a file goes through here (ticket 7dc34128: the host configuration
+    used to REPLACE the defaults)."""
+    if "models" in raw:
+        merged = {tier: dict(models) for tier, models in DEFAULT_MODELS.items()}
+        for tier, models in (raw["models"] or {}).items():
+            merged.setdefault(tier, {}).update(models)
+        raw = {**raw, "models": merged}
+    return raw
+
+
 def load_policy(path: Path) -> ReviewPolicy:
     raw = yaml.safe_load(path.read_text()) or {}
-    if "models" in raw:  # partial override per tier, never a silent drop of a provider
-        merged = {tier: dict(models) for tier, models in DEFAULT_MODELS.items()}
-        for tier, models in raw["models"].items():
-            merged.setdefault(tier, {}).update(models)
-        raw["models"] = merged
-    return ReviewPolicy.model_validate(raw)
+    return ReviewPolicy.model_validate(with_default_models(raw))
 
 
 def producer_providers(commit_messages: list[str]) -> frozenset[Provider]:
