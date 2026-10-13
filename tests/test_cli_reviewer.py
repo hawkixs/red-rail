@@ -468,7 +468,7 @@ def _agent_rule(
             "--evidence-sha",
             SHA,
             "--evidence",
-            "tests/test_a.py::test_renamed proves it",
+            "tests/test_a.py::test_renamed",
         ]
     out = CliRunner().invoke(main, [*args, *extra], input="")
     return out, asked
@@ -492,7 +492,7 @@ def test_an_agent_records_a_fix_ruling_under_an_active_delegation(
     assert ruling.data["delegation"] == DELEGATION
     assert ruling.data["evidence"] == {
         "sha": SHA,
-        "proof": "tests/test_a.py::test_renamed proves it",
+        "proof": "tests/test_a.py::test_renamed",
     }
 
 
@@ -627,6 +627,14 @@ def test_a_decision_is_read_as_one_record_bound_to_the_named_id(
         "2001:db8::1/64",
         "x.2001:db8::1",
         "tests/a.py::2001:db8::1",
+        "see 3221225985 for the host",
+        "connects to 0300.0000.0002.0001",
+        "the host example-host",
+        "host.example.com",
+        "api.example.test:8765",
+        "0300.0000.0002.0001/x.py",
+        "192.0.2.1.py",
+        "src/a.py:12 proves it",
     ],
 )
 def test_evidence_never_publishes_an_address_or_a_url(tmp_path: Path, monkeypatch, proof) -> None:
@@ -667,11 +675,17 @@ def test_a_pytest_node_id_is_valid_evidence(tmp_path: Path, monkeypatch) -> None
     [
         "tests/unit/test_tables.py::test_depends_on_keys_are_validated",
         "tests/a.py::abc",
+        "tests/a.py::test_x[case-1]",
         "src/rail/reviewer/policy.py:42",
-        "line 10:5 of the plan",
+        "src/a.py:12, tests/test_a.py::test_b",
+        "CLAUDE.md",
+        ".github/workflows/continuous-integration.yml:12",
+        "alembic/versions/065_programmes.py",
     ],
 )
-def test_names_and_lines_are_not_addresses(proof: str) -> None:
+def test_code_references_are_valid_evidence(proof: str) -> None:
+    """Evidence is an allow-list of code references — a path with an extension, then `:line`
+    or `::test` — so nothing else, address or prose, can ever be published with a ruling."""
     from rail.reviewer.delegation import unsafe_evidence
 
     assert unsafe_evidence(proof) is None

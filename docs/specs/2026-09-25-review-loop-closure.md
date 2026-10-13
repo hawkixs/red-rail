@@ -168,8 +168,8 @@ only the rulings below". The artifact type selects the class definitions of deci
   false positives, and a fix only asserts what the closure pass re-verifies anyway. The agent
   runs without a terminal and without the typed confirmation, and must pass `--delegation <id>`,
   the brain id of an ACTIVE operator delegation (its title starts with "Operator delegation"),
-  read back from brain before anything is written, plus `--evidence-sha <commit>` and
-  `--evidence "<test or line>"`. The ruling's issuer is the agent's label, and its data gains
+  listed in the host's `reviewer.yaml` (`delegations:`) and read back from brain as one unambiguous record bound to that id before anything is written, plus `--evidence-sha <commit>` and
+  `--evidence "<code references>"` — only `path.ext`, `path.ext:line` or `path.ext::test`, comma-separated, an allow-list so no address, host name or prose is ever published with the ruling. The ruling's issuer is the agent's label, and its data gains
   `delegation` (the full id) and `evidence: {sha, proof}`. A service, a carry-forward, a
   missing flag, a decision that is not an active delegation, or a brain that cannot be read
   are refusals that write nothing.

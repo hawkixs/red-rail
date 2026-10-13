@@ -58,54 +58,28 @@ def verify_delegation(decision_id: str, *, agent: str) -> str:
     return header.group("id")
 
 
-# what a proof may not carry, beyond the contract guard's IPv4 and credential prefixes: a URL
-# (it names a host and may carry userinfo), an `@`, and an IPv6 address in any of its forms. Every
-# maximal run of hex digits, dots, colons and `%` holding two colons or more is a candidate,
-# whatever surrounds it (a `/` before it or a `/64` after it hid one), and `ipaddress` decides.
-# The one exemption is a pytest node id: a run that starts with `::` right after a name.
-_URL = re.compile(r"[a-z][a-z0-9+.-]*://", re.I)
-_HEX_RUN = re.compile(r"[0-9a-f.:%]+", re.I)
-
-
-def _is_ipv6(candidate: str) -> bool:
-    import ipaddress
-
-    try:
-        return ipaddress.ip_address(candidate.split("%", 1)[0]).version == 6
-    except ValueError:
-        return False
-
-
-def _ipv6_in(proof: str) -> bool:
-    for match in _HEX_RUN.finditer(proof):
-        run = match.group(0)
-        if run.count(":") < 2:
-            continue
-        glued = match.start() > 0 and (
-            proof[match.start() - 1].isalnum() or proof[match.start() - 1] in "._"
-        )
-        if run.startswith("::") and glued:
-            # `module.py::name` is a test id; what follows the `::` is still checked, so
-            # `module.py::fe80::1` cannot hide an address behind the exemption
-            run = run[2:]
-            if run.count(":") < 1:
-                continue
-        trimmed = run.strip(".:")
-        candidates = {run, trimmed, run.rstrip(".")}
-        # a trailing `:port` or a leading `x.` glued in the run
-        candidates |= {c.rsplit(":", 1)[0] for c in list(candidates)}
-        candidates |= {c.split(".", 1)[1] for c in list(candidates) if "." in c}
-        if any(_is_ipv6(c) for c in candidates if c):
-            return True
-    return False
+# Evidence is published with the ruling, so it is an ALLOW-LIST of code references, never prose:
+# directories without a dot (one leading dot allowed, `.github`), a file name with one known
+# extension, then optionally `:line` or `::test` (a pytest parameter id in brackets), several
+# references separated by commas or spaces. A deny-list of addresses kept missing forms (IPv6
+# compressions, decimal and octal IPv4, host names); this grammar has nothing for one to hide in,
+# and a host name (`host.example.com`) has no file extension in the list.
+_EXTENSIONS = (
+    "py|pyi|md|rst|txt|toml|yaml|yml|json|jsonl|sql|sh|bash|ts|tsx|js|mjs|go|rs|cfg|ini|"
+    "service|timer|lock|html|css|j2"
+)
+_REFERENCE = re.compile(
+    rf"(?:\.?[A-Za-z0-9_-]+/)*\.?[A-Za-z0-9_-]+\.(?:{_EXTENSIONS})"
+    r"(?::[0-9]{1,6}|::[A-Za-z_][A-Za-z0-9_]*(?:\[[A-Za-z0-9_-]+\])?)?(?![A-Za-z0-9_.])"
+)
+_REFERENCES = re.compile(rf"{_REFERENCE.pattern}(?:[ ,]+{_REFERENCE.pattern})*")
 
 
 def unsafe_evidence(proof: str) -> str | None:
     """Why `proof` cannot be published with a ruling, or None."""
-    if _URL.search(proof):
-        return "a URL"
-    if "@" in proof:
-        return "an @ (userinfo or an address)"
-    if _ipv6_in(proof):
-        return "an IPv6 literal"
+    if not _REFERENCES.fullmatch(proof):
+        return (
+            "something other than code references (path.ext, path.ext:line or "
+            "path.ext::test, separated by commas)"
+        )
     return None

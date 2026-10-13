@@ -31,7 +31,7 @@ is `docs/specs/2026-09-25-review-loop-closure.md`; read it for anything not cove
   `rail reviewer rule --repository <owner/name> --pr <n> --finding <F-id> --as fix|carry-forward
   --decision "<text>"`. An agent may record `--as fix` only, under an active operator
   delegation and with evidence: add `--delegation <brain decision id> --evidence-sha <commit>
-  --evidence "<test or line>"` (decision `f38ce645`); `carry-forward` stays the operator's.
+  --evidence "<path.ext:line or path.ext::test, …>"` (decision `f38ce645`; the delegation must be listed in `reviewer.yaml` `delegations:`); `carry-forward` stays the operator's.
 - **Closure check.** Once every open blocker has a ruling recorded, the next pass verifies only
   the `fix` rulings and approves when they all come back `fixed`; a `still_open` answer returns
   to awaiting ruling.

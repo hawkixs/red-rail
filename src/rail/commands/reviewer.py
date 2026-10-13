@@ -212,7 +212,10 @@ class _PR:
 )
 @click.option("--evidence-sha", default=None, help="An agent only: the commit that fixes it.")
 @click.option(
-    "--evidence", default=None, help="An agent only: the test or line that proves the fix."
+    "--evidence",
+    default=None,
+    help="An agent only: code references proving the fix — path.ext, path.ext:line or "
+    "path.ext::test, comma-separated.",
 )
 def rule(
     config_path: Path | None,
