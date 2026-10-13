@@ -361,7 +361,8 @@ def open_ledger(
 ) -> Ledger:
     """The backend declared in `rail.yaml`. Raises like `load_rail_config` on a missing or bad
     manifest — this is a write path, and it stays fail-closed without one. `ledger: brain`
-    needs the `brain` extra, the operator's token and the ticket. Gates that must still work
+    needs the `brain` extra, a private token (`token_file`, unless RAIL_BRAIN_TOKEN_FILE names
+    another) and the ticket. Gates that must still work
     without a manifest observe the default file ledger themselves
     (`FileLedger(repo / RECEIPTS_DIR)`), never through here. `agent` labels every call of the
     brain client built here, reads included: a caller holding another credential (the

@@ -637,27 +637,43 @@ def test_settings_fail_closed_without_a_private_token_file(
 
 
 def test_reviewer_default_token_file_and_environment_override(tmp_path: Path) -> None:
+    # an absent sites file: loopback, never the host's own brain site
+    env = {"RAIL_SITES_FILE": str(tmp_path / "no-sites.yaml")}
     reviewer = tmp_path / "brain-token-reviewer"
     reviewer.write_text("reviewer-token\n")
     reviewer.chmod(0o600)
-    settings = BrainSettings.from_environment({}, default_token_file=str(reviewer))
+    settings = BrainSettings.from_environment(env, default_token_file=str(reviewer))
     assert settings.token == "reviewer-token" and settings.token_file == reviewer
 
     override = tmp_path / "override"
     override.write_text("override-token\n")
     override.chmod(0o600)
     settings = BrainSettings.from_environment(
-        {"RAIL_BRAIN_TOKEN_FILE": str(override)}, default_token_file=str(reviewer)
+        {**env, "RAIL_BRAIN_TOKEN_FILE": str(override)}, default_token_file=str(reviewer)
     )
     assert settings.token == "override-token" and settings.token_file == override
 
 
 def test_missing_reviewer_token_names_default_and_override(tmp_path: Path) -> None:
+    env = {"RAIL_SITES_FILE": str(tmp_path / "no-sites.yaml")}
     missing = tmp_path / "brain-token-reviewer"
     with pytest.raises(PrivateFileError) as caught:
-        BrainSettings.from_environment({}, default_token_file=str(missing))
+        BrainSettings.from_environment(env, default_token_file=str(missing))
     assert str(missing) in str(caught.value)
     assert "RAIL_BRAIN_TOKEN_FILE" in str(caught.value)
+
+
+def test_a_missing_override_is_not_told_to_set_the_override(tmp_path: Path) -> None:
+    """The hint names the override only to a caller who has not set it (review F-97-1)."""
+    missing = tmp_path / "chosen"
+    env = {
+        "RAIL_SITES_FILE": str(tmp_path / "no-sites.yaml"),
+        "RAIL_BRAIN_TOKEN_FILE": str(missing),
+    }
+    with pytest.raises(PrivateFileError) as caught:
+        BrainSettings.from_environment(env)
+    assert str(missing) in str(caught.value)
+    assert "set RAIL_BRAIN_TOKEN_FILE" not in str(caught.value)
 
 
 @pytest.mark.parametrize("wrapped", [False, True, "group"])

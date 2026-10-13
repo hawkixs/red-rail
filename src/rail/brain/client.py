@@ -16,7 +16,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from rail.brain.settings import BrainSettings, is_reachable
+from rail.brain.settings import (
+    DEFAULT_REVIEWER_TOKEN_FILE,
+    DEFAULT_TOKEN_FILE,
+    BrainSettings,
+    is_reachable,
+)
 
 if TYPE_CHECKING:
     from fastmcp import Client, FastMCP
@@ -404,8 +409,8 @@ class BrainClient:
                 raise BrainForbidden(
                     self.redact(
                         f"brain refused the credential{path} for {name} (403 Forbidden); "
-                        "the reviewer reads ~/.config/red-rail/brain-token-reviewer, other "
-                        "commands ~/.config/red-rail/brain-token; RAIL_BRAIN_TOKEN_FILE "
+                        f"the reviewer reads {DEFAULT_REVIEWER_TOKEN_FILE}, other "
+                        f"commands {DEFAULT_TOKEN_FILE}; RAIL_BRAIN_TOKEN_FILE "
                         "overrides either"
                     )
                 ) from None

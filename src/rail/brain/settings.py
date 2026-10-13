@@ -179,9 +179,12 @@ class BrainSettings:
             token = private_token(path)
         except PrivateFileError as exc:
             # each refusal names its own cause: the token here, the site or the URL above
-            raise PrivateFileError(
-                f"brain token: {exc}; set RAIL_BRAIN_TOKEN_FILE to override this path"
-            ) from exc
+            hint = (
+                ""
+                if "RAIL_BRAIN_TOKEN_FILE" in env
+                else "; set RAIL_BRAIN_TOKEN_FILE to override this path"
+            )
+            raise PrivateFileError(f"brain token: {exc}{hint}") from exc
         settings = cls(
             url=url,
             token=token,
