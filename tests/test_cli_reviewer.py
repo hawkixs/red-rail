@@ -567,3 +567,83 @@ def test_an_agent_ruling_needs_a_delegation_the_host_trusts(
     assert not FileLedger(repo / RECEIPTS_DIR).list(
         "red-alpha", attestation=AttestationKind.REVIEW_RULING
     )
+
+
+@pytest.mark.parametrize(
+    ("decision_text", "needle"),
+    [
+        # a delegation quoted inside the body of an unrelated decision
+        (
+            "## Decision: Pick a lib (id:"
+            + DELEGATION
+            + ")\n**Status**: active\n\n```\n"
+            + ACTIVE_DELEGATION
+            + "```\n",
+            "not a delegation",
+        ),
+        # an injected status line ahead of the genuine one
+        (
+            ACTIVE_DELEGATION.replace("**Status**: active", "**Status**: superseded")
+            + "**Status**: active\n",
+            "not active",
+        ),
+        # brain answers for another decision than the one named
+        (
+            ACTIVE_DELEGATION.replace(DELEGATION, "c5773695-bfe6-4177-8f27-471ba5061917"),
+            "another decision",
+        ),
+    ],
+)
+def test_a_decision_is_read_as_one_record_bound_to_the_named_id(
+    tmp_path: Path, monkeypatch, decision_text: str, needle: str
+) -> None:
+    """The title, the id and the status are the record's own header lines, in order, and the id
+    is the one the agent named: a quoted or injected line never authorises (codex, red-rail#96)."""
+    repo, config = _awaiting_repo(tmp_path)
+    _trusting(config, "d47ac557", "c5773695")
+    out, _ = _agent_rule(config, monkeypatch, decision_text=decision_text)
+    assert out.exit_code == 2 and needle in out.output, out.output
+    assert not FileLedger(repo / RECEIPTS_DIR).list(
+        "red-alpha", attestation=AttestationKind.REVIEW_RULING
+    )
+
+
+@pytest.mark.parametrize(
+    "proof",
+    [
+        "curl http://[::1]:8765",
+        "curl https://user:example-password@api.example.test",
+        "see fe80::1 in the log",
+    ],
+)
+def test_evidence_never_publishes_an_address_or_a_url(tmp_path: Path, monkeypatch, proof) -> None:
+    repo, config = _awaiting_repo(tmp_path)
+    _trusting(config, "d47ac557")
+    out, _ = _agent_rule(
+        config,
+        monkeypatch,
+        extra=["--delegation", DELEGATION, "--evidence-sha", SHA, "--evidence", proof],
+    )
+    assert out.exit_code == 2 and "--evidence" in out.output, out.output
+    assert not FileLedger(repo / RECEIPTS_DIR).list(
+        "red-alpha", attestation=AttestationKind.REVIEW_RULING
+    )
+
+
+def test_a_pytest_node_id_is_valid_evidence(tmp_path: Path, monkeypatch) -> None:
+    """`::` in a test id is not an address."""
+    repo, config = _awaiting_repo(tmp_path)
+    _trusting(config, "d47ac557")
+    out, _ = _agent_rule(
+        config,
+        monkeypatch,
+        extra=[
+            "--delegation",
+            DELEGATION,
+            "--evidence-sha",
+            SHA,
+            "--evidence",
+            "tests/unit/test_tables.py::test_depends_on_keys_are_validated",
+        ],
+    )
+    assert out.exit_code == 0, out.output

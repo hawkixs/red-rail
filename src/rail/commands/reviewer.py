@@ -354,6 +354,12 @@ def _agent_fix_ruling(
         refuse_unwritable([proof])
     except Unwritable as exc:
         raise click.UsageError(str(exc)) from exc
+    from rail.reviewer.delegation import unsafe_evidence
+
+    if (why := unsafe_evidence(proof)) is not None:
+        raise click.UsageError(
+            f"--evidence carries {why}: name the test or the file:line instead, it is published"
+        )
     named = (delegation or "").strip().lower()
     if not any(named.startswith(t) or t.startswith(named) for t in trusted if len(named) >= 8):
         raise click.UsageError(

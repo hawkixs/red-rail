@@ -6,10 +6,13 @@ from __future__ import annotations
 
 import re
 
-# brain_get renders a decision as markdown: the title line and the status line are the two
-# facts this check needs, read strictly
-_TITLE = re.compile(r"^## Decision: (?P<title>.+) \(id:(?P<id>[0-9a-f-]{36})\)$", re.M)
-_STATUS = re.compile(r"^\*\*Status\*\*: (?P<status>\S+)$", re.M)
+# brain_get renders a decision as markdown. The record's OWN header is its first two lines, in
+# this order — the title with the id, then the status — and nothing else counts: a delegation
+# quoted further down, or a status line injected later, never authorises (codex, red-rail#96)
+_HEADER = re.compile(
+    r"\A## Decision: (?P<title>[^\n]+) \(id:(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12})\)\n\*\*Status\*\*: (?P<status>[a-z_]+)\n"
+)
 _DECISION_ID = re.compile(r"^[0-9a-f]{8}(?:-?[0-9a-f]{4}){0,3}(?:-?[0-9a-f]{12})?$")
 
 
@@ -38,13 +41,37 @@ def verify_delegation(decision_id: str, *, agent: str) -> str:
         raise DelegationRefused(
             f"cannot verify decision {decision_id} in brain ({type(exc).__name__})"
         ) from exc
-    title = _TITLE.search(text)
+    header = _HEADER.match(text)
     # a delegation is recorded under a title that says so first ("Operator delegation …",
     # d47ac557 and its successions); a decision ABOUT delegations, such as f38ce645 itself,
     # mentions the word without granting anything
-    if title is None or not title.group("title").lower().startswith("operator delegation"):
+    if header is None or not header.group("title").lower().startswith("operator delegation"):
         raise DelegationRefused(f"decision {decision_id} is not a delegation decision")
-    status = _STATUS.search(text)
-    if status is None or status.group("status") != "active":
+    if not header.group("id").replace("-", "").startswith(decision_id.lower().replace("-", "")):
+        raise DelegationRefused(f"brain answered for another decision than {decision_id}")
+    if header.group("status") != "active":
         raise DelegationRefused(f"decision {decision_id} is not active")
-    return title.group("id")
+    return header.group("id")
+
+
+# what a proof may not carry, beyond the contract guard's IPv4 and credential prefixes: a URL
+# (it names a host and may carry userinfo), an `@`, and an IPv6 literal — bracketed, or bare
+# with at least two colon groups of hex. A pytest node id's `::` sits between names, not hex.
+_URL = re.compile(r"[a-z][a-z0-9+.-]*://", re.I)
+_IPV6 = re.compile(
+    r"\[[0-9a-f:.]*:[0-9a-f:.]*\]|(?<![\w:])(?:[0-9a-f]{1,4})?::?(?:[0-9a-f]{1,4}:){0,6}"
+    r"[0-9a-f]{1,4}(?![\w:])",
+    re.I,
+)
+
+
+def unsafe_evidence(proof: str) -> str | None:
+    """Why `proof` cannot be published with a ruling, or None."""
+    if _URL.search(proof):
+        return "a URL"
+    if "@" in proof:
+        return "an @ (userinfo or an address)"
+    for match in _IPV6.finditer(proof):
+        if ":" in match.group(0):
+            return "an IPv6 literal"
+    return None
