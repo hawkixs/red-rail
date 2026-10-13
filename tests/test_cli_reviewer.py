@@ -470,8 +470,32 @@ def _agent_rule(
             "--evidence",
             "tests/test_a.py::test_renamed",
         ]
+    real = _commit_evidence(config)
+    extra = [real if value == SHA else value for value in extra]
     out = CliRunner().invoke(main, [*args, *extra], input="")
     return out, asked
+
+
+def _commit_evidence(config: Path) -> str:
+    """The files an agent's evidence names, committed in the watched repository: the commit
+    the ruling cites. `SHA` in a test's arguments stands for it."""
+    from tests.helpers import commit_all
+
+    repo = Path(
+        next(
+            line.split("path:", 1)[1].strip()
+            for line in config.read_text().splitlines()
+            if "path:" in line
+        )
+    )
+    (repo / "tests" / "unit").mkdir(parents=True, exist_ok=True)
+    (repo / "tests" / "test_a.py").write_text("def test_renamed():\n    assert True\n")
+    (repo / "tests" / "unit" / "test_tables.py").write_text(
+        "def test_depends_on_keys_are_validated():\n    assert True\n"
+    )
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "a.py").write_text("".join(f"x{n} = {n}\n" for n in range(20)))
+    return commit_all(repo, "test: the evidence")
 
 
 def test_an_agent_records_a_fix_ruling_under_an_active_delegation(
@@ -490,8 +514,10 @@ def test_an_agent_records_a_fix_ruling_under_an_active_delegation(
     assert ruling.issuer == "agent:claude-code:rail"
     assert ruling.data["ruling"] == "fix"
     assert ruling.data["delegation"] == DELEGATION
+    from tests.helpers import git
+
     assert ruling.data["evidence"] == {
-        "sha": SHA,
+        "sha": git(repo, "rev-parse", "HEAD"),
         "proof": "tests/test_a.py::test_renamed",
     }
 
@@ -689,3 +715,32 @@ def test_code_references_are_valid_evidence(proof: str) -> None:
     from rail.reviewer.delegation import unsafe_evidence
 
     assert unsafe_evidence(proof) is None
+
+
+@pytest.mark.parametrize(
+    ("evidence", "sha", "needle"),
+    [
+        ("tests/test_missing.py::test_renamed", SHA, "not in"),
+        ("tests/test_a.py::test_never_written", SHA, "not defined"),
+        ("src/a.py:21", SHA, "beyond"),
+        ("tests/sk_live_abcdefghijklmnop.py", SHA, "not in"),
+        ("tests/test_a.py::test_renamed", "f" * 40, "not a commit"),
+    ],
+)
+def test_evidence_must_name_what_the_commit_holds(
+    tmp_path: Path, monkeypatch, evidence, sha, needle
+) -> None:
+    """The grammar leaves names free (codex, red-rail#96: a key disguised as a file name), so the
+    evidence is checked against the repository: the commit exists, each file is in it, each test
+    is defined there, each line is within the file."""
+    repo, config = _awaiting_repo(tmp_path)
+    _trusting(config, "d47ac557")
+    out, _ = _agent_rule(
+        config,
+        monkeypatch,
+        extra=["--delegation", DELEGATION, "--evidence-sha", sha, "--evidence", evidence],
+    )
+    assert out.exit_code == 2 and needle in out.output, out.output
+    assert not FileLedger(repo / RECEIPTS_DIR).list(
+        "red-alpha", attestation=AttestationKind.REVIEW_RULING
+    )

@@ -5,6 +5,8 @@ delegation. Anything it cannot read for certain is a refusal, never a pass."""
 from __future__ import annotations
 
 import re
+import subprocess
+from pathlib import Path
 
 # brain_get renders a decision as markdown. The record's OWN header is its first two lines, in
 # this order — the title with the id, then the status — and nothing else counts: a delegation
@@ -82,4 +84,40 @@ def unsafe_evidence(proof: str) -> str | None:
             "something other than code references (path.ext, path.ext:line or "
             "path.ext::test, separated by commas)"
         )
+    return None
+
+
+_PARSE = re.compile(
+    r"(?P<path>[^:, ]+)(?::(?P<line>[0-9]{1,6})|::(?P<test>[A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?)?"
+)
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False, timeout=60
+    )
+
+
+def evidence_refusal(repo: Path, sha: str, proof: str) -> str | None:
+    """Why the evidence does not hold in `repo` at `sha`, or None. The grammar alone still leaves
+    names free (codex, red-rail#96: `tests/sk_live_<key>.py`), so every reference must name what
+    the repository already publishes at that commit: the file exists there, a `::test` is defined
+    in it, a `:line` is within it. A reference that names nothing real is refused; one that does
+    discloses nothing the repository does not already hold."""
+    if _git(repo, "cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
+        _git(repo, "fetch", "-q", "origin", sha)
+        if _git(repo, "cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
+            return f"--evidence-sha {sha} is not a commit of this repository or its origin"
+    for reference in re.split(r"[ ,]+", proof.strip()):
+        parsed = _PARSE.fullmatch(reference)
+        if parsed is None:
+            return f"--evidence {reference!r} is not a code reference"
+        shown = _git(repo, "show", f"{sha}:{parsed.group('path')}")
+        if shown.returncode != 0:
+            return f"--evidence names {parsed.group('path')}, which is not in {sha[:12]}"
+        if (line := parsed.group("line")) and int(line) > len(shown.stdout.splitlines()):
+            return f"--evidence line {line} is beyond {parsed.group('path')} at {sha[:12]}"
+        test = parsed.group("test")
+        if test and not re.search(rf"^\s*(?:async\s+)?def {re.escape(test)}\(", shown.stdout, re.M):
+            return f"--evidence test {test} is not defined in {parsed.group('path')} at {sha[:12]}"
     return None

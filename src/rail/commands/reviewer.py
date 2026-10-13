@@ -272,6 +272,12 @@ def rule(
     if repository not in watched:
         raise click.UsageError(f"{repository} is not watched by the reviewer's configuration")
     repo_path = watched[repository].path
+    if agent_evidence:
+        from rail.reviewer.delegation import evidence_refusal
+
+        proof = agent_evidence["evidence"]
+        if (why := evidence_refusal(repo_path, proof["sha"], proof["proof"])) is not None:
+            raise click.UsageError(why)
     project = load_rail_config(repo_path).project
     ledger = open_ledger(repo_path)
     target = _PR(repository=repository, number=pr)
