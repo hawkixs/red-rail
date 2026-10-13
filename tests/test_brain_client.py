@@ -20,7 +20,7 @@ from fastmcp import Client, FastMCP
 
 from rail.brain import client as brain_client
 from rail.brain import settings as brain_settings
-from rail.brain.client import BrainClient, BrainToolError, BrainUnreachable
+from rail.brain.client import BrainClient, BrainForbidden, BrainToolError, BrainUnreachable
 from rail.brain.settings import BrainSettings
 from rail.deploy.sites import Address
 from rail.private import PrivateFileError
@@ -634,6 +634,83 @@ def test_settings_fail_closed_without_a_private_token_file(
     monkeypatch.setenv("RAIL_BRAIN_TOKEN_FILE", str(loose))
     with pytest.raises(PrivateFileError, match="mode 644"):
         BrainSettings.from_environment(os.environ)
+
+
+def test_reviewer_default_token_file_and_environment_override(tmp_path: Path) -> None:
+    reviewer = tmp_path / "brain-token-reviewer"
+    reviewer.write_text("reviewer-token\n")
+    reviewer.chmod(0o600)
+    settings = BrainSettings.from_environment({}, default_token_file=str(reviewer))
+    assert settings.token == "reviewer-token" and settings.token_file == reviewer
+
+    override = tmp_path / "override"
+    override.write_text("override-token\n")
+    override.chmod(0o600)
+    settings = BrainSettings.from_environment(
+        {"RAIL_BRAIN_TOKEN_FILE": str(override)}, default_token_file=str(reviewer)
+    )
+    assert settings.token == "override-token" and settings.token_file == override
+
+
+def test_missing_reviewer_token_names_default_and_override(tmp_path: Path) -> None:
+    missing = tmp_path / "brain-token-reviewer"
+    with pytest.raises(PrivateFileError) as caught:
+        BrainSettings.from_environment({}, default_token_file=str(missing))
+    assert str(missing) in str(caught.value)
+    assert "RAIL_BRAIN_TOKEN_FILE" in str(caught.value)
+
+
+@pytest.mark.parametrize("wrapped", [False, True, "group"])
+def test_http_403_is_a_credential_refusal(tmp_path: Path, monkeypatch, wrapped) -> None:
+    import httpx
+
+    # in memory: a test never reads the host's sites file nor opens a session to a real brain
+    token_file = tmp_path / "brain-token-reviewer"
+    brain = FakeBrain()
+    client = BrainClient(lambda label: brain.server, "red-rail-reviewer", token_file=token_file)
+    request = httpx.Request("POST", "http://brain:8765/mcp")
+    response = httpx.Response(403, request=request)
+    status = httpx.HTTPStatusError("forbidden", request=request, response=response)
+
+    async def fail(self, *args, **kwargs):
+        if wrapped is True:
+            try:
+                raise status
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError("transport failed") from exc
+        if wrapped == "group":
+            try:
+                raise RuntimeError("wrapped") from status
+            except RuntimeError as exc:
+                raise ExceptionGroup("transport failed", [exc]) from None
+        raise status
+
+    monkeypatch.setattr(Client, "call_tool", fail)
+    with pytest.raises(BrainForbidden) as caught:
+        client.call("brain_delivery_get", {})
+    message = str(caught.value)
+    assert str(token_file) in message
+    assert "~/.config/red-rail/brain-token-reviewer" in message
+    assert "RAIL_BRAIN_TOKEN_FILE" in message
+    assert isinstance(caught.value, BrainUnreachable)
+
+
+def test_http_500_remains_plain_unreachable(monkeypatch) -> None:
+    import httpx
+
+    client, _ = _counting_client()
+    request = httpx.Request("POST", "http://brain:8765/mcp")
+    status = httpx.HTTPStatusError(
+        "server error", request=request, response=httpx.Response(500, request=request)
+    )
+
+    async def fail(self, *args, **kwargs):
+        raise status
+
+    monkeypatch.setattr(Client, "call_tool", fail)
+    with pytest.raises(BrainUnreachable) as caught:
+        client.call("brain_delivery_get", {})
+    assert type(caught.value) is BrainUnreachable
 
 
 def test_a_refusal_whose_message_says_not_found_is_still_a_refusal() -> None:

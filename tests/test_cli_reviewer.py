@@ -366,7 +366,13 @@ def test_rule_writes_a_review_ruling_in_brain_mode(tmp_path: Path, monkeypatch) 
     )
     config.chmod(0o600)
 
-    monkeypatch.setattr("rail.commands.reviewer.open_ledger", lambda *_a, **_k: ledger)
+    from rail.brain.settings import DEFAULT_TOKEN_FILE
+
+    ledger_kwargs = []
+    monkeypatch.setattr(
+        "rail.commands.reviewer.open_ledger",
+        lambda *_a, **kwargs: ledger_kwargs.append(kwargs) or ledger,
+    )
     monkeypatch.delenv("CI", raising=False)
     out = CliRunner().invoke(
         main,
@@ -389,6 +395,8 @@ def test_rule_writes_a_review_ruling_in_brain_mode(tmp_path: Path, monkeypatch) 
         input="F-7-1\n",
     )
     assert out.exit_code == 0, out.output
+    # a ruling is issued as the actor, which only the rail's own credential may label
+    assert ledger_kwargs[0].get("token_file", DEFAULT_TOKEN_FILE) == DEFAULT_TOKEN_FILE
     rulings = [a for a in brain.attestations if a["kind"] == "review_ruling"]
     assert len(rulings) == 1
     assert rulings[0]["payload"]["finding"] == "F-7-1"
@@ -400,18 +408,19 @@ def test_the_reviewer_reads_and_writes_its_ledger_as_itself(tmp_path: Path, monk
     client_id or one of its patterns: the reviewer's token admits `red-rail-reviewer` alone, so
     every call of its pass, the reads included, carries that label — not the rail's default
     `red-rail` (403 on brain_delivery_get at the red-base cutover, 2026-10-12)."""
+    from rail.brain.settings import DEFAULT_REVIEWER_TOKEN_FILE
     from rail.ledger import open_ledger as real_open_ledger
     from rail.reviewer.service import REVIEWER_IDENTITY
 
     agents = []
 
     def recording_open_ledger(repo, **kwargs):
-        agents.append(kwargs.get("agent"))
+        agents.append((kwargs.get("agent"), kwargs.get("token_file")))
         return real_open_ledger(repo, **kwargs)
 
     monkeypatch.setattr("rail.commands.reviewer.open_ledger", recording_open_ledger)
     _policy_seen(tmp_path, monkeypatch)
-    assert agents == [REVIEWER_IDENTITY]
+    assert agents == [(REVIEWER_IDENTITY, DEFAULT_REVIEWER_TOKEN_FILE)]
 
 
 # -- an agent's fix ruling under an operator delegation (decision f38ce645) ----------------

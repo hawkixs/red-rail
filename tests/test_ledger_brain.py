@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from rail.brain.client import BrainClient
+from rail.brain.client import BrainClient, BrainForbidden
 from rail.contracts import ATTESTATION_CONTRACT, TOOL_ERROR_CODES
 from rail.ledger import (
     AttestationKind,
@@ -871,8 +871,27 @@ def test_open_ledger_labels_its_client_with_the_agent_it_is_given(
         labels.append(agent)
         return BrainClient.in_memory(brain, agent=agent)
 
-    monkeypatch.setattr("rail.brain.settings.BrainSettings.from_environment", lambda: object())
+    monkeypatch.setattr(
+        "rail.brain.settings.BrainSettings.from_environment", lambda **kwargs: object()
+    )
     monkeypatch.setattr(BrainClient, "from_settings", staticmethod(from_settings))
     open_ledger(repo)
     open_ledger(repo, agent="red-rail-reviewer")
     assert labels == ["red-rail", "red-rail-reviewer"]
+
+
+def test_call_checked_reports_a_forbidden_token_as_refused(tmp_path: Path) -> None:
+    class ForbiddenClient:
+        def call(self, *args, **kwargs):
+            raise BrainForbidden("credential refused")
+
+    ledger = BrainLedger(
+        ForbiddenClient(),
+        ticket="04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f",
+        project="red-probe",
+        spool_dir=tmp_path,
+    )
+    with pytest.raises(LedgerError) as caught:
+        ledger._call_checked("brain_delivery_get", {})
+    assert str(caught.value).startswith("brain refused the token")
+    assert "unreachable" not in str(caught.value)

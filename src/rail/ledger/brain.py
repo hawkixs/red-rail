@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
-from rail.brain.client import BrainClient, BrainToolError, BrainUnreachable
+from rail.brain.client import BrainClient, BrainForbidden, BrainToolError, BrainUnreachable
 from rail.ledger import (
     BRAIN_MILESTONES,
     AttestationKind,
@@ -336,6 +336,8 @@ class BrainLedger:
             return self._call(name, arguments, agent=agent)
         except BrainToolError as exc:
             raise LedgerError(f"{name}: {exc}") from exc
+        except BrainForbidden as exc:
+            raise LedgerError(f"brain refused the token: {exc}") from exc
         except BrainUnreachable as exc:
             raise LedgerError(f"brain unreachable: {exc}") from exc
 
