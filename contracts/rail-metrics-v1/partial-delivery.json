@@ -1,0 +1,346 @@
+{
+  "delivery": {
+    "version": "rail-delivery/v1",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "windows_days": [
+      7,
+      30
+    ],
+    "projects": [
+      {
+        "project": "brain-v42",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-alerts",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-backup",
+        "target": "private-timers",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-life",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      }
+    ]
+  },
+  "autonomy": {
+    "version": "rail-autonomy/v1",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "experimental": true,
+    "windows_days": [
+      7,
+      30
+    ],
+    "since": "2026-10-04T00:00:00+00:00",
+    "coverage": {
+      "expected": 11,
+      "read": 10,
+      "missing": [
+        "red-probe"
+      ]
+    },
+    "total": null,
+    "projects": [
+      {
+        "project": "brain-v42",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 3,
+          "operator_gestures": 8,
+          "operator_gestures_per_release": 2.667,
+          "agent_gesture_ratio": 0.0,
+          "merged_prs": 7,
+          "reviewed_prs": 7,
+          "rulings_per_reviewed_pr": 0.429,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 4.0,
+          "first_pass_approval_ratio": 0.286,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-alerts",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 0,
+          "operator_gestures": 3,
+          "operator_gestures_per_release": null,
+          "agent_gesture_ratio": 1.0,
+          "merged_prs": 10,
+          "reviewed_prs": 9,
+          "rulings_per_reviewed_pr": 0.333,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.333,
+          "awaiting_ruling_passes": 2,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-backup",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 0,
+          "operator_gestures": 9,
+          "operator_gestures_per_release": null,
+          "agent_gesture_ratio": 0.4,
+          "merged_prs": 10,
+          "reviewed_prs": 9,
+          "rulings_per_reviewed_pr": 0.333,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.333,
+          "awaiting_ruling_passes": 2,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-cockpit",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 0,
+          "operator_gestures": 1,
+          "operator_gestures_per_release": null,
+          "agent_gesture_ratio": 0.0,
+          "merged_prs": 2,
+          "reviewed_prs": 2,
+          "rulings_per_reviewed_pr": 0.0,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 3.0,
+          "first_pass_approval_ratio": 0.5,
+          "awaiting_ruling_passes": 0,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-ha",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 4,
+          "operator_gestures": 3,
+          "operator_gestures_per_release": 0.75,
+          "agent_gesture_ratio": 0.667,
+          "merged_prs": 4,
+          "reviewed_prs": 4,
+          "rulings_per_reviewed_pr": 0.25,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.5,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.25,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-life",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 2,
+          "operator_gestures": 4,
+          "operator_gestures_per_release": 2.0,
+          "agent_gesture_ratio": 1.0,
+          "merged_prs": 11,
+          "reviewed_prs": 10,
+          "rulings_per_reviewed_pr": 0.4,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 4.0,
+          "first_pass_approval_ratio": 0.2,
+          "awaiting_ruling_passes": 2,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-memoria",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 3,
+          "operator_gestures": 6,
+          "operator_gestures_per_release": 2.0,
+          "agent_gesture_ratio": 0.444,
+          "merged_prs": 11,
+          "reviewed_prs": 10,
+          "rulings_per_reviewed_pr": 0.2,
+          "agent_rulings": 1,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 3.0,
+          "first_pass_approval_ratio": 0.3,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-monitor",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 2,
+          "operator_gestures": 4,
+          "operator_gestures_per_release": 2.0,
+          "agent_gesture_ratio": 0.857,
+          "merged_prs": 9,
+          "reviewed_prs": 8,
+          "rulings_per_reviewed_pr": 0.375,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 4.0,
+          "first_pass_approval_ratio": 0.375,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-rail",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 2,
+          "operator_gestures": 2,
+          "operator_gestures_per_release": 1.0,
+          "agent_gesture_ratio": 0.75,
+          "merged_prs": 8,
+          "reviewed_prs": 7,
+          "rulings_per_reviewed_pr": 0.143,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.286,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-writer",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 2,
+          "operator_gestures": 8,
+          "operator_gestures_per_release": 4.0,
+          "agent_gesture_ratio": 0.286,
+          "merged_prs": 10,
+          "reviewed_prs": 9,
+          "rulings_per_reviewed_pr": 0.444,
+          "agent_rulings": 1,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.222,
+          "awaiting_ruling_passes": 2,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      }
+    ],
+    "not_measured": [
+      {
+        "what": "operator_questions_and_decisions",
+        "why": "not recorded anywhere yet (T1)"
+      },
+      {
+        "what": "human_active_and_waiting_time",
+        "why": "no source"
+      },
+      {
+        "what": "justified_vs_avoidable_classification",
+        "why": "classification not decided (T1, Q1)"
+      }
+    ]
+  }
+}

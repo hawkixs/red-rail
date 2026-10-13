@@ -189,7 +189,9 @@ when `generated_at` is older than 2 h (two timer periods). red-monitor owns that
 
 D10 — **Failure and threat model.**
 - The publisher exposes only aggregate counts about the rail's own process. No path, address,
-  token, PR body or finding text goes into a block, only project names and numbers.
+  token, PR body or finding text goes into a block, only project names, dates and numbers:
+  no identifier of a session, an agent, a turn, brain or a client, no credential id, no
+  secret, no prompt and no log line (red-monitor's cockpit rule, ticket 6b59a753).
 - The data is as trustworthy as the ledger: a forged attestation could skew an autonomy count.
   That is the ledger's integrity model (digest-checked receipts, brain authority), not a new one.
 - A crash of `serve` shows as red-monitor's `no_publisher`. A dead timer shows as staleness (D9).
@@ -205,7 +207,7 @@ D10 — **Failure and threat model.**
 
 ## Success criteria
 
-1. The fixture `full.json` (eleven active repositories, the worst case today) is 8,487 bytes compact.
+1. The fixture `full.json` (eleven active repositories, the worst case today) is 8,470 bytes compact.
    `rail metrics publish` writes a two-block file. The blocks match the fixtures' schema (full,
    empty, unknown version), and the compact size of a real run on this host is measured and at
    most 12 KiB.

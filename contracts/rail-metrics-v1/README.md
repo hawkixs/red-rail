@@ -9,7 +9,7 @@ fixtures; red-monitor copies them from a pinned red-rail revision and owns its r
 
 A JSON object with at most two members, `delivery` and `autonomy`, each present or absent
 independently; `{}` when nothing was published. Compact size at most 12 KiB, both blocks
-together (`full.json`, eleven active repositories: 8,487 bytes compact).
+together (`full.json`, eleven active repositories: 8,470 bytes compact).
 
 ## Every block
 
@@ -21,6 +21,8 @@ together (`full.json`, eleven active repositories: 8,487 bytes compact).
 - Never at a block's top level: `served_at`, `source_age_s`, `source`, `available`, `reason`,
   `payload` (red-monitor's relay keys).
 - Units are in field names; an unknown value is `null`, never `0`.
+- No block carries an identifier of a session, an agent, a turn, brain or a client, a
+  credential id, a secret, a prompt or a log line: only project names, dates and numbers.
 
 ## `delivery` (`rail-delivery/v1`)
 
@@ -49,5 +51,6 @@ without a digest, spec D3), `recovery_time_hours` (median),
 ## Fixtures
 
 `full.json` (both blocks; total counts are the sums of the projects'), `delivery-only.json`,
-`partial.json` (one repository unread, `total: null`), `empty.json` (`{}`),
+`partial.json` (one repository unread, `total: null`), `partial-delivery.json` (a
+prod-tier repository unread: absent from both blocks), `empty.json` (`{}`),
 `unknown-version.json`.
