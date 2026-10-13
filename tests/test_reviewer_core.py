@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from rail.reviewer.github import PullRequest
 from rail.reviewer.judges import JudgeReply, build_prompt, judge, parse_verdict
-from rail.reviewer.policy import default_policy, load_policy, producer_provider
+from rail.reviewer.policy import default_policy, load_policy, producer_providers
 from rail.reviewer.verdict import Finding, ReviewVerdict
 
 PR = PullRequest(
@@ -59,19 +59,41 @@ def test_policy_file_overrides_only_what_it_names(tmp_path: Path) -> None:
         load_policy(path)
 
 
-def test_producer_provider_is_read_from_the_trailers() -> None:
-    assert producer_provider(["feat: x\n\nCo-Authored-By: Claude Opus 5 <n@a>"]) == "claude"
-    assert producer_provider(["fix: y\n\nCo-authored-by: Codex <codex@openai.com>"]) == "codex"
-    assert producer_provider(["docs: z\n\nCo-Authored-By: Antigravity <agy@google>"]) == "agy"
-    assert producer_provider(["chore: plain"]) is None
+def test_producer_providers_are_read_from_the_trailers() -> None:
+    assert producer_providers(["feat: x\n\nCo-Authored-By: Claude Opus 5 <n@a>"]) == {"claude"}
+    assert producer_providers(["fix: y\n\nCo-authored-by: Codex <codex@openai.com>"]) == {"codex"}
+    assert producer_providers(["docs: z\n\nCo-Authored-By: Antigravity <agy@google>"]) == {"agy"}
+    assert producer_providers(["chore: plain"]) == frozenset()
+
+
+def test_an_implemented_by_trailer_names_a_producer_too() -> None:
+    """ha-delegate's contractual trailer: a commit integrated from a ha worker names the worker's
+    provider, the session's Co-Authored-By names Claude, and both wrote the change (brain-v42#353,
+    built by ha codex, was judged by codex alone)."""
+    message = (
+        "feat: retention\n\n"
+        "Implemented-by: codex/gpt-6-luna (ha 20261013T001510-f13d0d64 and "
+        "20261013T002522-e79519bf, reviewed by pr2-review-r1)\n"
+        "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+    )
+    assert producer_providers([message]) == {"codex", "claude"}
+    assert producer_providers(["x\n\nimplemented-by: agy/gemini-4 (ha r1)"]) == {"agy"}
+    # a worker that can never judge (an HTTP preset) excludes nothing
+    assert producer_providers(["x\n\nImplemented-by: glm/glm-5.3-flash (ha r2)"]) == frozenset()
+    # the trailer is a line of its own, not a phrase in the body
+    assert producer_providers(["x\n\nsee Implemented-by: codex/y in the thread"]) == frozenset()
 
 
 def test_chain_for_a_pr_never_includes_the_producer() -> None:
     policy = default_policy()
-    assert policy.chain_for(producer="claude") == ("agy", "codex")
+    assert policy.chain_for(producers=frozenset({"claude"})) == ("agy", "codex")
     # an unknown producer excludes the ecosystem's default producer (sessions are Claude Code):
     # found by the independent reviewer (PR #3, third pass)
-    assert policy.chain_for(producer=None) == ("agy", "codex")
+    assert policy.chain_for(producers=frozenset()) == ("agy", "codex")
+    # every producer is excluded: a change written by Claude and ha codex is judged by agy
+    assert policy.chain_for(producers=frozenset({"claude", "codex"})) == ("agy",)
+    # and none is left when all wrote it: the pass fails closed, never a producer judging
+    assert policy.chain_for(producers=frozenset({"claude", "codex", "agy"})) == ()
     assert policy.unknown_producer_excludes == ("claude",)
     assert policy.mode_for(PR, docs_only=False) == "light"
     big = replace(PR, additions=500)

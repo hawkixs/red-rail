@@ -23,6 +23,8 @@ DEFAULT_MODELS: dict[str, dict[str, str]] = {
     "deep": {"agy": "gemini-3.1-pro-high", "codex": "gpt-6-astra", "claude": "claude-opus-5"},
 }
 TRAILER = re.compile(r"^co-authored-by:\s*(?P<who>.+?)\s*<", re.IGNORECASE | re.MULTILINE)
+# ha-delegate's trailer on a commit integrated from a ha worker: `<provider>/<model> (ha <run>)`
+IMPLEMENTED = re.compile(r"^implemented-by:\s*(?P<who>[^/\s]+)/", re.IGNORECASE | re.MULTILINE)
 PRODUCERS: tuple[tuple[str, Provider], ...] = (
     ("claude", "claude"),
     ("anthropic", "claude"),
@@ -30,6 +32,7 @@ PRODUCERS: tuple[tuple[str, Provider], ...] = (
     ("openai", "codex"),
     ("antigravity", "agy"),
     ("gemini", "agy"),
+    ("agy", "agy"),  # the provider id itself, as an `Implemented-by` trailer writes it
 )
 
 
@@ -83,9 +86,10 @@ class ReviewPolicy(BaseModel):
                 raise ValueError(f"no {tier} model for {missing}")
         return self
 
-    def chain_for(self, *, producer: Provider | None) -> tuple[Provider, ...]:
-        """Never the producer's provider; an unknown producer excludes the usual suspects."""
-        excluded = {producer} if producer else set(self.unknown_producer_excludes)
+    def chain_for(self, *, producers: frozenset[Provider]) -> tuple[Provider, ...]:
+        """Never a provider that wrote the change; an unknown producer excludes the usual
+        suspects. An empty chain is a pass with no judge, which fails closed."""
+        excluded = producers or frozenset(self.unknown_producer_excludes)
         return tuple(p for p in self.providers if p not in excluded)
 
     def mode_for(self, pr: PullRequest, *, docs_only: bool) -> Mode:
@@ -111,12 +115,14 @@ def load_policy(path: Path) -> ReviewPolicy:
     return ReviewPolicy.model_validate(raw)
 
 
-def producer_provider(commit_messages: list[str]) -> Provider | None:
-    """The agent that wrote the PR, read from the `Co-Authored-By` trailers."""
+def producer_providers(commit_messages: list[str]) -> frozenset[Provider]:
+    """Every agent that wrote the PR: the `Co-Authored-By` trailers and ha-delegate's
+    `Implemented-by` trailers. A name no judge provider matches excludes nothing."""
+    found: set[Provider] = set()
     for message in commit_messages:
-        for match in TRAILER.finditer(message):
-            who = match.group("who").lower()
-            for needle, provider in PRODUCERS:
-                if needle in who:
-                    return provider
-    return None
+        names = [m.group("who") for m in TRAILER.finditer(message)]
+        names += [m.group("who") for m in IMPLEMENTED.finditer(message)]
+        for name in names:
+            who = name.lower()
+            found.update(provider for needle, provider in PRODUCERS if needle in who)
+    return frozenset(found)
