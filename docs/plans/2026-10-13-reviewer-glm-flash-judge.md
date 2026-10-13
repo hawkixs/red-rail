@@ -7,7 +7,7 @@ the code changes. `make ci` is green after each task.
 Measured before planning (2026-10-13): `opencode models openrouter` lists
 `openrouter/z-ai/glm-5.3-flash` (and, refused by this plan, `openrouter/z-ai/glm-5.3`,
 `openrouter/z-ai/glm-5.3-flashx`, `openrouter/z-ai/glm-5.3-prime`, `openrouter/~z-ai/glm-flash-latest`).
-The pinned headless-agents v0.2.0 ships `headless_agents.providers.opencode.OpencodeProvider`
+The pinned headless-agents v0.2.0 ships `headless_agents.providers.opencode.OpenCodeProvider`
 (`real_home=`, `ephemeral_root=`; prompt in argv, `MAX_PROMPT_BYTES = 120_000`).
 
 ## Tasks
@@ -54,14 +54,28 @@ Verify: the Task 2 trailer tests fail before the needles exist and pass after; `
 - `CREDENTIALS["glm"] = Credentials(paths=(".local/share/opencode/auth.json",), mode="symlink")`.
 - `build_spec` gives `glm` a `CapabilityProfile(credentials=CREDENTIALS["glm"])` (no MCP, no tool)
   and its own seat name ending `-glm`.
-- `run_provider`: a `glm` branch runs `OpencodeProvider(real_home=Path.home()).run(spec)` and
+- `run_provider`: a `glm` branch runs `OpenCodeProvider(real_home=Path.home()).run(spec)` and
   reads the report log like agy and codex.
 
 Tests (`tests/test_reviewer_judges.py` or the module that tests `build_spec` / `run_provider`):
 - `build_spec(..., provider="glm")` → model `GLM_FLASH`, profile credentials are the opencode
   auth file, no MCP.
-- `run_provider("glm", spec)` with a stub `OpencodeProvider` (monkeypatched) asserts it was built
+- `run_provider("glm", spec)` with a stub `OpenCodeProvider` (monkeypatched) asserts it was built
   with `real_home=Path.home()` and that the report log text is returned.
+
+- `JudgeReply` gains `model: str`, set from `spec.model` in `judge()`; the verdict keeps the
+  models of the judges that answered, and `service._render` adds the line
+  `Models: <provider>=<model>, …` after the judges line.
+- A contract test imports `headless_agents.providers.opencode.OpenCodeProvider` from the pinned
+  dependency, so a renamed class fails CI instead of every glm run.
+
+Tests, `tests/test_reviewer_service.py`: the two scenarios that pin the old chain (the light
+disagreement arbitrated at deep, around line 238, and the timeout fallback, around line 372)
+keep their meaning under the new default chain: with an unknown producer the chain is
+`agy, glm, codex`, so the expected judge sequences are rewritten for it, and two cases are added:
+a Claude + codex producer set judges with `agy, glm` only, and a change whose producers are all
+four providers calls the runner zero times and fails closed. The check text of a passed review
+contains `Models: glm=openrouter/z-ai/glm-5.3-flash` when glm answered.
 
 Verify: the two tests fail before the `glm` branch exists (`unknown provider 'glm'`) and pass after; `make ci` exit code 0.
 
@@ -77,7 +91,8 @@ Verify: `make ci` exit code 0 and `uv run rail check` passes; the docs name `glm
 
 From the worktree, with the reviewer's token file: `uv run rail reviewer once --repository
 hawkixs/brain-v42 --pr <an open Claude + codex PR>` and check that the check run's text names
-`glm` among the judges with a parsed verdict. Recorded in the pull request description.
+`glm` among the judges with a parsed verdict and that its `Models:` line reads
+`glm=openrouter/z-ai/glm-5.3-flash` exactly. Recorded in the pull request description.
 
 Verify: the check run's text names `glm` among the judges with a parsed verdict (expected: `approve` or `request_changes`, never `unparsable`).
 

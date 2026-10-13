@@ -24,7 +24,7 @@ the cost of the full GLM model is the operator's stated reason to never use it.
 ## Decisions
 
 1. **A fourth reviewer provider, `glm`, reached through headless-agents' `opencode` adapter.**
-   The pinned headless-agents (`headless-agents-v0.2.0`) already ships `OpencodeProvider`:
+   The pinned headless-agents (`headless-agents-v0.2.0`) already ships `OpenCodeProvider`:
    inline config, an allow-listed tool wall that removes every built-in tool, an ephemeral HOME
    that dies with the run, the prompt in argv, stdin closed. No new runtime, no new dependency.
    `Provider` becomes `Literal["agy", "codex", "claude", "glm"]`.
@@ -50,7 +50,7 @@ the cost of the full GLM model is the operator's stated reason to never use it.
    an under-exclusion lets a producer judge itself, and red-rail#93 already chose the safe side.
 
 5. **The same isolation as the other judges.** One seat per run (`review-<repo>-<pr>-<sha>-glm`),
-   no tool: `OpencodeProvider` removes every built-in tool before the model sees them, and the
+   no tool: `OpenCodeProvider` removes every built-in tool before the model sees them, and the
    reviewer gives no MCP server, so the judge reads only the prompt. Its credentials are
    opencode's own `~/.local/share/opencode/auth.json`, symlinked into the ephemeral HOME by the
    adapter from the operator's real HOME (`real_home=Path.home()` is passed explicitly: the
@@ -60,7 +60,12 @@ the cost of the full GLM model is the operator's stated reason to never use it.
    120_000` in the adapter), like agy. `prompt_limits` gains `"glm": 115_000`, so `diff_budget`
    splits a large diff for it exactly as it does for agy.
 
-7. **Its reply is read like the others'.** The adapter writes the model's final text to the
+7. **The model each judge ran is shown.** A judge's reply carries the model it was given
+   (`spec.model`), and the check run's text adds one line, `Models: <provider>=<model>, …`, for
+   the judges that answered. Without it nobody outside the host can tell which GLM model judged
+   a pull request, and the operator's cost rule could not be audited from GitHub.
+
+8. **Its reply is read like the others'.** The adapter writes the model's final text to the
    report log; the reviewer parses it with the existing `parse_verdict` (first JSON object), and
    a missing or unparsable reply is `unparsable`, a provider failure is `provider_fallback`, as
    for agy and codex.
@@ -84,7 +89,7 @@ the cost of the full GLM model is the operator's stated reason to never use it.
    `opencode-go/glm-5.3`.
 4. `producer_providers` maps `glm`, `z-ai`, `zhipu` and an `Implemented-by: opencode…/…` trailer
    to `glm`; `build_spec` for `glm` names its own seat and the opencode credentials; `run_provider`
-   runs `OpencodeProvider` with the real HOME.
+   runs `OpenCodeProvider` with the real HOME.
 5. Before merge, one live `rail reviewer once` on a real pull request shows `judges: … glm` with a
-   parsed verdict; the model id used is the pinned constant.
+   parsed verdict, and its `Models:` line reads `glm=openrouter/z-ai/glm-5.3-flash` exactly.
 6. `make ci` is green and `rail check` passes on this repository.
