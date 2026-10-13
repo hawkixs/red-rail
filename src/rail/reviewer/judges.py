@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 from rail.reviewer.github import PullRequest
 from rail.reviewer.headers import HEADER
-from rail.reviewer.policy import Provider, ReviewPolicy, Tier
+from rail.reviewer.policy import GLM_FLASH, GLM_FLASH_FALLBACK, Provider, ReviewPolicy, Tier
 from rail.reviewer.split import Sight, sight_of
 from rail.reviewer.verdict import FINDING_ID, PreviousAnswer, ReviewVerdict
 
@@ -423,6 +423,7 @@ def build_spec(
     provider: Provider,
     tier: Tier,
     root: Path,
+    model: str | None = None,
 ) -> RunSpec:
     name = f"review-{pr.repository.replace('/', '-')}-{pr.number}-{pr.head_sha[:7]}-{provider}"
     home = _seat(root, name, provider)
@@ -436,7 +437,7 @@ def build_spec(
     return RunSpec(
         prompt=prompt,
         name=name,
-        model=policy.model(provider, tier),
+        model=model or policy.model(provider, tier),
         profile=profile,
         max_turns=1,
         timeout_seconds=policy.timeout_seconds,
@@ -482,6 +483,13 @@ def run_provider(provider: str, spec: RunSpec) -> tuple[int, str]:
     return result.exit_code, text
 
 
+def _run(runner: Runner, provider: Provider, spec: RunSpec) -> tuple[int, str]:
+    try:
+        return runner(provider, spec)
+    except Exception as exc:  # one failed judge, never a crashed pass (the chain walks on)
+        return 1, f"{type(exc).__name__}: {exc}"
+
+
 def judge(
     pr: PullRequest,
     diff: str,
@@ -515,10 +523,22 @@ def judge(
     base = root or ephemeral_root(os.environ) or Path(tempfile.gettempdir())
     spec = build_spec(pr, built.text, policy, provider=provider, tier=tier, root=base)
     started = time.time() - 1.0  # a second of slack for a filesystem's coarse mtime
-    try:
-        exit_code, text = runner(provider, spec)
-    except Exception as exc:  # one failed judge, never a crashed pass (the chain walks on)
-        exit_code, text = 1, f"{type(exc).__name__}: {exc}"
+    exit_code, text = _run(runner, provider, spec)
+    if provider == "glm" and spec.model == GLM_FLASH and exit_code != 0:
+        # decision 9f2947cb: the subscription did not answer (quota spent, outage, timeout):
+        # the same model on OpenRouter, so a quota alone never fails the pass closed. The
+        # reply names the model that answered, and the check's Models: line with it.
+        spec = build_spec(
+            pr,
+            built.text,
+            policy,
+            provider=provider,
+            tier=tier,
+            root=base,
+            model=GLM_FLASH_FALLBACK,
+        )
+        started = time.time() - 1.0
+        exit_code, text = _run(runner, provider, spec)
     failure: Failure | None = None
     verdict: ReviewVerdict | None = None
     if exit_code == TIMEOUT_EXIT_CODE:

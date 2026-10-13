@@ -524,7 +524,7 @@ def test_a_glm_empty_report_is_provider_fallback_and_fails_closed(
         run_judge=run_judge,
         root=tmp_path,
     )
-    assert seen == ["glm"]
+    assert seen == ["glm", "glm"]  # the subscription, then its OpenRouter fallback (9f2947cb)
     assert outcome.verdict.verdict == "request_changes" and outcome.verdict.round == "no_verdict"
     assert outcome.verdict.providers == ()
     assert any("glm/light: provider_fallback" in failure for failure in outcome.failures)
