@@ -1,0 +1,112 @@
+{
+  "delivery": {
+    "version": "rail-delivery/v1",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "windows_days": [
+      7,
+      30
+    ],
+    "projects": [
+      {
+        "project": "brain-v42",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-alerts",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-backup",
+        "target": "private-timers",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-life",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-probe",
+        "target": "vps-traefik",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      }
+    ]
+  }
+}
