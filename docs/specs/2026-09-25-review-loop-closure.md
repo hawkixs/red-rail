@@ -163,6 +163,16 @@ only the rulings below". The artifact type selects the class definitions of deci
   boundary of `rail accept`: whoever holds the host holds this command.
 - Idempotency key: `review_ruling:<owner/name>#<pr>:<finding>:<k>`, `k` counting the
   rulings on that finding.
+- **Amendment, 2026-10-13 (operator go, brain decision `f38ce645`).** An agent may record a
+  `fix` ruling, never a `carry-forward`: the operator typed four rulings in one morning, all
+  false positives, and a fix only asserts what the closure pass re-verifies anyway. The agent
+  runs without a terminal and without the typed confirmation, and must pass `--delegation <id>`,
+  the brain id of an ACTIVE operator delegation (its title starts with "Operator delegation"),
+  read back from brain before anything is written, plus `--evidence-sha <commit>` and
+  `--evidence "<test or line>"`. The ruling's issuer is the agent's label, and its data gains
+  `delegation` (the full id) and `evidence: {sha, proof}`. A service, a carry-forward, a
+  missing flag, a decision that is not an active delegation, or a brain that cannot be read
+  are refusals that write nothing.
 - A `carry_forward` ruling reclassifies the finding as `CF-<pr>-<n>` with status `ruled`,
   without a judge. A `fix` ruling waits for the closure check.
 

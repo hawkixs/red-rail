@@ -412,3 +412,132 @@ def test_the_reviewer_reads_and_writes_its_ledger_as_itself(tmp_path: Path, monk
     monkeypatch.setattr("rail.commands.reviewer.open_ledger", recording_open_ledger)
     _policy_seen(tmp_path, monkeypatch)
     assert agents == [REVIEWER_IDENTITY]
+
+
+# -- an agent's fix ruling under an operator delegation (decision f38ce645) ----------------
+
+DELEGATION = "d47ac557-7028-47fd-b409-7e22085dc01f"
+ACTIVE_DELEGATION = (
+    "## Decision: Operator delegation to brain_55 renewed under the permanent delegation rule "
+    f"(id:{DELEGATION})\n**Status**: active\n**Created**: 2026-10-13\n"
+)
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _agent_rule(
+    config: Path, monkeypatch, *, decision_text=ACTIVE_DELEGATION, ruling="fix", extra=None
+):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("RAIL_ACTOR", "agent:claude-code:rail")
+    monkeypatch.setattr("rail.actor.stdin_is_tty", lambda: False)
+    asked = []
+
+    def fetch(decision_id: str, *, agent: str) -> str:
+        asked.append((decision_id, agent))
+        if isinstance(decision_text, Exception):
+            raise decision_text
+        return decision_text
+
+    monkeypatch.setattr("rail.reviewer.delegation.fetch_decision", fetch)
+    args = [
+        "reviewer",
+        "rule",
+        "--config",
+        str(config),
+        "--repository",
+        "hawkixs/red-alpha",
+        "--pr",
+        "7",
+        "--finding",
+        "F-7-1",
+        "--as",
+        ruling,
+        "--decision",
+        "fixed by the rename",
+    ]
+    if extra is None:
+        extra = [
+            "--delegation",
+            DELEGATION,
+            "--evidence-sha",
+            SHA,
+            "--evidence",
+            "tests/test_a.py::test_renamed proves it",
+        ]
+    out = CliRunner().invoke(main, [*args, *extra], input="")
+    return out, asked
+
+
+def test_an_agent_records_a_fix_ruling_under_an_active_delegation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An agent, not at a terminal, records a fix ruling that names an active delegation decision
+    and carries evidence; the ruling keeps the agent's identity, the decision id and the proof."""
+    repo, config = _awaiting_repo(tmp_path)
+    out, asked = _agent_rule(config, monkeypatch)
+    assert out.exit_code == 0, out.output
+    assert asked == [(DELEGATION, "agent:claude-code:rail")]
+    (ruling,) = FileLedger(repo / RECEIPTS_DIR).list(
+        "red-alpha", attestation=AttestationKind.REVIEW_RULING
+    )
+    assert ruling.issuer == "agent:claude-code:rail"
+    assert ruling.data["ruling"] == "fix"
+    assert ruling.data["delegation"] == DELEGATION
+    assert ruling.data["evidence"] == {
+        "sha": SHA,
+        "proof": "tests/test_a.py::test_renamed proves it",
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "needle"),
+    [
+        ({"ruling": "carry-forward"}, "carry-forward"),
+        ({"extra": ["--evidence-sha", SHA, "--evidence", "t"]}, "--delegation"),
+        ({"extra": ["--delegation", DELEGATION, "--evidence", "t"]}, "--evidence-sha"),
+        ({"extra": ["--delegation", DELEGATION, "--evidence-sha", SHA]}, "--evidence"),
+        (
+            {"extra": ["--delegation", DELEGATION, "--evidence-sha", "main", "--evidence", "t"]},
+            "commit sha",
+        ),
+        ({"decision_text": ACTIVE_DELEGATION.replace("active", "superseded")}, "not active"),
+        (
+            {"decision_text": ACTIVE_DELEGATION.replace("Operator delegation", "Pick a lib")},
+            "not a delegation",
+        ),
+        ({"decision_text": "no such decision"}, "not a delegation"),
+        (
+            {
+                "decision_text": ACTIVE_DELEGATION.replace(
+                    "Operator delegation to brain_55 renewed",
+                    "Operator go: an agent may rule under a delegation decision",
+                )
+            },
+            "not a delegation",
+        ),
+        ({"decision_text": RuntimeError("brain unreachable")}, "cannot verify"),
+        (
+            {
+                "extra": [
+                    "--delegation",
+                    DELEGATION,
+                    "--evidence-sha",
+                    SHA,
+                    "--evidence",
+                    "curl 127.0.0.1:8765",
+                ]
+            },
+            "literal address",
+        ),
+    ],
+)
+def test_an_agent_ruling_is_refused_without_writing(
+    tmp_path: Path, monkeypatch, kwargs, needle
+) -> None:
+    """carry-forward stays the operator's; a fix needs a verified active delegation and evidence."""
+    repo, config = _awaiting_repo(tmp_path)
+    out, _ = _agent_rule(config, monkeypatch, **kwargs)
+    assert out.exit_code == 2 and needle in out.output, out.output
+    assert not FileLedger(repo / RECEIPTS_DIR).list(
+        "red-alpha", attestation=AttestationKind.REVIEW_RULING
+    )

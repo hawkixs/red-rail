@@ -29,7 +29,9 @@ is `docs/specs/2026-09-25-review-loop-closure.md`; read it for anything not cove
   `request_changes` verdict with no judge run, until every open blocker has a ruling. There is
   no round 4. The verdict names the exact command for each blocker:
   `rail reviewer rule --repository <owner/name> --pr <n> --finding <F-id> --as fix|carry-forward
-  --decision "<text>"`.
+  --decision "<text>"`. An agent may record `--as fix` only, under an active operator
+  delegation and with evidence: add `--delegation <brain decision id> --evidence-sha <commit>
+  --evidence "<test or line>"` (decision `f38ce645`); `carry-forward` stays the operator's.
 - **Closure check.** Once every open blocker has a ruling recorded, the next pass verifies only
   the `fix` rulings and approves when they all come back `fixed`; a `still_open` answer returns
   to awaiting ruling.

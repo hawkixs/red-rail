@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -204,10 +205,32 @@ class _PR:
 @click.option("--finding", required=True, help="The open blocker's id, e.g. F-50-2.")
 @click.option("--as", "ruling", type=click.Choice(["fix", "carry-forward"]), required=True)
 @click.option("--decision", required=True, help="Your decision, the text the judge verifies.")
+@click.option(
+    "--delegation",
+    default=None,
+    help="An agent only: the brain id of the active operator delegation it rules under.",
+)
+@click.option("--evidence-sha", default=None, help="An agent only: the commit that fixes it.")
+@click.option(
+    "--evidence", default=None, help="An agent only: the test or line that proves the fix."
+)
 def rule(
-    config_path: Path | None, repository: str, pr: int, finding: str, ruling: str, decision: str
+    config_path: Path | None,
+    repository: str,
+    pr: int,
+    finding: str,
+    ruling: str,
+    decision: str,
+    delegation: str | None,
+    evidence_sha: str | None,
+    evidence: str | None,
 ) -> None:
-    """Rule on one open blocker after round 3 (spec 2026-09-25, D9). Operator only, host only."""
+    """Rule on one open blocker after round 3 (spec 2026-09-25, D9), on the host.
+
+    The operator rules anything, typed at a terminal. An agent may rule `fix` only, under an
+    active operator delegation it names and with the evidence of the fix (decision
+    `f38ce645`): the closure pass re-verifies every fix, so the reviewer keeps the last word;
+    a carry-forward defers a real issue and stays the operator's."""
     from rail.actor import stdin_is_tty
     from rail.contract_guard import Unwritable, refuse_unwritable
     from rail.ledger import AttestationKind, Unattested
@@ -218,10 +241,14 @@ def rule(
     if os.environ.get("CI"):
         raise click.UsageError("a ruling is the operator's gesture: refused under CI")
     actor = resolve_or_exit()
-    if actor != "operator":
+    agent_evidence = None
+    if actor == "operator":
+        if not stdin_is_tty():
+            raise click.UsageError("a ruling is the operator's gesture, typed at a terminal")
+    elif actor.startswith("agent:"):
+        agent_evidence = _agent_fix_ruling(actor, ruling, delegation, evidence_sha, evidence)
+    else:
         raise click.UsageError(f"a ruling is the operator's gesture, not {actor}'s")
-    if not stdin_is_tty():
-        raise click.UsageError("a ruling is the operator's gesture, typed at a terminal")
     text = decision.strip()
     if not text or len(text) > 2000:
         raise click.UsageError("--decision must hold 1 to 2000 characters")
@@ -251,7 +278,9 @@ def rule(
         )
     f = waiting[finding]
     click.echo(f"{finding} [{f.file}{':' + str(f.line) if f.line else ''}] {f.title}\n{f.evidence}")
-    if click.prompt("Type the finding id to confirm", default="", show_default=False) != finding:
+    if agent_evidence is None and (
+        click.prompt("Type the finding id to confirm", default="", show_default=False) != finding
+    ):
         raise click.UsageError("confirmation did not match: nothing written")
     earlier = [r for r in rulings_of(ledger, project, target) if r.data.get("finding") == finding]
     data = {
@@ -260,6 +289,7 @@ def rule(
         "finding": finding,
         "ruling": ruling.replace("-", "_"),
         "decision": text,
+        **(agent_evidence or {}),
     }
     key = f"review_ruling:{repository}#{pr}:{finding}:{len(earlier) + 1}"
     try:
@@ -276,3 +306,50 @@ def rule(
         f"ruled {finding}: {ruling}; the next review pass is the closure check once every "
         "open blocker has a ruling"
     )
+
+
+_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _agent_fix_ruling(
+    actor: str,
+    ruling: str,
+    delegation: str | None,
+    evidence_sha: str | None,
+    evidence: str | None,
+) -> dict:
+    """What an agent's ruling records beside the operator's fields, or a refusal: `fix` only,
+    an active delegation read back from brain, a commit sha and the proof (decision f38ce645)."""
+    from rail.reviewer.delegation import DelegationRefused, verify_delegation
+
+    if ruling != "fix":
+        raise click.UsageError(
+            f"--as {ruling} defers a real issue: it stays the operator's gesture, not {actor}'s"
+        )
+    for flag, value in (
+        ("--delegation", delegation),
+        ("--evidence-sha", evidence_sha),
+        ("--evidence", evidence),
+    ):
+        if not (value or "").strip():
+            raise click.UsageError(
+                f"a ruling is the operator's gesture, not {actor}'s, unless the agent rules fix "
+                f"under an active delegation with its evidence: {flag} is missing"
+            )
+    sha = (evidence_sha or "").strip().lower()
+    if not _SHA.fullmatch(sha):
+        raise click.UsageError(f"--evidence-sha must be a commit sha, got {evidence_sha!r}")
+    proof = (evidence or "").strip()
+    if len(proof) > 500:
+        raise click.UsageError("--evidence must hold at most 500 characters")
+    from rail.contract_guard import Unwritable, refuse_unwritable
+
+    try:  # the proof is published with the ruling: the guard of the decision text applies
+        refuse_unwritable([proof])
+    except Unwritable as exc:
+        raise click.UsageError(str(exc)) from exc
+    try:
+        decision_id = verify_delegation((delegation or "").strip(), agent=actor)
+    except DelegationRefused as exc:
+        raise click.UsageError(str(exc)) from exc
+    return {"delegation": decision_id, "evidence": {"sha": sha, "proof": proof}}
