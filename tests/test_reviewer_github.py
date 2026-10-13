@@ -10,6 +10,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from rail.autonomy import MergedPull
 from rail.reviewer.github import CheckRun, GitHubApp, GitHubError, PullRequest
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -314,6 +315,131 @@ def test_diff_falls_back_to_the_file_list_when_github_refuses_a_large_one() -> N
     assert any("/files" in c for c in calls), "the fallback actually asked for the file list"
 
 
+def test_metrics_github_reads_follow_pages_and_fail_closed() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return httpx.Response(200, json=TOKEN)
+        calls.append(str(request.url))
+        if request.url.params.get("page") == "2":
+            return httpx.Response(200, json=[{"ok": 2}])
+        if request.url.path == "/object":
+            return httpx.Response(200, json={"bad": True})
+        return httpx.Response(
+            200,
+            json=[{"ok": 1}],
+            headers={"Link": '<https://api.github.com/next?page=2>; rel="next"'},
+        )
+
+    app = _contents_app(handler)
+    assert app._paged_list("/first") == [{"ok": 1}, {"ok": 2}]
+    assert len(calls) == 2
+
+    with pytest.raises(GitHubError, match="incomplete answer"):
+        app._paged_list("/object")
+
+
+def test_metrics_github_rejects_failed_or_external_next_page() -> None:
+    def routed(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return httpx.Response(200, json=TOKEN)
+        if request.url.path == "/first":
+            return httpx.Response(
+                200, json=[1], headers={"Link": '<https://api.github.com/second>; rel="next"'}
+            )
+        if request.url.path == "/second":
+            return httpx.Response(500, json={"message": "failed"})
+        return httpx.Response(
+            200, json=[1], headers={"Link": '<https://example.org/steal>; rel="next"'}
+        )
+
+    app = _contents_app(routed)
+    with pytest.raises(GitHubError):
+        app._paged_list("/first")
+    with pytest.raises(GitHubError):
+        app._paged_list("/external")
+
+
+def test_default_branch_and_metrics_sources() -> None:
+    def routed(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return httpx.Response(200, json=TOKEN)
+        if request.url.path == "/repos/o/r":
+            value = {"default_branch": "main"}
+        elif request.url.path.endswith("/timeline"):
+            value = [{"event": "ready_for_review", "created_at": "2026-10-10T00:00:00Z"}]
+        elif request.url.path.endswith("/pulls"):
+            value = [
+                {
+                    "number": 3,
+                    "created_at": "2026-10-09T00:00:00Z",
+                    "updated_at": "2026-10-12T00:00:00Z",
+                    "merged_at": "2026-10-12T00:00:00Z",
+                    "draft": False,
+                }
+            ]
+        elif request.url.path.endswith("/commits"):
+            value = [
+                {
+                    "commit": {
+                        "committer": {"date": "2026-10-12T00:00:00Z"},
+                        "message": 'Revert "bad change\nMore text',
+                    }
+                }
+            ]
+        else:
+            value = {}
+        return httpx.Response(200, json=value)
+
+    app = _contents_app(routed)
+    assert app.default_branch("o/r") == "main"
+    with pytest.raises(GitHubError):
+        app.default_branch("o/missing")
+    since = datetime(2026, 10, 10, tzinfo=UTC)
+    pulls = app.merged_pulls("o/r", base="main", since=since)
+    assert pulls == [
+        MergedPull(3, datetime(2026, 10, 12, tzinfo=UTC), datetime(2026, 10, 10, tzinfo=UTC))
+    ]
+    commits = app.commits_since("o/r", branch="main", since=since)
+    assert commits == [(datetime(2026, 10, 12, tzinfo=UTC), 'Revert "bad change')]
+
+
+def test_never_drafted_pull_uses_created_at_and_pulls_stop_at_since() -> None:
+    seen: list[str] = []
+
+    def routed(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return httpx.Response(200, json=TOKEN)
+        seen.append(request.url.path)
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "number": 1,
+                        "created_at": "2026-10-12T00:00:00Z",
+                        "updated_at": "2026-10-12T00:00:00Z",
+                        "merged_at": "2026-10-12T00:00:00Z",
+                    },
+                    {
+                        "number": 2,
+                        "created_at": "2026-10-01T00:00:00Z",
+                        "updated_at": "2026-10-01T00:00:00Z",
+                        "merged_at": "2026-10-01T00:00:00Z",
+                    },
+                ],
+            )
+        return httpx.Response(200, json=[])
+
+    app = _contents_app(routed)
+    pulls = app.merged_pulls("o/r", base="main", since=datetime(2026, 10, 10, tzinfo=UTC))
+    # the page whose last update predates `since` is still read in full, then the listing stops
+    assert [p.number for p in pulls] == [1]
+    assert pulls[0].ready_at == datetime(2026, 10, 12, tzinfo=UTC)
+    assert seen == ["/repos/o/r/pulls", "/repos/o/r/issues/1/timeline"]
+
+
 def _contents_app(handler) -> GitHubApp:
     def routed(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("access_tokens"):
@@ -388,3 +514,47 @@ def test_file_at_refuses_a_path_that_could_leave_the_file(path: str) -> None:
     with pytest.raises(GitHubError, match="refused path"):
         _contents_app(handler).file_at("hawkixs/red-rail", path, "c" * 40)
     assert seen == []
+
+
+def test_an_empty_commit_message_reads_as_an_empty_first_line() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[{"commit": {"committer": {"date": "2026-10-12T00:00:00Z"}, "message": ""}}],
+        )
+
+    app = _contents_app(handler)
+    since = datetime(2026, 10, 10, tzinfo=UTC)
+    assert app.commits_since("o/r", branch="main", since=since) == [
+        (datetime(2026, 10, 12, tzinfo=UTC), "")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/pulls", [{"number": 1, "merged_at": "2026-10-12T00:00:00Z"}]),
+        ("/pulls", ["not an object"]),
+        ("/commits", [{"commit": {}}]),
+        ("/timeline", [{"event": "ready_for_review"}]),
+    ],
+    ids=["pull-without-dates", "pull-not-an-object", "commit-without-date", "event-without-date"],
+)
+def test_an_entry_out_of_shape_is_a_github_error_never_a_crash(path: str, body: list) -> None:
+    """`publish` counts a GitHubError as one repository unread; any other exception would
+    stop the whole run."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(path):
+            return httpx.Response(200, json=body)
+        return httpx.Response(200, json=[])
+
+    app = _contents_app(handler)
+    since = datetime(2026, 10, 10, tzinfo=UTC)
+    with pytest.raises(GitHubError):
+        if path == "/commits":
+            app.commits_since("o/r", branch="main", since=since)
+        elif path == "/timeline":
+            app.ready_for_review_at("o/r", 1)
+        else:
+            app.merged_pulls("o/r", base="main", since=since)

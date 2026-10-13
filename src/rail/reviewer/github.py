@@ -4,15 +4,19 @@ its own rather than importing brain_v42."""
 
 from __future__ import annotations
 
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 import jwt
+
+from rail.autonomy import MergedPull
 
 API = "https://api.github.com"
 API_VERSION = "2022-11-28"
@@ -35,6 +39,27 @@ class GitHubError(Exception):
     def __init__(self, message: str, *, status: int | None = None) -> None:
         super().__init__(message)
         self.status = status
+
+
+@contextmanager
+def _in_shape() -> Iterator[None]:
+    """An answer whose entries miss a field or are not objects is a GitHubError: a caller
+    counts it as one repository unread, never as a crash of the whole run."""
+    try:
+        yield
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        raise GitHubError("GitHub answer out of shape") from exc
+
+
+def _github_datetime(value: str) -> datetime:
+    """Parse GitHub's UTC timestamps into aware datetimes for reliable window comparisons."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp has no timezone")
+        return parsed.astimezone(UTC)
+    except (TypeError, ValueError) as exc:
+        raise GitHubError("GitHub timestamp out of shape") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +203,119 @@ class GitHubApp:
             return response.json()
         except ValueError as exc:
             raise GitHubError(f"{method} {path}: not JSON") from exc
+
+    def _request_page(self, path: str) -> tuple[Any, str | None]:
+        """Read one JSON page and accept pagination only within the GitHub API origin."""
+        # Keep transport policy identical to every other API read; only inspect Link afterward.
+        response = self._page_response(path)
+        next_url = None
+        link = response.headers.get("Link", "")
+        for match in re.finditer(r"<([^>]+)>\s*;\s*rel=\"?([^\";, ]+)\"?", link):
+            if match.group(2) != "next":
+                continue
+            candidate = match.group(1)
+            parsed = urlsplit(candidate)
+            api = urlsplit(API)
+            if (parsed.scheme, parsed.netloc) != (api.scheme, api.netloc):
+                raise GitHubError("refused pagination URL outside GitHub API")
+            next_url = candidate
+            break
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise GitHubError(f"GET {path}: not JSON") from exc
+        return body, next_url
+
+    def _page_response(self, path: str) -> httpx.Response:
+        """Fetch a page while retaining its headers under the standard bounded GET policy."""
+        sent = {
+            "Accept": JSON,
+            "X-GitHub-Api-Version": API_VERSION,
+            "Authorization": f"Bearer {self.token()}",
+        }
+        try:
+            response = self._http.get(path, headers=sent, timeout=TIMEOUT_SECONDS)
+        except httpx.HTTPError as exc:
+            raise GitHubError(f"GET {path}: {exc}") from exc
+        if len(response.content) > MAX_RESPONSE_BYTES:
+            raise GitHubError(f"GET {path}: response too large")
+        if response.status_code >= 400:
+            raise GitHubError(f"GET {path}: {response.status_code}", status=response.status_code)
+        return response
+
+    def _paged_list(self, path: str) -> list[Any]:
+        """Read every page; a partial list is never returned as a complete answer."""
+        items: list[Any] = []
+        while path:
+            body, path = self._request_page(path)
+            if not isinstance(body, list):
+                raise GitHubError("incomplete answer")
+            items.extend(body)
+        return items
+
+    def default_branch(self, repository: str) -> str:
+        """Return the repository's declared default branch, refusing malformed responses."""
+        data = self._request("GET", f"/repos/{repository}")
+        if not isinstance(data, dict) or not isinstance(data.get("default_branch"), str):
+            raise GitHubError("repository response has no default_branch")
+        return data["default_branch"]
+
+    def ready_for_review_at(self, repository: str, number: int) -> datetime | None:
+        """Return the last transition from draft to ready, if the pull was ever drafted."""
+        events = self._paged_list(f"/repos/{repository}/issues/{number}/timeline?per_page=100")
+        with _in_shape():
+            ready = [event for event in events if event.get("event") == "ready_for_review"]
+            return _github_datetime(ready[-1]["created_at"]) if ready else None
+
+    def merged_pulls(self, repository: str, *, base: str, since: datetime) -> list[MergedPull]:
+        """List merged pull requests in the window, stopping once updates predate it."""
+        query = urlencode(
+            {
+                "state": "closed",
+                "base": base,
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": "100",
+            }
+        )
+        path: str | None = f"/repos/{repository}/pulls?{query}"
+        result: list[MergedPull] = []
+        while path:
+            page, next_page = self._request_page(path)
+            if not isinstance(page, list):
+                raise GitHubError("incomplete answer")
+            with _in_shape():
+                for raw in page:
+                    merged = raw.get("merged_at")
+                    if merged is None:
+                        continue
+                    merged_at = _github_datetime(merged)
+                    if merged_at >= since:
+                        number = int(raw["number"])
+                        created = _github_datetime(raw["created_at"])
+                        ready_at = self.ready_for_review_at(repository, number) or created
+                        result.append(MergedPull(number, merged_at, ready_at))
+                # sorted by update, newest first: once a page ends before `since`, no later page
+                # can hold a pull request merged in the window (read in full first)
+                if page and _github_datetime(page[-1]["updated_at"]) < since:
+                    break
+            path = next_page
+        return result
+
+    def commits_since(
+        self, repository: str, *, branch: str, since: datetime
+    ) -> list[tuple[datetime, str]]:
+        """Read commit dates and first message lines since an ISO timestamp."""
+        query = urlencode({"sha": branch, "since": since.isoformat(), "per_page": "100"})
+        commits = self._paged_list(f"/repos/{repository}/commits?{query}")
+        with _in_shape():
+            return [
+                (
+                    _github_datetime(item["commit"]["committer"]["date"]),
+                    item["commit"]["message"].split("\n", 1)[0],
+                )
+                for item in commits
+            ]
 
     # -- pull requests -------------------------------------------------------------------
 
