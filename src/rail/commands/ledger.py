@@ -15,6 +15,7 @@ from rail.ledger import (
     LedgerError,
     RecordKind,
     Unattested,
+    issuer_identity,
     open_ledger,
 )
 from rail.ledger.brain import BrainLedger
@@ -73,9 +74,10 @@ def replay(repo: Path, as_json: bool) -> None:
         raise SystemExit(1) from exc
     lines: list[dict[str, str]] = []
     code = 0
+    ledgers: dict[str, BrainLedger] = {}
     for record in waiting:
         try:
-            outcome = ledger.replay(record)
+            outcome = _ledger_for(repo, record.issuer, ledger, ledgers).replay(record)
         except Unattested as exc:
             outcome, code = f"unattested: {exc.cause}", code or 2
         except IdempotencyConflict as exc:
@@ -92,3 +94,19 @@ def replay(repo: Path, as_json: bool) -> None:
             click.echo("the spool is empty")
     if code:
         raise SystemExit(code)
+
+
+def _ledger_for(
+    repo: Path, issuer: str, default: BrainLedger, opened: dict[str, BrainLedger]
+) -> BrainLedger:
+    """The ledger that replays a receipt of this issuer: the rail's own unless the issuer
+    holds another credential, opened once per issuer."""
+    identity = issuer_identity(issuer)
+    if not identity:
+        return default
+    if issuer not in opened:
+        ledger = open_ledger(repo, **identity)
+        if not isinstance(ledger, BrainLedger):
+            raise LedgerError("ledger: brain did not open a brain ledger")
+        opened[issuer] = ledger
+    return opened[issuer]

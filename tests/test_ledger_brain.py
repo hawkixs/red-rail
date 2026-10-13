@@ -895,3 +895,32 @@ def test_call_checked_reports_a_forbidden_token_as_refused(tmp_path: Path) -> No
         ledger._call_checked("brain_delivery_get", {})
     assert str(caught.value).startswith("brain refused the token")
     assert "unreachable" not in str(caught.value)
+
+
+def test_a_refused_credential_is_forbidden_never_unreachable(tmp_path: Path) -> None:
+    """Ticket 3b27419f: a 403 on the attestation path once read `unattested: unreachable`,
+    which hid that brain answered and refused the token."""
+
+    class ForbiddenClient:
+        def call(self, *args, **kwargs):
+            raise BrainForbidden("credential refused")
+
+    ledger = BrainLedger(
+        ForbiddenClient(),
+        ticket="04bc1f4a-3c21-48eb-86bb-c3f3279a9c9f",
+        project="red-probe",
+        spool_dir=tmp_path,
+    )
+    with pytest.raises(Unattested) as caught:
+        ledger.attest(
+            "red-probe",
+            AttestationKind.DEPLOYED,
+            {"sha": "b" * 40},
+            issuer="op",
+            idempotency_key="d1",
+        )
+    assert caught.value.cause == "forbidden"
+    assert caught.value.receipt.exists()
+    with pytest.raises(Unattested) as again:
+        ledger.replay(ledger.pending()[0])
+    assert again.value.cause == "forbidden"

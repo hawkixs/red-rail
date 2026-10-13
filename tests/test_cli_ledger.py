@@ -7,6 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from rail.brain.client import BrainClient
+from rail.brain.settings import DEFAULT_REVIEWER_TOKEN_FILE
 from rail.cli import main
 from rail.commands import attest as attest_command
 from rail.commands import ledger as ledger_command
@@ -684,15 +685,15 @@ def _brain_repo(tmp_path: Path) -> tuple[Path, BrainLedger, FakeBrain]:
     return repo, ledger, brain
 
 
-def _refused(ledger: BrainLedger, brain: FakeBrain) -> Path:
+def _refused(ledger: BrainLedger, brain: FakeBrain, *, issuer: str = "op", key: str = "d1") -> Path:
     brain.enabled = False
     with pytest.raises(Unattested) as exc:
         ledger.attest(
             "red-probe",
             AttestationKind.DEPLOYED,
             {"sha": "b" * 40},
-            issuer="op",
-            idempotency_key="d1",
+            issuer=issuer,
+            idempotency_key=key,
         )
     brain.enabled = True
     return exc.value.receipt
@@ -751,3 +752,47 @@ def test_attest_from_a_receipt_outside_the_spool_records_it_and_leaves_it(
     assert receipt.is_file()
     assert ledger.pending() == []
     assert source.digest in receipt.read_text()
+
+
+REVIEWER = {"agent": "red-rail-reviewer", "token_file": DEFAULT_REVIEWER_TOKEN_FILE}
+
+
+def test_ledger_replay_sends_a_reviewer_receipt_as_the_reviewer_with_its_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ticket 3b27419f: brain admits a label only under its own credential, and a replay
+    looks the key up and attests under one label, so a receipt the reviewer issued goes
+    through the reviewer's identity and token; any other issuer through the rail's own."""
+    repo, ledger, brain = _brain_repo(tmp_path)
+    opened: list[dict[str, str]] = []
+
+    def open_as(repo: Path, **identity: str) -> BrainLedger:
+        opened.append(identity)
+        return ledger
+
+    monkeypatch.setattr(ledger_command, "open_ledger", open_as)
+    _refused(ledger, brain)
+    _refused(ledger, brain, issuer="red-rail-reviewer", key="v1")
+    out = CliRunner().invoke(main, ["ledger", "replay", "--repo", str(repo)])
+    assert out.exit_code == 0, out.output
+    assert opened == [{}, REVIEWER]
+    assert ledger.pending() == []
+
+
+def test_attest_from_a_reviewer_receipt_opens_the_ledger_as_the_reviewer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, ledger, brain = _brain_repo(tmp_path)
+    opened: list[dict[str, str]] = []
+
+    def open_as(repo: Path, **identity: str) -> BrainLedger:
+        opened.append(identity)
+        return ledger
+
+    monkeypatch.setattr(attest_command, "open_ledger", open_as)
+    receipt = _refused(ledger, brain, issuer="red-rail-reviewer", key="v1")
+    out = CliRunner().invoke(
+        main, ["attest", "deployed", "--repo", str(repo), "--from", str(receipt)]
+    )
+    assert out.exit_code == 0, out.output
+    assert opened == [REVIEWER]

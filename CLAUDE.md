@@ -98,7 +98,9 @@ comments, test names. The conversation with the operator stays in French.
   (`ledger/brain.py`: brain-v42 is the authority, an attestation waits BEFORE the call in the
   host's spool (`ledger/spool.py`, `$RAIL_SPOOL_DIR/<project>`, never in a repository) and
   leaves it once brain has recorded it; a refusal raises `Unattested`, `rail attest` exits 2,
-  and `rail attest --from` or `rail ledger replay` sends it again;
+  and `rail attest --from` or `rail ledger replay` sends it again under the receipt issuer's
+  identity (a reviewer receipt with the reviewer's token); a refused credential reads
+  `forbidden`, never `unreachable`;
   `integrated`/`fulfilled` are brain milestones read from the ticket; the contract is set as the
   requester `red`, attestations as the project). `ledger:` in `rail.yaml` selects the
   authority (`file` default, `brain` needs `ticket:`) — ADR-0002. `idempotency_key_for`
