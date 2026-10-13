@@ -12,7 +12,7 @@ from rail.cli import main
 from rail.gates import build as build_gates
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
 from rail.ledger.file import FileLedger
-from rail.metrics import compute_metrics
+from rail.metrics import compute_metrics, delivery_window
 from tests.helpers import conforming_tree, git, write_roster
 
 T0 = datetime(2026, 9, 15, 8, 0, tzinfo=UTC)  # == the fixture commit timestamp
@@ -121,6 +121,137 @@ def test_metrics_from_the_history(tmp_path: Path) -> None:
     # one more applicable and passing gate than before `review.carry_forward` joined the
     # ledger-scoped evidence gates: this history has no carry-forward recorded.
     assert (m.conformance.passed, m.conformance.applicable, m.conformance.exceptions) == (17, 24, 0)
+
+
+def test_metrics_history_dict_is_stable(tmp_path: Path) -> None:
+    repo = _history(tmp_path)
+    metrics = compute_metrics(
+        FileLedger(repo / RECEIPTS_DIR),
+        "red-alpha",
+        repo,
+        now=T0 + timedelta(hours=100),
+    )
+    assert metrics.to_dict() == {
+        "project": "red-alpha",
+        "window_days": 30,
+        "since": "2026-08-20T12:00:00+00:00",
+        "deployments": 2,
+        "deployment_frequency_per_week": 0.467,
+        "lead_time_commit_to_deploy_hours": 60.0,
+        "lead_time_contract_to_deploy_hours": 60.0,
+        "change_failure_rate": 0.5,
+        "recovery_time_hours": 2.0,
+        "drill_recovery_time_minutes": None,
+        "conformance": {
+            "passed": 17,
+            "applicable": 24,
+            "exceptions": 0,
+            "tier": "prod",
+            "stages": [
+                "hygiene",
+                "intent",
+                "design",
+                "plan",
+                "build",
+                "review",
+                "integrate",
+                "release",
+                "deploy",
+                "observe",
+                "learn",
+            ],
+            "score": 0.708,
+        },
+    }
+
+
+def test_delivery_window_matches_metrics_delivery_values(tmp_path: Path) -> None:
+    repo = _history(tmp_path)
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    now = T0 + timedelta(hours=100)
+    metrics = compute_metrics(ledger, "red-alpha", repo, now=now)
+    window = delivery_window(ledger, "red-alpha", repo, now=now, window_days=30)
+    assert (
+        window.deployments,
+        window.deployment_frequency_per_week,
+        window.lead_time_commit_to_deploy_hours,
+        window.change_failure_rate,
+        window.recovery_time_hours,
+        window.drill_recovery_time_minutes,
+    ) == (
+        metrics.deployments,
+        metrics.deployment_frequency_per_week,
+        metrics.lead_time_commit_to_deploy_hours,
+        metrics.change_failure_rate,
+        metrics.recovery_time_hours,
+        metrics.drill_recovery_time_minutes,
+    )
+
+
+def test_delivery_window_does_not_run_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rail.metrics as metrics_module
+
+    repo = _history(tmp_path)
+    monkeypatch.setattr(
+        metrics_module, "run_gates", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError())
+    )
+    result = delivery_window(
+        FileLedger(repo / RECEIPTS_DIR),
+        "red-alpha",
+        repo,
+        now=T0 + timedelta(hours=100),
+        window_days=30,
+    )
+    assert result.deployments == 2
+
+
+def test_delivery_window_counts_named_rollback_for_one_failed_deployment(tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "prod")
+    write_roster(tmp_path, ["red-alpha"])
+    head = git(repo, "rev-parse", "HEAD")
+    h = timedelta(hours=1)
+    for offset, digest, key in ((1, "sha256:a", "d1"), (2, "sha256:a", "d2")):
+        _ledger_at(repo, T0 + offset * h).attest(
+            "red-alpha",
+            AttestationKind.DEPLOYED,
+            {"sha": head, "digest": digest, "target": "vps-traefik"},
+            issuer="op",
+            idempotency_key=key,
+        )
+    _ledger_at(repo, T0 + 3 * h).attest(
+        "red-alpha",
+        AttestationKind.ROLLED_BACK,
+        {"drill": False, "from_digest": "sha256:a"},
+        issuer="op",
+        idempotency_key="rb",
+    )
+    result = delivery_window(
+        FileLedger(repo / RECEIPTS_DIR), "red-alpha", repo, now=T0 + 4 * h, window_days=30
+    )
+    assert result.deployments == 2
+    assert result.change_failure_rate == 0.5
+
+
+def test_delivery_window_counts_named_rollback_of_old_artifact(tmp_path: Path) -> None:
+    repo = conforming_tree(tmp_path, "red-alpha", "prod")
+    write_roster(tmp_path, ["red-alpha"])
+    _ledger_at(repo, T0 + 40 * timedelta(days=1)).attest(
+        "red-alpha",
+        AttestationKind.ROLLED_BACK,
+        {"drill": False, "from_digest": "sha256:old"},
+        issuer="op",
+        idempotency_key="rb-old",
+    )
+    result = delivery_window(
+        FileLedger(repo / RECEIPTS_DIR),
+        "red-alpha",
+        repo,
+        now=T0 + 41 * timedelta(days=1),
+        window_days=30,
+    )
+    assert result.deployments == 0 and result.change_failure_rate == 1.0
 
 
 def test_metrics_window_excludes_old_deployments(tmp_path: Path) -> None:
