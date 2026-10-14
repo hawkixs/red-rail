@@ -1,0 +1,11 @@
+[Unit]
+Description=red-rail independent reviewer: one pass over the watched repositories
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/rail reviewer once
+Environment=PATH=%h/.local/bin:%h/.opencode/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=4h
+Nice=5

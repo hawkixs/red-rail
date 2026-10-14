@@ -10,6 +10,10 @@ The reviewer runs on the host, in pull mode, with the operator's private config
 
 1. One PR on demand: `rail reviewer once --repository <owner/name> --pr <n>`.
 2. Everything pending once: `rail reviewer once`; the service: `rail reviewer run`.
+   On the host the pass runs from the user units `contrib/systemd/user/rail-reviewer.service`
+   and `.timer`, copied into `~/.config/systemd/user` (a copy, never a link to a checkout),
+   then `systemctl --user enable --now rail-reviewer.timer`: one `rail reviewer once` two
+   minutes after the previous pass ends.
 3. Re-run a review on the same head SHA by adding the label `rail-review:rerun` to the PR (it
    forces the full diff instead of the delta; the round counter itself never resets).
 4. After a first verdict, a new push is judged `incremental` on the delta since the last head.
