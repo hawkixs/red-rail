@@ -9,7 +9,15 @@ from pydantic import ValidationError
 
 from rail.reviewer.github import PullRequest
 from rail.reviewer.judges import JudgeReply, build_prompt, judge, parse_verdict
-from rail.reviewer.policy import default_policy, load_policy, producer_providers
+from rail.reviewer.policy import (
+    DEFAULT_MODELS,
+    Provider,
+    ReviewPolicy,
+    Tier,
+    default_policy,
+    load_policy,
+    producer_providers,
+)
 from rail.reviewer.verdict import Finding, ReviewVerdict
 
 PR = PullRequest(
@@ -97,6 +105,45 @@ def test_policy_file_overrides_only_what_it_names(tmp_path: Path) -> None:
         load_policy(path)
 
 
+@pytest.mark.parametrize("tier", ["light", "deep"])
+@pytest.mark.parametrize("provider", ["agy", "codex", "glm"])
+@pytest.mark.parametrize(
+    "model", ["claude-sonnet-5-5-medium", "Claude-opus-5", "openrouter/Anthropic/sonnet"]
+)
+def test_claude_models_require_the_claude_provider(
+    tier: Tier, provider: Provider, model: str
+) -> None:
+    models = {tier: dict(entries) for tier, entries in DEFAULT_MODELS.items()}
+    models[tier][provider] = model
+    with pytest.raises(
+        ValidationError, match="Claude models must use the claude provider"
+    ) as error:
+        ReviewPolicy(models=models)
+    message = error.value.errors()[0]["msg"]
+    assert provider in message and model in message
+
+
+@pytest.mark.parametrize("tier", ["light", "deep"])
+@pytest.mark.parametrize(
+    "model", ["claude-sonnet-5-5-medium", "Claude-opus-5", "openrouter/Anthropic/sonnet"]
+)
+def test_claude_models_are_accepted_under_claude(tier: Tier, model: str) -> None:
+    models = {tier: dict(entries) for tier, entries in DEFAULT_MODELS.items()}
+    models[tier]["claude"] = model
+    assert ReviewPolicy(models=models).model("claude", tier) == model
+
+
+def test_shipped_default_models_validate() -> None:
+    assert ReviewPolicy(models=DEFAULT_MODELS).models == DEFAULT_MODELS
+
+
+def test_policy_file_refuses_claude_under_another_provider(tmp_path: Path) -> None:
+    path = tmp_path / "policy.yaml"
+    path.write_text("models:\n  light:\n    agy: claude-sonnet-5-5-medium\n")
+    with pytest.raises(ValidationError, match="Claude models must use the claude provider"):
+        load_policy(path)
+
+
 def test_producer_providers_are_read_from_the_trailers() -> None:
     assert producer_providers(["feat: x\n\nCo-Authored-By: Claude Opus 5 <n@a>"]) == {"claude"}
     assert producer_providers(["fix: y\n\nCo-authored-by: Codex <codex@openai.com>"]) == {"codex"}
@@ -123,6 +170,23 @@ def test_an_implemented_by_trailer_names_a_producer_too() -> None:
         assert producer_providers([f"x\n\nCo-Authored-By: {name} <n@a>"]) == {"glm"}
     # the trailer is a line of its own, not a phrase in the body
     assert producer_providers(["x\n\nsee Implemented-by: codex/y in the thread"]) == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("trailer", "expected"),
+    [
+        ("Implemented-by: agy/claude-sonnet-5-5-medium (ha 1)", {"agy", "claude"}),
+        ("Implemented-by: codex/gpt-6.1-sol (ha 1)", {"codex"}),
+        ("Implemented-by: opencode/openrouter/deepseek/deepseek-v4-flash (ha 1)", {"glm"}),
+        ("Co-Authored-By: Claude Opus 5 <n@a>", {"claude"}),
+        # a trailer that lost its model still names its provider (excluding stays fail-closed)
+        ("Implemented-by: agy/ (ha 1)", {"agy"}),
+    ],
+)
+def test_producer_trailers_identify_the_provider_and_model(
+    trailer: str, expected: set[Provider]
+) -> None:
+    assert producer_providers([f"feat: x\n\n{trailer}"]) == expected
 
 
 def test_chain_for_a_pr_never_includes_the_producer() -> None:
@@ -795,6 +859,35 @@ def test_a_config_models_override_merges_with_the_defaults(tmp_path: Path) -> No
     assert policy.models["deep"]["agy"] == "gemini-3.8-flash-medium"
     assert policy.models["deep"]["codex"] == DEFAULT_MODELS["deep"]["codex"]
     assert policy.models["light"] == DEFAULT_MODELS["light"]
+
+
+@pytest.mark.parametrize("subcommand", ["once", "run"])
+def test_host_config_reports_a_mislabelled_claude_model_as_a_configuration_error(
+    tmp_path: Path, subcommand: str
+) -> None:
+    from click.testing import CliRunner
+
+    from rail.commands.reviewer import command
+    from rail.reviewer.config import load_reviewer_config
+
+    config = tmp_path / "reviewer.yaml"
+    config.write_text(
+        "app_id: 1\ninstallation_id: 2\nprivate_key_file: unused.pem\n"
+        f"repositories:\n  - slug: example/red-probe\n    path: {tmp_path}\n"
+        "policy:\n  models:\n    deep: {agy: claude-sonnet-5-5-medium}\n"
+    )
+    config.chmod(0o600)
+    with pytest.raises(
+        ValidationError, match="Claude models must use the claude provider"
+    ) as error:
+        load_reviewer_config(config)
+    assert error.value.errors()[0]["loc"] == ("policy",)
+
+    result = CliRunner().invoke(command, [subcommand, "--config", str(config)])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "error:" in result.output and "Traceback" not in result.output
+    assert "agy" in result.output and "claude-sonnet-5-5-medium" in result.output
 
 
 def _sight_diff() -> str:
