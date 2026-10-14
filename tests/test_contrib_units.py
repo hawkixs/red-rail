@@ -28,6 +28,16 @@ def test_serve_restarts_on_failure() -> None:
     assert parser["Service"]["Restart"] == "on-failure"
 
 
+def test_publish_is_oneshot() -> None:
+    parser = _read_unit("rail-metrics-publish.service")
+    assert parser["Service"]["Type"] == "oneshot"
+
+
+def test_serve_cannot_gain_privileges() -> None:
+    parser = _read_unit("rail-metrics-serve.service")
+    assert parser["Service"]["NoNewPrivileges"] == "yes"
+
+
 def test_publish_timer_is_hourly_and_persistent() -> None:
     parser = _read_unit("rail-metrics-publish.timer")
     assert parser["Timer"]["OnCalendar"] == "hourly"

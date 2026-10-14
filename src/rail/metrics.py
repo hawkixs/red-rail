@@ -122,11 +122,19 @@ def compute_metrics(
 ) -> Metrics:
     since = now - timedelta(days=window_days)
     cfg = try_load_rail_config(repo)
-    delivery = delivery_window(ledger, project, repo, now=now, window_days=window_days)
-
-    contracts = ledger.list(project, kind=RecordKind.CONTRACT)
     target = cfg.deploy.target.value if cfg is not None and cfg.deploy is not None else None
     deployed = _release_deployments(ledger, project, since, target)
+    delivery = delivery_window(
+        ledger,
+        project,
+        repo,
+        now=now,
+        window_days=window_days,
+        config=cfg,
+        deployed=deployed,
+    )
+
+    contracts = ledger.list(project, kind=RecordKind.CONTRACT)
     contract_leads = (
         [_hours(d.recorded_at - contracts[0].recorded_at) for d in deployed] if contracts else []
     )
@@ -163,8 +171,9 @@ def delivery_window(
     now: datetime,
     window_days: int,
     config: RailConfig | None = None,
+    deployed: list[Record] | None = None,
 ) -> DeliveryWindow:
-    """Use the supplied manifest with its evidence, or read the checkout for local metrics."""
+    """Reuse supplied config and release deployments to avoid duplicate ledger reads."""
     since = now - timedelta(days=window_days)
     cfg = config if config is not None else try_load_rail_config(repo)
     target = cfg.deploy.target.value if cfg is not None and cfg.deploy is not None else None
@@ -174,7 +183,8 @@ def delivery_window(
 
     # a deployment is a release-mode `deployed` on the manifest's target: a project without a
     # target has none, a rollback or a drill's roll-forward is not a change
-    deployed = _release_deployments(ledger, project, since, target)
+    if deployed is None:
+        deployed = _release_deployments(ledger, project, since, target)
     rollbacks = [r for r in windowed(AttestationKind.ROLLED_BACK) if not r.data.get("drill")]
     incidents = [r for r in windowed(AttestationKind.INCIDENT_DETECTED) if not r.data.get("drill")]
     restores = [r for r in windowed(AttestationKind.RESTORED) if not r.data.get("drill")]

@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ from pydantic import ValidationError
 from rail.metrics_contract import (
     MAX_BYTES,
     Answer,
+    DeliveryBlock,
     DeliveryProjectV2,
     DeliveryWindowV2Model,
     TooLarge,
@@ -17,6 +19,33 @@ from rail.metrics_contract import (
 FIXTURES = Path(__file__).parents[1] / "contracts" / "rail-metrics-v1"
 VALID = ("full.json", "partial.json", "partial-delivery.json", "delivery-only.json", "empty.json")
 RESERVED = ("served_at", "source_age_s", "source", "available", "reason", "payload")
+
+
+def test_zero_offset_zone_is_normalized_before_serialization() -> None:
+    at = datetime(2026, 1, 15, tzinfo=timezone(timedelta(0), "GMT"))
+    block = DeliveryBlock(
+        version="rail-delivery/v1", generated_at=at, windows_days=(7, 30), projects=()
+    )
+    utc = DeliveryBlock(
+        version="rail-delivery/v1",
+        generated_at=at.astimezone(UTC),
+        windows_days=(7, 30),
+        projects=(),
+    )
+    assert block.generated_at.tzinfo is UTC
+    assert encode(Answer(delivery=block)) == encode(Answer(delivery=utc))
+    assert block.model_dump(mode="json")["generated_at"] == "2026-01-15T00:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    "at",
+    [datetime(2026, 1, 15), datetime(2026, 1, 15, tzinfo=timezone(timedelta(hours=1)))],
+)
+def test_naive_and_nonzero_offset_datetimes_are_refused(at: datetime) -> None:
+    with pytest.raises(ValidationError, match="timezone-aware UTC"):
+        DeliveryBlock(
+            version="rail-delivery/v1", generated_at=at, windows_days=(7, 30), projects=()
+        )
 
 
 @pytest.mark.parametrize("name", VALID)

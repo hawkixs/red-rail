@@ -13,9 +13,78 @@ from rail.gates import build as build_gates
 from rail.ledger import RECEIPTS_DIR, AttestationKind, Contract, Deliverable
 from rail.ledger.file import FileLedger
 from rail.metrics import compute_metrics, delivery_window
+from rail.model import RailConfig
 from tests.helpers import conforming_tree, git, write_roster
 
 T0 = datetime(2026, 9, 15, 8, 0, tzinfo=UTC)  # == the fixture commit timestamp
+
+
+def test_compute_metrics_reads_deployments_and_config_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rail import metrics
+    from rail.ledger import Record, RecordKind
+
+    cfg = RailConfig.model_validate(
+        {
+            "rail": 1,
+            "project": "red-alpha",
+            "brain_key": "red-alpha",
+            "tier": "prod",
+            "stack": "python",
+            "deploy": {"target": "vps-traefik", "healthcheck": "https://example.com/healthz"},
+        }
+    )
+    loads = 0
+
+    def config(repo: Path) -> RailConfig:
+        nonlocal loads
+        loads += 1
+        return cfg
+
+    class CountingLedger:
+        deployed_reads = 0
+
+        def list(
+            self,
+            project: str,
+            *,
+            kind: RecordKind | None = None,
+            attestation: AttestationKind | None = None,
+        ) -> list[Record]:
+            if attestation == AttestationKind.DEPLOYED:
+                self.deployed_reads += 1
+                return [
+                    Record.build(
+                        kind=RecordKind.ATTESTATION,
+                        project=project,
+                        issuer="operator",
+                        idempotency_key="deployed",
+                        payload={"kind": "deployed", "data": {"target": "vps-traefik"}},
+                        recorded_at=T0 + timedelta(hours=48),
+                    )
+                ]
+            if kind == RecordKind.CONTRACT:
+                return [
+                    Record.build(
+                        kind=kind,
+                        project=project,
+                        issuer="operator",
+                        idempotency_key="contract",
+                        payload={},
+                        recorded_at=T0,
+                    )
+                ]
+            return []
+
+    monkeypatch.setattr(metrics, "try_load_rail_config", config)
+    monkeypatch.setattr(metrics, "applicable_stages", lambda repo: [])
+    monkeypatch.setattr(metrics, "run_gates", lambda *args, **kwargs: [])
+    ledger = CountingLedger()
+    result = compute_metrics(ledger, "red-alpha", tmp_path, now=T0 + timedelta(hours=100))
+    assert result.deployments == 1
+    assert result.lead_time_contract_to_deploy_hours == 48.0
+    assert ledger.deployed_reads == loads == 1
 
 
 @pytest.fixture(autouse=True)

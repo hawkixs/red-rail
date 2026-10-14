@@ -23,6 +23,7 @@ from rail.ledger import (
     brain_digest,
     open_ledger,
 )
+from rail.ledger import brain as brain_module
 from rail.ledger.brain import KNOWN_REFUSALS, BrainLedger, record_from_row
 from rail.ledger.file import load_receipt
 from rail.ledger.spool import spool_directory
@@ -44,6 +45,31 @@ CONTRACT = Contract(
     ],
 )
 RELEASE = {"version": "1.0.0", "digest": "sha256:" + "a" * 64}
+
+
+@pytest.mark.parametrize("lookup", [False, True], ids=["records", "key"])
+@pytest.mark.parametrize("repeat", [False, True], ids=["endless", "repeated"])
+def test_attestation_pagination_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lookup: bool, repeat: bool
+) -> None:
+    ledger, _, _ = _ledger(tmp_path)
+    calls = 0
+    limit = getattr(brain_module, "MAX_PAGES", 100)
+
+    def page(name: str, arguments: dict, *, agent: str | None = None) -> dict:
+        nonlocal calls
+        assert name == "brain_delivery_attestation_list"
+        calls += 1
+        assert calls <= limit, "pagination exceeded its request budget"
+        return {"items": [], "next_cursor": "same" if repeat else str(calls)}
+
+    monkeypatch.setattr(ledger, "_call", page)
+    with pytest.raises(LedgerError, match="pagination"):
+        if lookup:
+            ledger._row_by_key(AttestationKind.RELEASED, "missing")
+        else:
+            ledger._attestation_records(AttestationKind.RELEASED)
+    assert calls == (2 if repeat else limit)
 
 
 def _clock(start: datetime = T0):

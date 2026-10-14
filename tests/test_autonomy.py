@@ -117,6 +117,51 @@ def test_since_cuts_every_source_at_the_actor_boundary() -> None:
     assert samples.rounds == (1,)
 
 
+@pytest.mark.parametrize("days", [7, 30])
+def test_future_facts_do_not_change_windows_or_totals(days: int) -> None:
+    future = NOW + timedelta(microseconds=1)
+    present = [
+        _record(kind, NOW)
+        for kind in (
+            AttestationKind.RELEASED,
+            AttestationKind.DEPLOYED,
+            AttestationKind.ROLLED_BACK,
+            AttestationKind.RESTORED,
+            AttestationKind.INCIDENT_DETECTED,
+        )
+    ]
+    present.extend(
+        [
+            _verdict(1, NOW),
+            _record(
+                AttestationKind.REVIEW_RULING,
+                NOW,
+                issuer="agent:test",
+                data={"repository": REPOSITORY, "pr": 1},
+            ),
+        ]
+    )
+    baseline = window_samples(_facts(present, [_pull(1, at=NOW)], [NOW]), now=NOW, days=days)
+    records = present + [
+        _record(record.attestation, future, issuer=record.issuer, data=record.data)
+        for record in present
+    ]
+    records.extend(
+        [
+            _verdict(1, future, round_label="awaiting_ruling"),
+            _verdict(2, future),
+        ]
+    )
+    actual = window_samples(
+        _facts(records, [_pull(1, at=NOW), _pull(2, at=future)], [NOW, future]),
+        now=NOW,
+        days=days,
+    )
+    assert actual == baseline
+    assert baseline.releases == baseline.reviewed_prs == baseline.rulings == 1
+    assert merge(actual, baseline) == merge(baseline, baseline)
+
+
 def test_review_history_before_the_window_follows_the_merged_pull() -> None:
     records = [
         _verdict(1, _date(5), verdict="request_changes"),

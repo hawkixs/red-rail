@@ -53,6 +53,10 @@ def assert_answer(response: tuple[int, dict[str, str], bytes], status: int, body
     assert actual_status == status
     assert headers["Content-Type"] == "application/json"
     assert headers["Cache-Control"] == "no-store"
+    if status == 405:
+        assert headers["Allow"] == "GET"
+    else:
+        assert "Allow" not in headers
     assert actual_body == body
 
 
@@ -189,6 +193,55 @@ def test_access_log_is_silent(
     server, _ = endpoint
     request(server)
     assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("error", [BrokenPipeError, ConnectionResetError])
+@pytest.mark.parametrize("write_number", [1, 2], ids=["headers", "body"])
+def test_disconnected_client_is_silent(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    error: type[Exception],
+    write_number: int,
+) -> None:
+    from rail.serve import create_server
+
+    class Writer(BytesIO):
+        writes = 0
+
+        def write(self, data: bytes) -> int:
+            self.writes += 1
+            if self.writes == write_number:
+                raise error("client disconnected")
+            return super().write(data)
+
+    with create_server(tmp_path / "absent.json", port=0) as server:
+        handler = object.__new__(server.RequestHandlerClass)
+        handler.command = "GET"
+        handler.path = "/rail-metrics"
+        handler.request_version = "HTTP/1.1"
+        handler.requestline = "GET /rail-metrics HTTP/1.1"
+        handler.wfile = Writer()
+        handler._respond()
+        assert handler.wfile.writes == write_number
+    assert capsys.readouterr().err == ""
+
+
+def test_unexpected_response_write_error_propagates(tmp_path: Path) -> None:
+    from rail.serve import create_server
+
+    class Writer(BytesIO):
+        def write(self, data: bytes) -> int:
+            raise OSError("unexpected write error")
+
+    with create_server(tmp_path / "absent.json", port=0) as server:
+        handler = object.__new__(server.RequestHandlerClass)
+        handler.command = "GET"
+        handler.path = "/rail-metrics"
+        handler.request_version = "HTTP/1.1"
+        handler.requestline = "GET /rail-metrics HTTP/1.1"
+        handler.wfile = Writer()
+        with pytest.raises(OSError, match="unexpected write error"):
+            handler._respond()
 
 
 def test_serve_uses_default_file_and_port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
