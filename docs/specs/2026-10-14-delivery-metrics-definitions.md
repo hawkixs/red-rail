@@ -39,19 +39,25 @@ the same digest) is published beside it.
 
 D3 — Change failure rate. A change failed when a non-drill `incident_detected` names its
 digest, or a non-drill `rolled_back` names it (`from_digest`), or, for records without a
-digest, a non-drill incident or rollback falls within 24 h after it. A failure is counted once
+digest, a non-drill incident or rollback falls within 24 h after it: such a record is
+attributed to one change only, the newest change (never a redeployment) whose first
+deployment precedes it by at most 24 h. A failure is counted once
 per digest: an incident raised while a digest is redeployed counts against that digest's
 change. A failed candidate is a digest named by a non-drill incident or rollback that has no
-release-mode `deployed`; it counts as one attempt and one failure. CFR = failed changes /
-attempts.
+release-mode `deployed`; it counts as one attempt and one failure. Window membership: a
+change belongs to the window holding its first deployment, a failed candidate to the window
+holding its first incident or rollback. CFR of a window = its failed changes and failed
+candidates / its changes and failed candidates; a failure recorded later still fails its
+change in that change's window (DORA: the share of changes that failed).
 
 D4 — Recovery. A non-drill `restored` may carry `incident` (the record digest of the
 incident it closes), `restored_at` (event time, UTC) and `evidence` (the record digest of
 the healthy deployment that proves it). `restored_at` is used only when
 incident time ≤ `restored_at` ≤ the record's `recorded_at`, else the record time. A
 `restored` naming an incident closes that one; otherwise the oldest open incident before
-it. Time to restore = the median over closed incidents; an open incident is counted in
-`open_incidents`. Durations keep the second: the contract carries minutes, not hours.
+it. Matching runs over the whole ledger; window membership follows the incident's
+`recorded_at`. Time to restore of a window = the median over its closed incidents; its
+`open_incidents` = its incidents still open at publication time. Durations keep the second: the contract carries minutes, not hours.
 
 D5 — `rail deploy` closes what it opened. A successful forward deployment closes every open
 non-drill incident of the project with a `restored` carrying `incident`, `restored_at` (its
