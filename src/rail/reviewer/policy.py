@@ -42,7 +42,7 @@ DEFAULT_MODELS: dict[str, dict[str, str]] = {
 }
 TRAILER = re.compile(r"^co-authored-by:\s*(?P<who>.+?)\s*<", re.IGNORECASE | re.MULTILINE)
 # ha-delegate's trailer on a commit integrated from a ha worker: `<provider>/<model> (ha <run>)`
-IMPLEMENTED = re.compile(r"^implemented-by:\s*(?P<who>[^/\s]+)/", re.IGNORECASE | re.MULTILINE)
+IMPLEMENTED = re.compile(r"^implemented-by:\s*(?P<who>[^/\s]+/\S+)", re.IGNORECASE | re.MULTILINE)
 PRODUCERS: tuple[tuple[str, Provider], ...] = (
     ("claude", "claude"),
     ("anthropic", "claude"),
@@ -106,6 +106,20 @@ class ReviewPolicy(BaseModel):
             missing = [p for p in self.providers if p not in self.models.get(tier, {})]
             if missing:
                 raise ValueError(f"no {tier} model for {missing}")
+        return self
+
+    @model_validator(mode="after")
+    def _claude_provider_only(self) -> ReviewPolicy:
+        """Keep Claude under its own provider: the independent judge must be non-Claude, and
+        the Models: line is read per provider (decision c2c46a2a)."""
+        for models in self.models.values():
+            for provider, model in models.items():
+                name = model.lower()
+                if provider != "claude" and (name.startswith("claude") or "anthropic" in name):
+                    raise ValueError(
+                        "Claude models must use the claude provider: "
+                        f"{provider} is configured with {model}"
+                    )
         return self
 
     @model_validator(mode="after")
