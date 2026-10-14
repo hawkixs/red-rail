@@ -2,8 +2,10 @@
 that is faked here; the gates then read what the flows wrote."""
 
 import json
+from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import CliRunner
@@ -13,8 +15,9 @@ from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step, flow
 from rail.deploy.sites import redact_address
 from rail.gates.evidence import deployed
 from rail.gates.evidence import drill as drill_gate
-from rail.ledger import RECEIPTS_DIR, AttestationKind
+from rail.ledger import RECEIPTS_DIR, AttestationKind, LedgerError, Record, Unattested
 from rail.ledger.file import FileLedger
+from rail.model import load_rail_config
 from tests.helpers import conforming_tree, git
 
 D1, D2 = "sha256:" + "1" * 64, "sha256:" + "2" * 64
@@ -101,6 +104,267 @@ def test_forward_deploys_the_newest_release_and_attests_it(
     assert data["previous_digest"] == ""
     assert json.loads(out.output)["live"]["image_digest"] == D1
     assert deployed(repo).passed
+
+
+def _incident(ledger: FileLedger, key: str, *, drill: bool = False) -> Record:
+    return ledger.attest(
+        "red-probe",
+        AttestationKind.INCIDENT_DETECTED,
+        {"drill": drill, "digest": D1},
+        issuer="operator",
+        idempotency_key=key,
+    )
+
+
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_successful_forward_closes_each_open_incident_with_deployment_evidence(
+    tmp_path: Path, target: FakeTarget, count: int
+) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1))
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    incidents = [_incident(ledger, f"incident:{i}") for i in range(count)]
+    before = ledger.list("red-probe")
+
+    outcome = flow.forward(repo, load_rail_config(repo), ledger, issuer="operator", target=target)
+
+    assert outcome.failed is None and outcome.live is not None
+    deployed_record = outcome.records[0]
+    assert deployed_record.attestation is AttestationKind.DEPLOYED
+    assert deployed_record.data["mode"] == "release"
+    restores = [r for r in outcome.records if r.attestation is AttestationKind.RESTORED]
+    assert len(restores) == count
+    for incident, restored in zip(incidents, restores, strict=True):
+        assert restored.data == {
+            "target": "vps-traefik",
+            "drill": False,
+            "incident": incident.digest,
+            "restored_at": deployed_record.recorded_at.isoformat(),
+            "evidence": deployed_record.digest,
+        }
+        assert incident.recorded_at <= deployed_record.recorded_at <= restored.recorded_at
+    assert ledger.list("red-probe")[: len(before)] == before
+
+
+@pytest.mark.parametrize("named", [True, False])
+def test_forward_does_not_close_an_already_restored_incident(
+    tmp_path: Path, target: FakeTarget, named: bool
+) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1))
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    incident = _incident(ledger, "incident")
+    ledger.attest(
+        "red-probe",
+        AttestationKind.RESTORED,
+        {"drill": False, **({"incident": incident.digest} if named else {})},
+        issuer="operator",
+        idempotency_key="restored",
+    )
+
+    outcome = flow.forward(repo, load_rail_config(repo), ledger, issuer="operator", target=target)
+
+    assert [r.attestation for r in outcome.records] == [AttestationKind.DEPLOYED]
+
+
+def test_forward_ignores_drill_recoveries_and_incidents_from_other_projects(
+    tmp_path: Path, target: FakeTarget
+) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1))
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    incident = _incident(ledger, "real-incident")
+    _incident(ledger, "drill-incident", drill=True)
+    ledger.attest(
+        "red-probe",
+        AttestationKind.RESTORED,
+        {"drill": True, "incident": incident.digest},
+        issuer="operator",
+        idempotency_key="drill-recovery",
+    )
+    ledger.attest(
+        "red-other",
+        AttestationKind.INCIDENT_DETECTED,
+        {"drill": False},
+        issuer="operator",
+        idempotency_key="other-incident",
+    )
+
+    outcome = flow.forward(repo, load_rail_config(repo), ledger, issuer="operator", target=target)
+
+    assert [r.attestation for r in outcome.records] == [
+        AttestationKind.DEPLOYED,
+        AttestationKind.RESTORED,
+    ]
+    assert outcome.records[-1].data["incident"] == incident.digest
+
+
+@pytest.mark.parametrize("refusal", ["unattested", "refused"])
+def test_forward_cannot_close_incidents_without_a_recorded_deployment(
+    tmp_path: Path, target: FakeTarget, monkeypatch: pytest.MonkeyPatch, refusal: str
+) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1))
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    cfg = load_rail_config(repo)
+    flow.forward(repo, cfg, ledger, issuer="operator", target=target)
+    _incident(ledger, "incident")
+    before = ledger.list("red-probe")
+    real_attest = ledger.attest
+
+    def refusing(
+        project: str,
+        kind: AttestationKind,
+        data: dict[str, Any],
+        *,
+        issuer: str,
+        idempotency_key: str,
+        emitted_at: datetime | None = None,
+    ) -> Record:
+        if kind is AttestationKind.DEPLOYED:
+            if refusal == "unattested":
+                raise Unattested(repo / "pending-deployed.json", "unreachable")
+            raise LedgerError("refused")
+        return real_attest(
+            project,
+            kind,
+            data,
+            issuer=issuer,
+            idempotency_key=idempotency_key,
+            emitted_at=emitted_at,
+        )
+
+    monkeypatch.setattr(ledger, "attest", refusing)
+
+    outcome = flow.forward(repo, cfg, ledger, issuer="operator", target=target)
+
+    assert outcome.live is not None
+    assert outcome.records == ()
+    assert bool(outcome.unattested) == (refusal == "unattested")
+    assert bool(outcome.ledger_failures) == (refusal == "refused")
+    assert ledger.list("red-probe") == before
+
+
+def test_automatic_rollback_names_its_incident_without_closing_older_incidents(
+    tmp_path: Path, target: FakeTarget
+) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    cfg = load_rail_config(repo)
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    flow.forward(repo, cfg, ledger, version="0.1.0", issuer="operator", target=target)
+    older = _incident(ledger, "older-incident")
+    target.broken.add(D2)
+
+    outcome = flow.forward(repo, cfg, ledger, issuer="operator", target=target)
+
+    assert outcome.failed is not None
+    assert [r.attestation for r in outcome.records] == [
+        AttestationKind.INCIDENT_DETECTED,
+        AttestationKind.ROLLED_BACK,
+        AttestationKind.DEPLOYED,
+        AttestationKind.RESTORED,
+    ]
+    assert outcome.records[-1].data["incident"] == outcome.records[0].digest
+    assert outcome.records[-1].data["incident"] != older.digest
+
+
+@pytest.mark.parametrize("refusal", ["unattested", "refused"])
+def test_automatic_rollback_cannot_name_an_incident_that_was_not_recorded(
+    tmp_path: Path, target: FakeTarget, monkeypatch: pytest.MonkeyPatch, refusal: str
+) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    cfg = load_rail_config(repo)
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    flow.forward(repo, cfg, ledger, version="0.1.0", issuer="operator", target=target)
+    target.broken.add(D2)
+    real_attest = ledger.attest
+
+    def refusing(
+        project: str,
+        kind: AttestationKind,
+        data: dict[str, Any],
+        *,
+        issuer: str,
+        idempotency_key: str,
+        emitted_at: datetime | None = None,
+    ) -> Record:
+        if kind is AttestationKind.INCIDENT_DETECTED:
+            if refusal == "unattested":
+                raise Unattested(repo / "pending-incident.json", "unreachable")
+            raise LedgerError("refused")
+        return real_attest(
+            project,
+            kind,
+            data,
+            issuer=issuer,
+            idempotency_key=idempotency_key,
+            emitted_at=emitted_at,
+        )
+
+    monkeypatch.setattr(ledger, "attest", refusing)
+
+    outcome = flow.forward(repo, cfg, ledger, issuer="operator", target=target)
+
+    assert outcome.failed is not None
+    assert [r.attestation for r in outcome.records] == [
+        AttestationKind.ROLLED_BACK,
+        AttestationKind.DEPLOYED,
+        AttestationKind.RESTORED,
+    ]
+    assert "incident" not in outcome.records[-1].data
+    assert bool(outcome.unattested) == (refusal == "unattested")
+    assert bool(outcome.ledger_failures) == (refusal == "refused")
+
+
+def test_operator_rollback_names_the_oldest_open_non_drill_incident(
+    tmp_path: Path, target: FakeTarget
+) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    cfg = load_rail_config(repo)
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    flow.forward(repo, cfg, ledger, version="0.1.0", issuer="operator", target=target)
+    flow.forward(repo, cfg, ledger, issuer="operator", target=target)
+    _incident(ledger, "drill-incident", drill=True)
+    incident = _incident(ledger, "incident")
+    _incident(ledger, "later-incident")
+
+    outcome = flow.rollback(repo, cfg, ledger, issuer="operator", target=target)
+
+    assert [r.attestation for r in outcome.records] == [
+        AttestationKind.ROLLED_BACK,
+        AttestationKind.DEPLOYED,
+        AttestationKind.RESTORED,
+    ]
+    assert outcome.records[-1].data == {
+        "target": "vps-traefik",
+        "drill": False,
+        "digest": D1,
+        "recovery_seconds": outcome.recovery_seconds,
+        "incident": incident.digest,
+    }
+
+
+def test_drill_recovery_records_keep_their_existing_payloads(
+    tmp_path: Path, target: FakeTarget
+) -> None:
+    repo = _repo(tmp_path, ("0.1.0", D1), ("0.1.1", D2))
+    cfg = load_rail_config(repo)
+    ledger = FileLedger(repo / RECEIPTS_DIR)
+    flow.forward(repo, cfg, ledger, version="0.1.0", issuer="operator", target=target)
+    flow.forward(repo, cfg, ledger, issuer="operator", target=target)
+    _incident(ledger, "open-incident")
+
+    outcome = flow.drill(repo, cfg, ledger, issuer="operator", target=target)
+
+    assert [r.attestation for r in outcome.records] == [
+        AttestationKind.INCIDENT_DETECTED,
+        AttestationKind.ROLLED_BACK,
+        AttestationKind.RESTORED,
+        AttestationKind.DEPLOYED,
+    ]
+    assert outcome.records[2].data == {
+        "target": "vps-traefik",
+        "drill": True,
+        "digest": D1,
+        "recovery_seconds": outcome.recovery_seconds,
+    }
+    assert outcome.records[-1].data["mode"] == "drill"
 
 
 def test_a_failed_forward_rolls_back_and_writes_the_failure_sequence(
