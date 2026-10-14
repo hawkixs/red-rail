@@ -98,6 +98,41 @@ def test_publish_counts_deployment_on_main_beyond_checkout(
     assert not (checkout / RECEIPTS_DIR).exists()
 
 
+def test_v2_reads_commit_range_on_main_beyond_checkout(
+    history: tuple[Path, Path, Path],
+) -> None:
+    _, writer, checkout = history
+    old_head = git(checkout, "rev-parse", "HEAD")
+    previous_sha = git(writer, "rev-parse", "HEAD")
+    FileLedger(writer / RECEIPTS_DIR, clock=lambda: NOW.replace(day=10)).attest(
+        "red-probe",
+        AttestationKind.DEPLOYED,
+        {"sha": previous_sha, "digest": "sha256:previous", "target": "private-compose"},
+        issuer="operator",
+        idempotency_key="deployment:previous",
+    )
+    git(writer, "commit", "--allow-empty", "-m", "Included change beyond checkout")
+    current_sha = git(writer, "rev-parse", "HEAD")
+    FileLedger(writer / RECEIPTS_DIR, clock=lambda: NOW.replace(day=12)).attest(
+        "red-probe",
+        AttestationKind.DEPLOYED,
+        {"sha": current_sha, "digest": "sha256:current", "target": "private-compose"},
+        issuer="operator",
+        idempotency_key="deployment:current",
+    )
+    push_changes(writer)
+    answer = collect_paths(checkout)
+    assert answer.delivery_v2 is not None
+    measured = answer.delivery_v2.projects[0]
+    assert measured.d7 is not None
+    assert measured.d7.changes == 3
+    assert measured.d7.lead_time_for_changes_hours == round(
+        (NOW.replace(day=12) - datetime.fromisoformat(FIXED_DATE)).total_seconds() / 3600, 2
+    )
+    assert git(checkout, "rev-parse", "HEAD") == old_head
+    assert not (checkout / RECEIPTS_DIR).exists()
+
+
 @pytest.fixture
 def healthy(tmp_path: Path) -> Path:
     writer = tmp_path / "healthy-writer"

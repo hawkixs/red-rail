@@ -77,6 +77,49 @@ class DeliveryBlock(StrictModel):
         return self
 
 
+class DeliveryWindowV2Model(StrictModel):
+    changes: Count
+    redeployments: Count
+    deployment_frequency_per_week: NonNegative
+    lead_time_for_changes_hours: NonNegative | None
+    release_to_deploy_hours: NonNegative | None
+    change_failure_rate: Ratio | None
+    failed_changes: Count
+    time_to_restore_minutes: NonNegative | None
+    open_incidents: Count
+    drill_recovery_time_minutes: NonNegative | None
+
+
+class DeliveryProjectV2(StrictModel):
+    project: Name
+    status: Literal["measured", "no_deployment"]
+    target: Name | None
+    d7: DeliveryWindowV2Model | None
+    d30: DeliveryWindowV2Model | None
+
+    @model_validator(mode="after")
+    def consistent_deployment_status(self) -> "DeliveryProjectV2":
+        """A targetless repository has no figures; measured repositories need both windows."""
+        absent = self.status == "no_deployment"
+        if any((value is None) != absent for value in (self.target, self.d7, self.d30)):
+            raise ValueError("deployment status must match target and both windows")
+        return self
+
+
+class DeliveryBlockV2(StrictModel):
+    version: Literal["rail-delivery/v2"]
+    generated_at: UtcDatetime
+    windows_days: tuple[Literal[7], Literal[30]]
+    projects: tuple[DeliveryProjectV2, ...]
+
+    @model_validator(mode="after")
+    def sorted_projects(self) -> "DeliveryBlockV2":
+        project_names = tuple(p.project for p in self.projects)
+        if project_names != tuple(sorted(project_names)):
+            raise ValueError("projects must be sorted by project name")
+        return self
+
+
 class AutonomyWindow(StrictModel):
     window_start: UtcDatetime
     releases: Count
@@ -142,6 +185,7 @@ class AutonomyBlock(StrictModel):
 class Answer(StrictModel):
     delivery: DeliveryBlock | None = None
     autonomy: AutonomyBlock | None = None
+    delivery_v2: DeliveryBlockV2 | None = None
 
 
 def encode(answer: Answer) -> bytes:

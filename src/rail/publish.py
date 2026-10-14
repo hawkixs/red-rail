@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import asdict
@@ -27,7 +28,7 @@ from rail.autonomy import (
 from rail.brain.settings import DEFAULT_REVIEWER_TOKEN_FILE
 from rail.ledger import Ledger, LedgerError
 from rail.ledger.committed import MAIN_REF, CommittedLedger
-from rail.metrics import delivery_window
+from rail.metrics import delivery_window, delivery_window_v2
 from rail.metrics_contract import (
     Answer,
     AutonomyBlock,
@@ -36,8 +37,11 @@ from rail.metrics_contract import (
     AutonomyWindow,
     Coverage,
     DeliveryBlock,
+    DeliveryBlockV2,
     DeliveryProject,
+    DeliveryProjectV2,
     DeliveryWindowModel,
+    DeliveryWindowV2Model,
     NotMeasured,
     encode,
 )
@@ -75,11 +79,16 @@ def collect(
     missing: list[str] = []
     projects: list[AutonomyProject] = []
     delivery_projects: list[DeliveryProject] = []
+    delivery_projects_v2: list[DeliveryProjectV2] = []
     samples: dict[int, list[Samples]] = {7: [], 30: []}
     for repository in config.repositories:
+        tail = repository.slug.rsplit("/", 1)[-1].lower()
+        name = re.sub(r"[^a-z0-9]+", "-", tail).strip("-")[:64].rstrip("-") or "unknown"
+        step = "fetch"
         try:
             if not gitrepo.fetch_main(repository.path):
                 raise OSError("origin/main fetch failed")
+            step = "manifest"
             manifest = gitrepo.file_at(repository.path, MAIN_REF, "rail.yaml")
             if manifest is None:
                 raise OSError("origin/main manifest is unreadable")
@@ -87,12 +96,12 @@ def collect(
             committed = cfg.ledger is LedgerBackend.FILE
             if not committed:
                 cfg = load_rail_config(repository.path)
-        except (OSError, UnicodeDecodeError, ValidationError, YAMLError):
-            tail = repository.slug.rsplit("/", 1)[-1].lower()
-            name = re.sub(r"[^a-z0-9]+", "-", tail).strip("-")[:64].rstrip("-")
-            missing.append(name or "unknown")
+        except (OSError, UnicodeDecodeError, ValidationError, YAMLError) as error:
+            missing.append(name)
+            print(f"missing {name}: {step} {type(error).__name__}", file=sys.stderr)
             continue
         try:
+            step = "ledger"
             ledger = (
                 CommittedLedger(repository.path)
                 if committed
@@ -103,6 +112,7 @@ def collect(
                 )
             )
             records = ledger.list(cfg.project)
+            step = "github"
             branch = github.default_branch(repository.slug)
             merged = github.merged_pulls(repository.slug, base=branch, since=SINCE)
             commits = github.commits_since(repository.slug, branch=branch, since=SINCE)
@@ -114,6 +124,7 @@ def collect(
                 reverts=[at for at, message in commits if message.startswith('Revert "')],
             )
             observed = {days: window_samples(facts, now=now, days=days) for days in (7, 30)}
+            step = "ledger"
             delivery = (
                 {
                     days: delivery_window(
@@ -129,8 +140,25 @@ def collect(
                 if cfg.tier is Tier.PROD and cfg.deploy is not None
                 else None
             )
-        except (LedgerError, GitHubError, FileNotFoundError):
+            delivery_v2 = (
+                {
+                    days: delivery_window_v2(
+                        ledger,
+                        cfg.project,
+                        repository.path,
+                        now=now,
+                        window_days=days,
+                        config=cfg,
+                    )
+                    for days in (7, 30)
+                }
+                if cfg.deploy is not None
+                else None
+            )
+        except (LedgerError, GitHubError, OSError) as error:
+            # past the manifest, coverage names the project as v1 always did
             missing.append(cfg.project)
+            print(f"missing {cfg.project}: {step} {type(error).__name__}", file=sys.stderr)
             continue
 
         # Validation is outside the read guards: invalid computed data must never be published.
@@ -153,6 +181,19 @@ def collect(
                     d30=DeliveryWindowModel.model_validate(asdict(delivery[30])),
                 )
             )
+        delivery_projects_v2.append(
+            DeliveryProjectV2(
+                project=cfg.project,
+                status="measured" if cfg.deploy is not None else "no_deployment",
+                target=cfg.deploy.target.value if cfg.deploy is not None else None,
+                d7=DeliveryWindowV2Model.model_validate(asdict(delivery_v2[7]))
+                if delivery_v2 is not None
+                else None,
+                d30=DeliveryWindowV2Model.model_validate(asdict(delivery_v2[30]))
+                if delivery_v2 is not None
+                else None,
+            )
+        )
         for days in (7, 30):
             samples[days].append(observed[days])
 
@@ -190,6 +231,12 @@ def collect(
             total=total,
             projects=tuple(sorted(projects, key=lambda project: project.project)),
             not_measured=NOT_MEASURED,
+        ),
+        delivery_v2=DeliveryBlockV2(
+            version="rail-delivery/v2",
+            generated_at=generated_at,
+            windows_days=(7, 30),
+            projects=tuple(sorted(delivery_projects_v2, key=lambda project: project.project)),
         ),
     )
 

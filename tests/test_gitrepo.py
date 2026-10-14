@@ -85,6 +85,54 @@ def test_commit_timestamp_is_aware(tmp_path: Path) -> None:
     assert gitrepo.commit_timestamp(repo, "0" * 40) is None
 
 
+def test_commit_times_between_uses_committer_dates_and_excludes_base_and_merges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.helpers import git
+
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "config", "commit.gpgsign", "false")
+    git(tmp_path, "commit", "--allow-empty", "-m", "Base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "-b", "feature")
+    monkeypatch.setitem(ENV, "GIT_COMMITTER_DATE", "2026-10-11T08:00:00+00:00")
+    _git(tmp_path, "commit", "--allow-empty", "-m", "Included feature")
+    git(tmp_path, "checkout", "main")
+    monkeypatch.setitem(ENV, "GIT_COMMITTER_DATE", "2026-10-12T08:00:00+00:00")
+    _git(tmp_path, "commit", "--allow-empty", "-m", "Included main")
+    monkeypatch.setitem(ENV, "GIT_COMMITTER_DATE", "2026-10-13T08:00:00+00:00")
+    _git(tmp_path, "merge", "--no-ff", "feature", "-m", "Excluded merge")
+    head = git(tmp_path, "rev-parse", "HEAD")
+    assert sorted(gitrepo.commit_times_between(tmp_path, base, head) or []) == [
+        datetime(2026, 10, 11, 8, tzinfo=UTC),
+        datetime(2026, 10, 12, 8, tzinfo=UTC),
+    ]
+    assert gitrepo.commit_times_between(tmp_path, head, head) == []
+    assert gitrepo.commit_times_between(tmp_path, "0" * 40, head) is None
+
+
+@pytest.mark.parametrize(
+    "error", [OSError("unavailable"), subprocess.TimeoutExpired("git", 10), UnicodeError()]
+)
+def test_commit_times_between_never_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    def run(args: list[str], **kwargs: Any) -> None:
+        assert args == ["git", "-C", str(tmp_path), "log", "--no-merges", "--format=%cI", "a..b"]
+        assert kwargs["timeout"] == 10
+        raise error
+
+    monkeypatch.setattr(gitrepo.subprocess, "run", run)
+    assert gitrepo.commit_times_between(tmp_path, "a", "b") is None
+
+
+def test_commit_times_between_refuses_invalid_dates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gitrepo, "_git", lambda *args: "not a date")
+    assert gitrepo.commit_times_between(tmp_path, "a", "b") is None
+
+
 def test_latest_tag(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert gitrepo.latest_tag(repo) is None

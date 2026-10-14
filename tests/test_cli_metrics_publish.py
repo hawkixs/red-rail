@@ -211,6 +211,81 @@ def test_publish_two_repositories(publication: dict[str, Any]) -> None:
     assert publication["github"].closed
 
 
+def test_publish_carries_both_delivery_versions(publication: dict[str, Any]) -> None:
+    result = invoke(publication)
+    assert result.exit_code == 0, result.output
+    answer = Answer.model_validate_json(publication["out"].read_bytes())
+    assert answer.delivery is not None and answer.delivery_v2 is not None
+    assert answer.delivery.version == "rail-delivery/v1"
+    assert answer.delivery_v2.version == "rail-delivery/v2"
+    assert answer.delivery.generated_at == answer.delivery_v2.generated_at
+    assert [p.project for p in answer.delivery_v2.projects] == ["red-alpha", "red-zeta"]
+    assert all(p.status == "measured" for p in answer.delivery_v2.projects)
+
+
+def test_publish_targetless_repository_has_explicit_v2_status(publication: dict[str, Any]) -> None:
+    path = publication["paths"][0]
+    path.joinpath("rail.yaml").write_text(
+        f"rail: 1\nproject: {path.name}\nbrain_key: {path.name}\ntier: dev\nstack: python\n"
+        "ledger: brain\nticket: 00000000-0000-0000-0000-000000000001\n"
+    )
+    before = path.joinpath("rail.yaml").read_bytes()
+    result = invoke(publication)
+    assert result.exit_code == 0, result.output
+    answer = Answer.model_validate_json(publication["out"].read_bytes())
+    assert answer.delivery is not None and answer.delivery_v2 is not None
+    assert [p.project for p in answer.delivery.projects] == ["red-alpha"]
+    project = answer.delivery_v2.projects[1]
+    assert project.project == "red-zeta"
+    assert project.status == "no_deployment"
+    assert project.target is project.d7 is project.d30 is None
+    assert path.joinpath("rail.yaml").read_bytes() == before
+    assert not path.joinpath("docs/receipts").exists()
+
+
+@pytest.mark.parametrize(
+    "step,error_class",
+    [
+        ("fetch", "OSError"),
+        ("manifest", "OSError"),
+        ("ledger", "LedgerError"),
+        ("github", "GitHubError"),
+    ],
+)
+def test_missing_repository_logs_only_slug_step_and_exception_class(
+    publication: dict[str, Any], monkeypatch: pytest.MonkeyPatch, step: str, error_class: str
+) -> None:
+    path = publication["paths"][0]
+    config = publication["config"]
+    config.write_text(config.read_text().replace("example/red-zeta", "example/Probe_ZETA"))
+    if step == "fetch":
+        monkeypatch.setattr("rail.gitrepo.fetch_main", lambda repo: repo != path)
+    elif step == "manifest":
+        original = Path.read_text
+
+        def unreadable(repo: Path, *args: Any, **kwargs: Any) -> str:
+            if repo == path / "rail.yaml":
+                raise OSError("sensitive error detail http://192.0.2.1/private")
+            return original(repo, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", unreadable)
+    elif step == "ledger":
+        publication["failures"].add(path)
+    else:
+        publication["github"].fail.add("example/Probe_ZETA")
+    result = invoke(publication)
+    assert result.exit_code == 0, result.output
+    # the manifest names the project; before it is read, only the slug can
+    name = "probe-zeta" if step in ("fetch", "manifest") else "red-zeta"
+    assert result.stderr == f"missing {name}: {step} {error_class}\n"
+    answer = Answer.model_validate_json(publication["out"].read_bytes())
+    assert answer.autonomy is not None
+    assert answer.autonomy.coverage.missing == (name,)
+    assert answer.delivery is not None and answer.delivery_v2 is not None
+    assert [p.project for p in answer.delivery.projects] == ["red-alpha"]
+    assert [p.project for p in answer.delivery_v2.projects] == ["red-alpha"]
+
+
 def test_invalid_reviewer_yaml_prints_error(publication: dict[str, Any]) -> None:
     publication["config"].write_text("repositories: [\n")
     publication["config"].chmod(0o600)

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from rail.deploy import Artefact, DeployError, LiveVersion, Locked, Step
+from rail.incidents import match_recoveries
 from rail.ledger import (
     AttestationKind,
     Ledger,
@@ -212,6 +213,20 @@ def deployed_data(
     }
 
 
+def _open_incidents(ledger: Ledger, project: str) -> list[Record]:
+    """Match a project's non-drill evidence before deployment changes the ledger."""
+    records = ledger.list(project)
+    incidents = [
+        r
+        for r in records
+        if r.attestation is AttestationKind.INCIDENT_DETECTED and not r.data.get("drill")
+    ]
+    restores = [
+        r for r in records if r.attestation is AttestationKind.RESTORED and not r.data.get("drill")
+    ]
+    return match_recoveries(incidents, restores)[1]
+
+
 def forward(
     repo: Path,
     cfg: RailConfig,
@@ -231,6 +246,7 @@ def forward(
     # refusal of it then fails that rollback, before its ssh, without blocking a deployment
     # that may be the fix
     build_or_refuse(target, artefact)
+    open_incidents = _open_incidents(ledger, cfg.project)
     try:
         live = target.apply(artefact)
     except Locked:
@@ -249,6 +265,10 @@ def forward(
                 "version": artefact.version,
                 "reason": reason,
             },
+        )
+        incident = next(
+            (r for r in attester.records if r.attestation is AttestationKind.INCIDENT_DETECTED),
+            None,
         )
         failure = f"{artefact.version} failed: {reason}"
         # a `rolled_back` record means a completed rollback (ledger vocabulary, ADR-0004):
@@ -301,6 +321,7 @@ def forward(
                 "drill": False,
                 "digest": previous.digest,
                 "recovery_seconds": int(clock() - started),
+                **({"incident": incident.digest} if incident is not None else {}),
             },
         )
         return Outcome(
@@ -314,6 +335,20 @@ def forward(
         AttestationKind.DEPLOYED,
         deployed_data(artefact, mode="release", domain=target.domain, previous=previous),
     )
+    deployed = next(
+        (r for r in attester.records if r.attestation is AttestationKind.DEPLOYED), None
+    )
+    if deployed is not None:
+        for incident in open_incidents:
+            attester.attest(
+                AttestationKind.RESTORED,
+                {
+                    "drill": False,
+                    "incident": incident.digest,
+                    "restored_at": deployed.recorded_at.astimezone(UTC).isoformat(),
+                    "evidence": deployed.digest,
+                },
+            )
     return Outcome(
         live,
         tuple(attester.records),
@@ -339,6 +374,7 @@ def rollback(
     if live is None or previous is None:
         raise DeployError("nothing to roll back to: the ledger names no earlier deployed artefact")
     build_or_refuse(target, previous)
+    open_incidents = _open_incidents(ledger, cfg.project)
     started = clock()
     try:
         restored = target.apply(previous)
@@ -382,7 +418,12 @@ def rollback(
     seconds = int(clock() - started)
     attester.attest(
         AttestationKind.RESTORED,
-        {"drill": False, "digest": previous.digest, "recovery_seconds": seconds},
+        {
+            "drill": False,
+            "digest": previous.digest,
+            "recovery_seconds": seconds,
+            **({"incident": open_incidents[0].digest} if open_incidents else {}),
+        },
     )
     return Outcome(
         restored,
