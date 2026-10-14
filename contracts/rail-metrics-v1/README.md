@@ -44,8 +44,8 @@ depend on. The following release removes `delivery`; `delivery_v2` keeps its key
 has `project`, `status`, `target`, `d7` and `d30`. With a deploy target, `status` is `measured`
 and both windows contain figures. Without one, `status` is `no_deployment` and `target`,
 `d7` and `d30` are all `null`. Unread repositories are absent and named in `coverage.missing`;
-stderr reports only their slug-derived name, failing step (`fetch`, `manifest`, `ledger`
-or `github`) and exception class.
+stderr reports only the slug-derived name for `fetch` and `manifest`, or the manifest's
+project name for `ledger` and `github`, followed by the failing step and exception class.
 
 Each measured window contains:
 
@@ -67,7 +67,10 @@ Their first deployment is determined over the whole ledger; a redeployment remai
 even after another digest went live. Window membership follows the change's first deployment.
 Lead time uses the oldest non-merge committer date in the previous change's SHA..current SHA
 range read on `origin/main`. No previous change, non-ancestry, an unreadable or empty range
-gives no sample. Release delay uses the released record carrying the same artefact digest.
+gives no sample. A negative lead time caused by clock skew is also skipped, never clamped
+to zero. Release delay uses the released record carrying the same artefact digest at or
+before deployment. Both lead times are median durations converted to hours by dividing
+their total seconds by 3,600, then rounded to two decimal places.
 
 Durations are nonnegative numbers or `null` when no sample exists. Counts are nonnegative
 integers; the failure rate is between zero and one. A non-drill incident naming `digest`,
@@ -82,6 +85,11 @@ incident; a legacy unnamed one closes the oldest earlier open incident. Its UTC 
 is used only between incident time and the restored record time, otherwise record time is
 used. Incident time selects the recovery window. Future evidence does not close an incident
 at the publication time.
+
+`time_to_restore_minutes` and `drill_recovery_time_minutes` use second-precision times and
+round durations to two decimal places of a minute. Time to restore rounds the median;
+drill recovery rounds each sample before taking the median, using `recovery_seconds` when
+available and otherwise the incident and restored record times.
 
 ## `autonomy` (`rail-autonomy/v1`, `"experimental": true`)
 

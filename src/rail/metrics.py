@@ -253,6 +253,7 @@ def delivery_window_v2(
 
     Repeated artefacts never create attempts, and late failure evidence stays with the
     original change. Future records cannot change the state at publication time.
+    Clock skew makes negative lead times unknown, so exclude them before rounding.
     """
     since = now - timedelta(days=window_days)
     target = config.deploy.target.value if config.deploy is not None else None
@@ -292,7 +293,9 @@ def delivery_window_v2(
             if sha and base and gitrepo.is_ancestor(repo, base, sha):
                 times = gitrepo.commit_times_between(repo, base, sha)
                 if times:
-                    leads.append(change.recorded_at - min(times))
+                    lead = change.recorded_at - min(times)
+                    if lead >= timedelta(0):
+                        leads.append(lead)
             matching = [
                 r
                 for r in releases

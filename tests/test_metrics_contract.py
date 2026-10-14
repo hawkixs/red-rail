@@ -5,7 +5,14 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from rail.metrics_contract import MAX_BYTES, Answer, TooLarge, encode
+from rail.metrics_contract import (
+    MAX_BYTES,
+    Answer,
+    DeliveryProjectV2,
+    DeliveryWindowV2Model,
+    TooLarge,
+    encode,
+)
 
 FIXTURES = Path(__file__).parents[1] / "contracts" / "rail-metrics-v1"
 VALID = ("full.json", "partial.json", "partial-delivery.json", "delivery-only.json", "empty.json")
@@ -148,6 +155,9 @@ def v2_window() -> dict[str, int | float | None]:
     }
 
 
+V2_WINDOW = DeliveryWindowV2Model.model_validate(v2_window())
+
+
 def test_v2_beside_v1_preserves_existing_fixture_bytes() -> None:
     data = json.loads((FIXTURES / "delivery-only.json").read_bytes())
     v1 = encode(Answer.model_validate_json(json.dumps(data)))
@@ -162,28 +172,46 @@ def test_v2_beside_v1_preserves_existing_fixture_bytes() -> None:
     "status,target,d7,d30",
     [
         ("no_deployment", "private-compose", None, None),
-        ("no_deployment", None, "window", None),
-        ("no_deployment", None, None, "window"),
-        ("measured", None, "window", "window"),
-        ("measured", "private-compose", None, "window"),
-        ("measured", "private-compose", "window", None),
+        ("no_deployment", None, V2_WINDOW, None),
+        ("no_deployment", None, None, V2_WINDOW),
+        ("measured", None, V2_WINDOW, V2_WINDOW),
+        ("measured", "private-compose", None, V2_WINDOW),
+        ("measured", "private-compose", V2_WINDOW, None),
     ],
 )
 def test_v2_refuses_inconsistent_deployment_status(
-    status: str, target: str | None, d7: str | None, d30: str | None
+    status: str,
+    target: str | None,
+    d7: DeliveryWindowV2Model | None,
+    d30: DeliveryWindowV2Model | None,
 ) -> None:
-    block = v2_block()
-    block["projects"] = [
-        {
-            "project": "red-probe",
-            "status": status,
-            "target": target,
-            "d7": v2_window() if d7 is not None else None,
-            "d30": v2_window() if d30 is not None else None,
-        }
-    ]
-    with pytest.raises(ValidationError):
-        Answer.model_validate_json(json.dumps({"delivery_v2": block}))
+    with pytest.raises(
+        ValidationError, match="deployment status must match target and both windows"
+    ) as refused:
+        DeliveryProjectV2.model_validate(
+            {"project": "red-probe", "status": status, "target": target, "d7": d7, "d30": d30}
+        )
+    assert len(refused.value.errors()) == 1
+    assert refused.value.errors()[0]["loc"] == ()
+
+
+@pytest.mark.parametrize(
+    "status,target,d7,d30",
+    [
+        ("no_deployment", None, None, None),
+        ("measured", "private-compose", V2_WINDOW, V2_WINDOW),
+    ],
+)
+def test_v2_accepts_consistent_deployment_status(
+    status: str,
+    target: str | None,
+    d7: DeliveryWindowV2Model | None,
+    d30: DeliveryWindowV2Model | None,
+) -> None:
+    project = DeliveryProjectV2.model_validate(
+        {"project": "red-probe", "status": status, "target": target, "d7": d7, "d30": d30}
+    )
+    assert (project.status, project.target, project.d7, project.d30) == (status, target, d7, d30)
 
 
 def test_v2_accepts_no_deployment_and_requires_sorted_projects() -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,13 @@ import pytest
 from rail import gitrepo, metrics
 from rail.ledger import AttestationKind, Record
 from rail.ledger.file import FileLedger
+from rail.metrics_contract import (
+    Answer,
+    DeliveryBlockV2,
+    DeliveryProjectV2,
+    DeliveryWindowV2Model,
+    encode,
+)
 from rail.model import RailConfig
 from tests.helpers import GIT_ENV
 
@@ -119,6 +126,67 @@ def test_first_change_has_no_lead_time(commits: tuple[Path, list[str]]) -> None:
     repo, shas = commits
     deployed(repo, NOW - timedelta(days=1), "a", sha=shas[2])
     assert window(repo).lead_time_for_changes_hours is None
+
+
+@pytest.mark.parametrize("skew_seconds", [1, 3600])
+def test_negative_lead_has_no_sample_and_publication_validates(
+    commits: tuple[Path, list[str]], skew_seconds: int
+) -> None:
+    repo, shas = commits
+    deployed(repo, NOW - timedelta(days=5), "a", sha=shas[0])
+    at = NOW - timedelta(days=4, seconds=skew_seconds)
+    emit(repo, "released", at - timedelta(hours=1), digest="b")
+    deployed(repo, at, "b", sha=shas[2])
+    windows: dict[int, DeliveryWindowV2Model] = {}
+    for days in (7, 30):
+        result = window(repo, days)
+        assert result.changes == 2
+        assert result.lead_time_for_changes_hours is None
+        assert result.release_to_deploy_hours == 1.0
+        windows[days] = DeliveryWindowV2Model.model_validate(asdict(result))
+    answer = Answer(
+        delivery_v2=DeliveryBlockV2(
+            version="rail-delivery/v2",
+            generated_at=NOW,
+            windows_days=(7, 30),
+            projects=(
+                DeliveryProjectV2(
+                    project="red-probe",
+                    status="measured",
+                    target=TARGET,
+                    d7=windows[7],
+                    d30=windows[30],
+                ),
+            ),
+        )
+    )
+    assert Answer.model_validate_json(encode(answer)) == answer
+
+
+def test_negative_lead_is_excluded_from_median(commits: tuple[Path, list[str]]) -> None:
+    repo, shas = commits
+    deployed(repo, NOW - timedelta(days=5), "a", sha=shas[0])
+    deployed(repo, NOW - timedelta(days=4, hours=1), "b", sha=shas[1])
+    deployed(repo, NOW - timedelta(days=1), "c", sha=shas[2])
+    assert window(repo).lead_time_for_changes_hours == 48.0
+
+
+def test_zero_lead_is_a_sample(commits: tuple[Path, list[str]]) -> None:
+    repo, shas = commits
+    deployed(repo, NOW - timedelta(days=5), "a", sha=shas[0])
+    deployed(repo, NOW - timedelta(days=4), "b", sha=shas[2])
+    assert window(repo).lead_time_for_changes_hours == 0.0
+
+
+@pytest.mark.parametrize("release_hours", [-1, 0, 1])
+def test_release_delay_uses_only_releases_at_or_before_deployment(
+    tmp_path: Path, release_hours: int
+) -> None:
+    at = NOW - timedelta(days=1)
+    emit(tmp_path, "released", at + timedelta(hours=release_hours), digest="a")
+    deployed(tmp_path, at, "a")
+    expected = float(-release_hours) if release_hours <= 0 else None
+    assert window(tmp_path).release_to_deploy_hours == expected
 
 
 @pytest.mark.parametrize("failure", ["unreadable", "empty", "not_ancestor"])
