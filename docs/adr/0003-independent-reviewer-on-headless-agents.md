@@ -67,3 +67,29 @@ The pass budget above (`max_passes_per_pr`, mode `budget`) is replaced by the re
 closure rule: three rounds, then an operator ruling on any blocker still open, then one closure
 check — no pass count, no bypass. `load_policy` refuses a `reviewer.yaml` that still sets
 `max_passes_per_pr`. See `docs/specs/2026-09-25-review-loop-closure.md`.
+
+## Amendment (2026-10-14): verdict carry-over
+
+Decision `57fa86dc` amends the exact-head merge rule (`c2c46a2a`). On the same pull request,
+an earlier successful `red-rail/review` check and `independent-review` status can carry to
+a new head when their base-to-head diffs have identical `git patch-id --stable` values,
+and the base has changed none of the PR's files between the two merge bases. Binary diffs
+are refused; the PR file details must also match (filename, previous filename, change status
+and blob SHA), proving equal content when the base left those files untouched.
+`rail verdict carry --repository owner/name --pr N` requires every other CI check and status
+on the new head to pass (completed success, neutral or skipped). Every CI check (name, App ID)
+and status (context, creator ID) pair on the judged head must be present on the new head;
+a matching name from a different source is refused. The new head must contain at
+least one CI result other than the two carried verdicts. Refusal publishes nothing;
+a head with a pending or unsuccessful reviewer check is refused, and a successful one is
+reused so a retry posts only a missing status. Only the most recent earlier head with a
+reviewer check can supply both successful verdicts. Successful carry-over records its source check,
+head, status creator ID, patch ID and checked bases in the check output and the
+`review_verdict` receipt,
+preserving the source findings and carry-forward accounting without consuming another round.
+The automatic reviewer carries only its check and receipt, allowing pending CI but refusing
+failed CI. The user identity posts `independent-review` through `gh`, using the user's own
+credentials, never through the App, which has no statuses permission. Removing that write
+capability from the App client also prevents the automatic reviewer from posting the status.
+The carry copies an existing status and never makes an untrusted one trusted.
+The rerun label always forces a full review.

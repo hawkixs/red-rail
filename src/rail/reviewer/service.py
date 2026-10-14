@@ -22,6 +22,7 @@ from rail.ledger import (
 )
 from rail.ledger.file import receipt_filename
 from rail.reviewer import carry, headers, records, rounds
+from rail.reviewer.carry_verdict import CarryDecision, CarryGitHub, carry_decision
 from rail.reviewer.github import GitHubError, PullRequest
 from rail.reviewer.judges import (
     JudgeReply,
@@ -44,13 +45,13 @@ def _headers_parsed(diff: str) -> bool:
     return headers.parsed(diff)
 
 
-class GitHubLike(Protocol):
+class GitHubLike(CarryGitHub, Protocol):
     def diff(self, repository: str, number: int) -> str: ...
     def compare_diff(self, repository: str, base_sha: str, head_sha: str) -> str: ...
     def file_at(self, repository: str, path: str, ref: str) -> str | None: ...
     def check_run_text(self, repository: str, check_id: int) -> str: ...
     def commit_messages(self, repository: str, number: int) -> list[str]: ...
-    def check_runs(self, repository: str, sha: str, *, name: str) -> list[Any]: ...
+    def check_runs(self, repository: str, sha: str, *, name: str | None = None) -> list[Any]: ...
     def start_check(self, repository: str, head_sha: str, *, name: str) -> Any: ...
     def complete_check(
         self,
@@ -78,6 +79,10 @@ class ReviewOutcome:
     attested: bool = False
     receipt: Path | None = None
     failures: list[str] = field(default_factory=list)
+
+
+class CarrySourceError(ValueError):
+    """No source state can be carried; raised before any GitHub or ledger write."""
 
 
 def needs_review(pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy) -> bool:
@@ -641,6 +646,25 @@ def review_pull(
     run_judge: RunJudge = judge,
     root: Path | None = None,
 ) -> ReviewOutcome:
+    if policy.rerun_label not in pr.labels and policy.check_name == "red-rail/review":
+        decision = carry_decision(
+            github, pr.repository, pr.number, pr.head_sha, require_green=False
+        )
+        if decision.allowed:
+            try:
+                return carry_review(
+                    pr,
+                    decision,
+                    github=github,
+                    policy=policy,
+                    ledger=ledger,
+                    project=project,
+                    repo_path=repo_path,
+                )
+            except CarrySourceError:
+                # A missing or malformed source receipt proves no findings state. Judge the
+                # patch normally; carry_review validates it before creating any check.
+                pass
     check = github.start_check(pr.repository, pr.head_sha, name=policy.check_name)
     try:
         return _review_started(
@@ -666,6 +690,94 @@ def review_pull(
         raise
 
 
+def carry_review(
+    pr: PullRequest,
+    decision: CarryDecision,
+    *,
+    github: GitHubLike,
+    policy: ReviewPolicy,
+    ledger: Ledger,
+    project: str,
+    repo_path: Path | None = None,
+) -> ReviewOutcome:
+    """Publish the same findings on a new head, with provenance, through the normal ledger.
+
+    A carried approval is not a new judgment. The source receipt must belong to this PR and
+    this reviewer's identity; preserve its findings and carry-forward accounting verbatim.
+    """
+    if not decision.allowed or decision.rail_check is None:
+        raise ValueError(f"carry refused: {decision.reason}")
+    sources = [
+        r
+        for r in previous_verdicts(ledger, project, pr)
+        if r.issuer == REVIEWER_IDENTITY
+        and r.data.get("independent") is True
+        and r.data.get("sha") == decision.judged_head
+        and str(r.data.get("check_run_id")) == str(decision.rail_check.id)
+        and r.data.get("verdict") == "approve"
+    ]
+    if not sources:
+        raise CarrySourceError("source verdict unavailable in the ledger")
+    source = sources[-1].data
+    source_status_creator_id = (
+        decision.independent_status.creator_id if decision.independent_status is not None else None
+    )
+    summary = (
+        f"Carried from {decision.judged_head}, check run {decision.rail_check.id}; "
+        f"independent-review by creator {source_status_creator_id}; "
+        f"patch-id {decision.patch_id}. Base diff {decision.judged_base}...{decision.new_base} "
+        "checked: no PR file changed. Decision 57fa86dc."
+    )
+    fields = {k: v for k, v in source.items() if k in ReviewVerdict.model_fields}
+    try:
+        if isinstance(fields.get("findings"), list):
+            fields["findings"] = [
+                {**f, "evidence": f.get("evidence") or "(trimmed)"} for f in fields["findings"]
+            ]
+        else:
+            fields.pop("findings", None)  # legacy receipts hold a count, not a findings list
+        verdict = ReviewVerdict.model_validate({**fields, "summary": summary})
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise CarrySourceError(f"source verdict malformed: {exc}") from exc
+    check = github.start_check(pr.repository, pr.head_sha, name="red-rail/review")
+    data = {
+        **source,
+        "sha": pr.head_sha,
+        "check_run_id": check.id,
+        "carried_from": decision.judged_head,
+        "patch_id": decision.patch_id,
+        "judged_base": decision.judged_base,
+        "new_base": decision.new_base,
+        "source_check_run_id": decision.rail_check.id,
+        "source_status_creator_id": source_status_creator_id,
+        "carry_decision": "57fa86dc",
+    }
+    try:
+        return _publish(
+            pr,
+            check,
+            verdict,
+            f"approve carried from {decision.judged_head}",
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project=project,
+            repo_path=repo_path,
+            failures=[],
+            attestation_data=data,
+            publish_review=False,
+        )
+    except Exception as exc:
+        github.complete_check(
+            pr.repository,
+            check.id,
+            conclusion="failure",
+            title="carry error",
+            summary=f"{type(exc).__name__}: {exc}"[:65535],
+        )
+        raise
+
+
 def _publish(
     pr: PullRequest,
     check: Any,
@@ -678,6 +790,8 @@ def _publish(
     project: str,
     repo_path: Path | None,
     failures: list[str],
+    attestation_data: dict[str, Any] | None = None,
+    publish_review: bool = True,
 ) -> ReviewOutcome:
     # Attest FIRST: GitHub must never show an approval the ledger does not hold (found by the
     # independent reviewer on PR #3). The check run exists already (in progress), so its id is
@@ -685,8 +799,12 @@ def _publish(
     outcome = ReviewOutcome(
         pr.repository, pr.number, pr.head_sha, verdict, check.id, failures=failures
     )
-    data = verdict.as_attestation_data(
-        sha=pr.head_sha, check_run_id=check.id, repository=pr.repository, pr=pr.number
+    data = (
+        attestation_data
+        if attestation_data is not None
+        else verdict.as_attestation_data(
+            sha=pr.head_sha, check_run_id=check.id, repository=pr.repository, pr=pr.number
+        )
     )
     key = idempotency_key_for(AttestationKind.REVIEW_VERDICT, data)
     try:
@@ -725,13 +843,14 @@ def _publish(
             summary=note,
             text=_render(verdict),
         )
-        github.review(
-            pr.repository,
-            pr.number,
-            commit_id=pr.head_sha,
-            event="REQUEST_CHANGES",
-            body=note + "\n\n" + _render(verdict),
-        )
+        if publish_review:
+            github.review(
+                pr.repository,
+                pr.number,
+                commit_id=pr.head_sha,
+                event="REQUEST_CHANGES",
+                body=note + "\n\n" + _render(verdict),
+            )
         return outcome
     outcome.attested = True
     if repo_path is not None:
@@ -746,13 +865,14 @@ def _publish(
         summary=verdict.summary,
         text=_render(verdict),
     )
-    github.review(
-        pr.repository,
-        pr.number,
-        commit_id=pr.head_sha,
-        event="APPROVE" if conclusion == "success" else "REQUEST_CHANGES",
-        body=_render(verdict),
-    )
+    if publish_review:
+        github.review(
+            pr.repository,
+            pr.number,
+            commit_id=pr.head_sha,
+            event="APPROVE" if conclusion == "success" else "REQUEST_CHANGES",
+            body=_render(verdict),
+        )
     if policy.rerun_label in pr.labels:
         github.remove_label(pr.repository, pr.number, policy.rerun_label)
     return outcome

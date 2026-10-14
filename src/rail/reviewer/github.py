@@ -88,6 +88,32 @@ class CheckRun:
     id: int
     status: str
     conclusion: str | None
+    name: str = ""
+    app_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CommitStatus:
+    id: int
+    context: str
+    state: str
+    description: str
+    creator_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ComparedFile:
+    filename: str
+    previous_filename: str | None
+    status: str
+    sha: str
+
+
+@dataclass(frozen=True, slots=True)
+class Comparison:
+    merge_base: str
+    files: tuple[str, ...]
+    file_details: tuple[ComparedFile, ...]
 
 
 def _pull(repository: str, raw: dict[str, Any]) -> PullRequest:
@@ -111,7 +137,14 @@ def _pull(repository: str, raw: dict[str, Any]) -> PullRequest:
 
 
 def _check(raw: dict[str, Any]) -> CheckRun:
-    return CheckRun(id=int(raw["id"]), status=str(raw["status"]), conclusion=raw.get("conclusion"))
+    app_id = (raw.get("app") or {}).get("id")
+    return CheckRun(
+        id=int(raw["id"]),
+        status=str(raw["status"]),
+        conclusion=raw.get("conclusion"),
+        name=str(raw.get("name", "")),
+        app_id=int(app_id) if app_id is not None else None,
+    )
 
 
 class GitHubApp:
@@ -393,6 +426,38 @@ class GitHubApp:
             )
         )
 
+    def compare_files(self, repository: str, base_sha: str, head_sha: str) -> Comparison:
+        """Read the merge base and both names of renames, refusing GitHub's file-list cap.
+
+        Compare lists at most 300 files, only on its first page. A saturated list cannot
+        prove that the base left every PR file untouched, so carry-over fails closed.
+        """
+        data = self._request("GET", f"/repos/{repository}/compare/{base_sha}...{head_sha}")
+        with _in_shape():
+            files = data["files"]
+            merge_base = data["merge_base_commit"]["sha"]
+            if not isinstance(files, list) or len(files) >= 300 or not merge_base:
+                raise GitHubError("incomplete comparison")
+            names = []
+            details = []
+            for entry in files:
+                names.append(entry["filename"])
+                if entry.get("previous_filename"):
+                    names.append(entry["previous_filename"])
+                if not all(isinstance(entry[key], str) and entry[key] for key in ("status", "sha")):
+                    raise GitHubError("comparison file out of shape")
+                details.append(
+                    ComparedFile(
+                        entry["filename"],
+                        entry.get("previous_filename"),
+                        entry["status"],
+                        entry["sha"],
+                    )
+                )
+            if not all(isinstance(name, str) and name for name in names):
+                raise GitHubError("comparison file out of shape")
+            return Comparison(str(merge_base), tuple(names), tuple(details))
+
     def commit_shas(self, repository: str, number: int) -> list[str]:
         """The pull request's own commits, every page of them: what it already publishes.
         GitHub lists at most 250 commits on a pull request."""
@@ -481,13 +546,50 @@ class GitHubApp:
             self._request("PATCH", f"/repos/{repository}/check-runs/{check_id}", json_body=body)
         )
 
-    def check_runs(self, repository: str, sha: str, *, name: str) -> list[CheckRun]:
-        data = self._request(
-            "GET",
-            f"/repos/{repository}/commits/{sha}/check-runs",
-            params={"app_id": str(self.app_id), "check_name": name, "per_page": "50"},
-        )
-        return [_check(raw) for raw in data.get("check_runs", [])]
+    def check_runs(self, repository: str, sha: str, *, name: str | None = None) -> list[CheckRun]:
+        """Read all current checks, or only ours by name; CI evidence is never a partial page."""
+        query = {"per_page": "50", "filter": "latest"}
+        if name is not None:
+            query.update(app_id=str(self.app_id), check_name=name)
+        path: str | None = f"/repos/{repository}/commits/{sha}/check-runs?{urlencode(query)}"
+        result = []
+        seen: set[str] = set()
+        total = 0
+        while path:
+            if path in seen or len(seen) >= MAX_PAGES:
+                raise GitHubError("pagination repeated a cursor or exceeded the page limit")
+            seen.add(path)
+            data, path = self._request_page(path)
+            with _in_shape():
+                checks = data["check_runs"]
+                total = int(data.get("total_count", len(checks)))
+                if not isinstance(checks, list):
+                    raise GitHubError("incomplete check runs")
+                result.extend(_check(raw) for raw in checks)
+        if len(result) != total:
+            raise GitHubError("incomplete check runs")
+        return result
+
+    def commit_statuses(self, repository: str, sha: str) -> list[CommitStatus]:
+        """Keep the latest state per context and creator; GitHub returns newest first."""
+        raw = self._paged_list(f"/repos/{repository}/commits/{sha}/statuses?per_page=100")
+        latest: dict[tuple[str, int | None], CommitStatus] = {}
+        with _in_shape():
+            for item in raw:
+                context = str(item["context"])
+                creator_id = (item.get("creator") or {}).get("id")
+                creator_id = int(creator_id) if creator_id is not None else None
+                latest.setdefault(
+                    (context, creator_id),
+                    CommitStatus(
+                        int(item["id"]),
+                        context,
+                        str(item["state"]),
+                        str(item.get("description") or ""),
+                        creator_id,
+                    ),
+                )
+        return list(latest.values())
 
     def check_run_text(self, repository: str, check_id: int) -> str:
         """The `output.text` our App published on a check run (the rendered verdict)."""

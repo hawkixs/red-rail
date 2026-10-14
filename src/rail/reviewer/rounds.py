@@ -84,14 +84,26 @@ def _judged(record: Record) -> bool:
 def loop_state(verdicts: Sequence[Record], rulings: Sequence[Record]) -> LoopState:
     # a mechanical verdict judged the form of receipts, never a round (D5)
     verdicts = [v for v in verdicts if v.data.get("round") != "mechanical"]
-    judged = [v for v in verdicts if _judged(v)]
+    # Carry-over is evidence for its new head, with the same findings, not another round.
+    judged = [v for v in verdicts if _judged(v) and not v.data.get("carried_from")]
     judging = [v for v in verdicts if _judged(v) or v.data.get("round") == "closure"]
     last_judged = judging[-1] if judging else None
     latest = verdicts[-1] if verdicts else None
     latest_findings = _findings(latest) if latest is not None else None
     findings = latest_findings or ()
     has_list = latest_findings is not None
-    after = last_judged.recorded_at if last_judged is not None else None
+    # A carried receipt changes the head, not when the judgment happened. Retain rulings
+    # issued since its source; moving the branch alone must never expire an operator ruling.
+    origin = last_judged
+    for earlier in reversed(judging[:-1]):
+        if (
+            origin is not None
+            and origin.data.get("carried_from")
+            and origin.data.get("carried_from") == earlier.data.get("sha")
+        ):
+            if str(origin.data.get("source_check_run_id")) == str(earlier.data.get("check_run_id")):
+                origin = earlier
+    after = origin.recorded_at if origin is not None else None
     ruled: dict[str, Ruling] = {}
     for r in rulings:
         if after is not None and r.recorded_at <= after:
