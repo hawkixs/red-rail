@@ -20,11 +20,18 @@ class RepositoryConfig(BaseModel):
 
     slug: str = Field(pattern=r"^[\w.-]+/[\w.-]+$")
     path: Path  # local checkout: its rail.yaml chooses the ledger the verdict is attested in
+    merge_queue: Path | None = None
 
     @field_validator("path")
     @classmethod
     def _expanded(cls, value: Path) -> Path:
         return value.expanduser()
+
+    @field_validator("merge_queue")
+    @classmethod
+    def _expanded_queue(cls, value: Path | None) -> Path | None:
+        """Expand the private journal path without reading or resolving it at load time."""
+        return value.expanduser() if value is not None else None
 
 
 class ReviewerConfig(BaseModel):
