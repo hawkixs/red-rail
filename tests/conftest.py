@@ -32,6 +32,18 @@ def _no_host_sites_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
 
 
 @pytest.fixture(autouse=True)
+def _no_host_reviewer_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`rail release` looks up the reviewer's checkout in the host's reviewer configuration.
+    A test that does not pass a path sees none, never the developer's own
+    `~/.config/red-rail/reviewer.yaml` (and so never sweeps a real checkout)."""
+    from rail.reviewer import config
+
+    load = config.load_reviewer_config
+    absent = tmp_path / "no-host" / "reviewer.yaml"
+    monkeypatch.setattr(config, "load_reviewer_config", lambda path=absent: load(path))
+
+
+@pytest.fixture(autouse=True)
 def _no_host_spool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Pending attestations wait in `$RAIL_SPOOL_DIR/<project>`: a test never sees the
     developer's own `~/.local/state/red-rail/spool`."""
