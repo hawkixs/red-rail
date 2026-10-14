@@ -1,9 +1,9 @@
 # Delivery flow metrics: where the time between push and merge goes
 
-Status: draft — 2026-10-14. Scope and design validated by the operator through the
+Status: approved — 2026-10-14. Scope and design validated by the operator through the
 coordination (decision `ad491597`; answers "ok go b" on the scope, "ok go pour a partt" on
-Q2–Q6, "1 ok metric flux" on the five design sections); awaiting the operator's review of
-this written spec.
+Q2–Q6, "1 ok metric flux" on the five design sections), then the written spec: "et le reste
+go btw", after three design-review rounds (codex, closure APPROVE).
 
 Motivation: lowers the operator load of finding delivery bottlenecks by hand (ticket
 `c5231125`, measurement class): the merge-queue analysis of 2026-10-14 had to be gathered by
