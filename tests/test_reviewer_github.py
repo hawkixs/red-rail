@@ -1,8 +1,11 @@
 """The App client: JWT → installation token, then the few calls the reviewer needs. Every
 request is asserted on path, method, headers and body; nothing reaches the network."""
 
+from __future__ import annotations
+
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import jwt
@@ -11,6 +14,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from rail.autonomy import MergedPull
+from rail.flow import FlowDiscovery, FlowPull, RunEvidence, StatusEvidence, SuiteEvidence
 from rail.reviewer import github
 from rail.reviewer.github import CheckRun, CommitStatus, GitHubApp, GitHubError, PullRequest
 
@@ -780,3 +784,359 @@ def test_an_entry_out_of_shape_is_a_github_error_never_a_crash(path: str, body: 
             app.ready_for_review_at("o/r", 1)
         else:
             app.merged_pulls("o/r", base="main", since=since)
+
+
+FLOW_SINCE = datetime(2026, 10, 10, tzinfo=UTC)
+FLOW_UNTIL = datetime(2026, 10, 14, tzinfo=UTC)
+FLOW_READERS = ("check_suites", "flow_check_runs", "status_history", "flow_merged_pulls")
+
+
+def _flow_entry(reader: str, number: int = 1) -> dict[str, Any]:
+    """Use complete public fixtures so each refusal isolates one broken field."""
+    if reader == "flow_merged_pulls":
+        return {
+            "number": number,
+            "head": {"sha": "A" * 40},
+            "merge_commit_sha": "B" * 64,
+            "created_at": "2026-10-09T00:00:00Z",
+            "merged_at": "2026-10-12T00:00:00Z",
+            "updated_at": "2026-10-14T00:00:00Z",
+            "base": {"ref": "main"},
+        }
+    entry = {"id": number, "app": {"id": 42, "slug": "github-actions"}}
+    if reader == "check_suites":
+        entry["created_at"] = "2026-10-10T00:00:00Z"
+    elif reader == "flow_check_runs":
+        entry.update(
+            name="unit",
+            status="completed",
+            started_at="2026-10-10T00:01:00Z",
+            completed_at="2026-10-15T00:00:00Z",
+        )
+    else:
+        entry.update(
+            context="independent-review",
+            state="success",
+            description="approved",
+            created_at="2026-10-12T00:00:00Z",
+            creator={"id": 42},
+        )
+    return entry
+
+
+def _flow_page(reader: str, entries: list[Any], total: int = 2) -> dict[str, Any] | list[Any]:
+    """Mirror GitHub's endpoint shapes so totals apply only to check evidence."""
+    if reader in ("check_suites", "flow_check_runs"):
+        key = "check_suites" if reader == "check_suites" else "check_runs"
+        return {key: entries, "total_count": total}
+    return entries
+
+
+def _read_flow(
+    app: GitHubApp, reader: str
+) -> list[SuiteEvidence] | list[RunEvidence] | list[StatusEvidence] | FlowDiscovery:
+    """Keep the same bounded window across each reader's refusal cases."""
+    if reader == "flow_merged_pulls":
+        return app.flow_merged_pulls(
+            "example/repo", base="main", since=FLOW_SINCE, until=FLOW_UNTIL
+        )
+    return getattr(app, reader)("example/repo", "a" * 40)
+
+
+def _flow_pages_app(reader: str, pages: list[Any], seen: list[httpx.Request]) -> GitHubApp:
+    """Route only the list endpoint; any per-pull or timeline call fails the test."""
+    endpoint = {
+        "check_suites": "check-suites",
+        "flow_check_runs": "check-runs",
+        "status_history": "statuses",
+        "flow_merged_pulls": "pulls",
+    }[reader]
+
+    def routed(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.method == "GET" and request.url.path.endswith("/" + endpoint)
+        page = int(request.url.params.get("page", "1"))
+        assert page <= len(pages), "unexpected page beyond the stop boundary"
+        headers = {}
+        if page < len(pages):
+            query = dict(request.url.params)
+            query["page"] = str(page + 1)
+            next_url = request.url.copy_with(params=query)
+            headers["Link"] = f'<{next_url}>; rel="next"'
+        return httpx.Response(200, json=pages[page - 1], headers=headers)
+
+    return _contents_app(routed)
+
+
+def test_flow_checks_read_all_attempts_with_app_and_timestamps() -> None:
+    """Every attempt retains identity and actual completion, including after merge."""
+    first = _flow_entry("flow_check_runs")
+    retry = _flow_entry("flow_check_runs", 2)
+    retry.update(status="in_progress", completed_at=None)
+    foreign = _flow_entry("flow_check_runs", 3)
+    foreign.update(app={"id": 123, "slug": "example-review"}, started_at=None)
+    unknown = _flow_entry("flow_check_runs", 4)
+    unknown.pop("app")
+    unknown.pop("started_at")
+    unknown.pop("completed_at")
+    seen = []
+    app = _flow_pages_app(
+        "flow_check_runs",
+        [
+            _flow_page("flow_check_runs", [first], 4),
+            _flow_page("flow_check_runs", [retry, foreign, unknown], 4),
+        ],
+        seen,
+    )
+    assert _read_flow(app, "flow_check_runs") == [
+        RunEvidence(
+            1,
+            "unit",
+            42,
+            "github-actions",
+            "completed",
+            datetime(2026, 10, 10, 0, 1, tzinfo=UTC),
+            datetime(2026, 10, 15, tzinfo=UTC),
+        ),
+        RunEvidence(
+            2,
+            "unit",
+            42,
+            "github-actions",
+            "in_progress",
+            datetime(2026, 10, 10, 0, 1, tzinfo=UTC),
+            None,
+        ),
+        RunEvidence(
+            3, "unit", 123, "example-review", "completed", None, datetime(2026, 10, 15, tzinfo=UTC)
+        ),
+        RunEvidence(4, "unit", None, None, "completed", None, None),
+    ]
+    assert len(seen) == 2
+    for request in seen:
+        assert request.url.params["filter"] == "all"
+        assert request.url.params["per_page"] == "100"
+        assert "app_id" not in request.url.params and "check_name" not in request.url.params
+
+
+def test_flow_suites_paginate_and_keep_ci_identity() -> None:
+    """Pagination preserves CI identity and counts repeated ids only once."""
+    first = _flow_entry("check_suites")
+    second = _flow_entry("check_suites", 2)
+    second.update(app={"id": 123, "slug": "example-review"}, created_at="2026-10-12T00:00:00+00:00")
+    seen = []
+    app = _flow_pages_app(
+        "check_suites",
+        [_flow_page("check_suites", [first]), _flow_page("check_suites", [first, second])],
+        seen,
+    )
+    assert _read_flow(app, "check_suites") == [
+        SuiteEvidence(1, 42, "github-actions", FLOW_SINCE),
+        SuiteEvidence(2, 123, "example-review", datetime(2026, 10, 12, tzinfo=UTC)),
+    ]
+    assert len(seen) == 2
+    assert all(request.url.params["per_page"] == "100" for request in seen)
+    empty = _flow_pages_app("check_suites", [_flow_page("check_suites", [], 0)], [])
+    assert _read_flow(empty, "check_suites") == []
+
+
+def test_flow_status_history_keeps_older_success() -> None:
+    """Flow retains older verdicts while the existing reader still reduces contexts."""
+    newest = _flow_entry("status_history", 2)
+    newest.update(state="failure", created_at="2026-10-15T00:00:00Z")
+    oldest = _flow_entry("status_history")
+    oldest["description"] = None
+    seen = []
+    app = _flow_pages_app("status_history", [[newest], [oldest]], seen)
+    assert _read_flow(app, "status_history") == [
+        StatusEvidence(
+            2, "independent-review", "failure", "approved", datetime(2026, 10, 15, tzinfo=UTC)
+        ),
+        StatusEvidence(1, "independent-review", "success", "", datetime(2026, 10, 12, tzinfo=UTC)),
+    ]
+    assert app.commit_statuses("example/repo", "a" * 40) == [
+        CommitStatus(2, "independent-review", "failure", "approved", 42)
+    ]
+    assert len(seen) == 4
+    assert all(request.url.params["per_page"] == "100" for request in seen)
+
+
+@pytest.mark.parametrize("reader", FLOW_READERS)
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "403",
+        "500",
+        "external",
+        "repeated",
+        "endless",
+        "oversized",
+        "date",
+        "naive",
+        "non-utc",
+        "date-type",
+        "shape",
+        "entry-shape",
+        "id-bool",
+        "id-zero",
+        "id-negative",
+        "id-string",
+        "id-missing",
+        "total-change",
+        "total-mismatch",
+        "total-bool",
+        "total-missing",
+        "order",
+    ],
+)
+def test_flow_readers_refuse_partial_or_unbounded_pages(reader: str, fault: str) -> None:
+    """A valid first page never escapes when later evidence or metadata is unsafe."""
+    checks = reader in ("check_suites", "flow_check_runs")
+    if fault.startswith("total-") and not checks:
+        pytest.skip("list responses have no total_count")
+    if fault == "order" and reader != "flow_merged_pulls":
+        pytest.skip("only discovery relies on update order")
+    seen = []
+
+    def routed(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert len(seen) <= github.MAX_PAGES
+        page = len(seen)
+        entry = _flow_entry(reader, page)
+        body = _flow_page(reader, [entry])
+        if page > 1:
+            if fault in ("403", "500"):
+                return httpx.Response(int(fault), json={"message": "refused"})
+            if fault == "oversized":
+                return httpx.Response(200, content=b"x" * (github.MAX_RESPONSE_BYTES + 1))
+            if fault in ("date", "naive", "non-utc", "date-type"):
+                field = {"flow_check_runs": "started_at", "flow_merged_pulls": "updated_at"}.get(
+                    reader, "created_at"
+                )
+                entry[field] = {
+                    "date": "2026-02-30T00:00:00Z",
+                    "naive": "2026-10-12T00:00:00",
+                    "non-utc": "2026-10-12T00:00:00+01:00",
+                    "date-type": 42,
+                }[fault]
+            if fault == "shape":
+                body = [] if checks else {}
+            if fault == "entry-shape":
+                body = _flow_page(reader, [None])
+            if fault.startswith("id-"):
+                field = "number" if reader == "flow_merged_pulls" else "id"
+                if fault == "id-missing":
+                    entry.pop(field)
+                else:
+                    entry[field] = {
+                        "id-bool": True,
+                        "id-zero": 0,
+                        "id-negative": -1,
+                        "id-string": "2",
+                    }[fault]
+            if fault == "total-change":
+                body["total_count"] = 3
+            if fault == "total-mismatch":
+                body["total_count"] = 2
+                entry["id"] = 1
+            if fault == "total-bool":
+                body["total_count"] = True
+            if fault == "total-missing":
+                body.pop("total_count")
+            if fault == "order":
+                entry["updated_at"] = "2026-10-15T00:00:00Z"
+        headers = {}
+        if page == 1 or fault in ("repeated", "endless"):
+            cursor = "same" if fault == "repeated" else str(page + 1)
+            next_url = f"https://api.github.com/next?cursor={cursor}"
+            if fault == "external":
+                next_url = "https://example.org/next"
+            headers["Link"] = f'<{next_url}>; rel="next"'
+        return httpx.Response(200, json=body, headers=headers)
+
+    with pytest.raises(GitHubError):
+        _read_flow(_contents_app(routed), reader)
+    assert len(seen) == {"external": 1, "endless": github.MAX_PAGES}.get(fault, 2)
+
+
+def test_flow_discovery_has_no_per_pr_call() -> None:
+    """Inclusive windows use final heads, while the old last-update page stops discovery."""
+    first = _flow_entry("flow_merged_pulls", 1)
+    first["merged_at"] = "2026-10-14T00:00:00Z"
+    unmerged = _flow_entry("flow_merged_pulls", 2)
+    unmerged["merged_at"] = None
+    future = _flow_entry("flow_merged_pulls", 3)
+    future["merged_at"] = "2026-10-14T00:00:01Z"
+    other_base = _flow_entry("flow_merged_pulls", 4)
+    other_base["base"] = {"ref": "release"}
+    boundary = _flow_entry("flow_merged_pulls", 5)
+    boundary.update(merged_at="2026-10-10T00:00:00Z", updated_at="2026-10-12T00:00:00Z")
+    old = _flow_entry("flow_merged_pulls", 6)
+    old.update(merged_at="2026-10-09T23:59:59Z", updated_at="2026-10-09T23:59:59Z")
+    seen = []
+    app = _flow_pages_app(
+        "flow_merged_pulls",
+        [[first, unmerged, future, other_base], [first, boundary, old], []],
+        seen,
+    )
+    created = datetime(2026, 10, 9, tzinfo=UTC)
+    assert _read_flow(app, "flow_merged_pulls") == FlowDiscovery(
+        (
+            FlowPull("example/repo", 1, "a" * 40, "b" * 64, created, FLOW_UNTIL),
+            FlowPull("example/repo", 5, "a" * 40, "b" * 64, created, FLOW_SINCE),
+        ),
+        0,
+    )
+    assert len(seen) == 2
+    for request in seen:
+        assert (
+            dict(request.url.params).items()
+            >= {
+                "state": "closed",
+                "base": "main",
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": "100",
+            }.items()
+        )
+
+
+def test_flow_discovery_counts_bad_pr_without_losing_good_pr() -> None:
+    """Bad details count once by PR number; good neighbours require no detail fallback."""
+    bad = []
+    for number, field, value in (
+        (2, "head", {}),
+        (3, "head", {"sha": "g" * 40}),
+        (4, "created_at", "2026-02-30T00:00:00Z"),
+        (5, "merged_at", "invalid"),
+        (6, "merge_commit_sha", ""),
+        (7, "merge_commit_sha", "z" * 64),
+        (8, "created_at", None),
+        (9, "head", {"sha": "a" * 39}),
+        (10, "merge_commit_sha", True),
+    ):
+        entry = _flow_entry("flow_merged_pulls", number)
+        entry[field] = value
+        bad.append(entry)
+    missing_merge = _flow_entry("flow_merged_pulls", 11)
+    missing_merge.pop("merged_at")
+    missing_commit = _flow_entry("flow_merged_pulls", 12)
+    missing_commit.pop("merge_commit_sha")
+    bad.extend([missing_merge, missing_commit])
+    seen = []
+    good = _flow_entry("flow_merged_pulls")
+    app = _flow_pages_app("flow_merged_pulls", [[*bad, good], [*bad, good]], seen)
+    assert _read_flow(app, "flow_merged_pulls") == FlowDiscovery(
+        (
+            FlowPull(
+                "example/repo",
+                1,
+                "a" * 40,
+                "b" * 64,
+                datetime(2026, 10, 9, tzinfo=UTC),
+                datetime(2026, 10, 12, tzinfo=UTC),
+            ),
+        ),
+        11,
+    )
+    assert len(seen) == 2

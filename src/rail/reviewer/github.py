@@ -17,6 +17,7 @@ import httpx
 import jwt
 
 from rail.autonomy import MergedPull
+from rail.flow import FlowDiscovery, FlowPull, RunEvidence, StatusEvidence, SuiteEvidence
 
 API = "https://api.github.com"
 API_VERSION = "2022-11-28"
@@ -61,6 +62,52 @@ def _github_datetime(value: str) -> datetime:
         return parsed.astimezone(UTC)
     except (TypeError, ValueError) as exc:
         raise GitHubError("GitHub timestamp out of shape") from exc
+
+
+def _flow_id(value: Any) -> int:
+    """Require positive integer identities so booleans cannot collapse distinct evidence."""
+    if type(value) is not int or value <= 0:
+        raise GitHubError("GitHub identity out of shape")
+    return value
+
+
+def _flow_datetime(value: Any) -> datetime:
+    """Require aware UTC dates; malformed evidence must never prove absence."""
+    if not isinstance(value, str):
+        raise GitHubError("GitHub timestamp out of shape")
+    with _in_shape():
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.utcoffset() != timedelta(0):
+            raise GitHubError("GitHub timestamp is not UTC")
+        return parsed.astimezone(UTC)
+
+
+def _flow_text(value: Any) -> str:
+    """Reject missing or coerced labels because they would hide relevant evidence."""
+    if not isinstance(value, str) or not value:
+        raise GitHubError("GitHub text out of shape")
+    return value
+
+
+def _flow_app(raw: dict[str, Any]) -> tuple[int | None, str | None]:
+    """Keep optional App identity without guessing an absent source."""
+    app = raw.get("app")
+    if app is None:
+        return None, None
+    if not isinstance(app, dict):
+        raise GitHubError("GitHub App out of shape")
+    app_id, slug = app.get("id"), app.get("slug")
+    return (
+        _flow_id(app_id) if app_id is not None else None,
+        _flow_text(slug) if slug is not None else None,
+    )
+
+
+def _flow_sha(value: Any) -> str:
+    """Accept full SHA-1 or SHA-256 heads, keeping the merge identity separate."""
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", value):
+        raise GitHubError("GitHub SHA out of shape")
+    return value.lower()
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +391,69 @@ class GitHubApp:
             path = next_page
         return result
 
+    def flow_merged_pulls(
+        self, repository: str, *, base: str, since: datetime, until: datetime
+    ) -> FlowDiscovery:
+        """Discover final heads without per-pull calls; unread details remain in coverage."""
+        query = urlencode(
+            {
+                "state": "closed",
+                "base": base,
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": "100",
+            }
+        )
+        path: str | None = f"/repos/{repository}/pulls?{query}"
+        cursors: set[str] = set()
+        numbers: set[int] = set()
+        result: list[FlowPull] = []
+        unread = 0
+        previous_update: datetime | None = None
+        while path:
+            if path in cursors or len(cursors) >= MAX_PAGES:
+                raise GitHubError("pagination repeated a cursor or exceeded the page limit")
+            cursors.add(path)
+            page, next_page = self._request_page(path)
+            if not isinstance(page, list):
+                raise GitHubError("incomplete answer")
+            with _in_shape():
+                for raw in page:
+                    number = _flow_id(raw["number"])
+                    updated = _flow_datetime(raw["updated_at"])
+                    if previous_update is not None and updated > previous_update:
+                        raise GitHubError("pull updates are not in descending order")
+                    previous_update = updated
+                    if number in numbers:
+                        continue
+                    numbers.add(number)
+                    if "base" in raw and _flow_text(raw["base"]["ref"]) != base:
+                        continue
+                    if "merged_at" in raw and raw["merged_at"] is None:
+                        continue
+                    try:
+                        with _in_shape():
+                            merged = _flow_datetime(raw["merged_at"])
+                            if not since <= merged <= until:
+                                continue
+                            result.append(
+                                FlowPull(
+                                    repository,
+                                    number,
+                                    _flow_sha(raw["head"]["sha"]),
+                                    _flow_sha(raw["merge_commit_sha"]),
+                                    _flow_datetime(raw["created_at"]),
+                                    merged,
+                                )
+                            )
+                    except GitHubError:
+                        unread += 1
+                # Process the whole boundary page before stopping, even its unread details.
+                if page and previous_update is not None and previous_update < since:
+                    break
+            path = next_page
+        return FlowDiscovery(tuple(result), unread)
+
     def commits_since(
         self, repository: str, *, branch: str, since: datetime
     ) -> list[tuple[datetime, str]]:
@@ -590,6 +700,83 @@ class GitHubApp:
                     ),
                 )
         return list(latest.values())
+
+    def _flow_check_pages(self, path: str, key: str) -> Iterator[dict[str, Any]]:
+        """Bound object pages and verify unique identities against one consistent total."""
+        next_path: str | None = path
+        cursors: set[str] = set()
+        ids: set[int] = set()
+        total: int | None = None
+        while next_path:
+            if next_path in cursors or len(cursors) >= MAX_PAGES:
+                raise GitHubError("pagination repeated a cursor or exceeded the page limit")
+            cursors.add(next_path)
+            page, next_path = self._request_page(next_path)
+            with _in_shape():
+                entries, count = page[key], page["total_count"]
+                if not isinstance(entries, list) or type(count) is not int or count < 0:
+                    raise GitHubError("incomplete check evidence")
+                if total is not None and count != total:
+                    raise GitHubError("inconsistent check evidence totals")
+                total = count
+                for raw in entries:
+                    ids.add(_flow_id(raw["id"]))
+                    yield raw
+        if len(ids) != total:
+            raise GitHubError("incomplete check evidence")
+
+    def check_suites(self, repository: str, sha: str) -> list[SuiteEvidence]:
+        """Read every suite's identity and creation for the CI push proxy."""
+        path = f"/repos/{repository}/commits/{sha}/check-suites?per_page=100"
+        result: dict[int, SuiteEvidence] = {}
+        with _in_shape():
+            for raw in self._flow_check_pages(path, "check_suites"):
+                app_id, slug = _flow_app(raw)
+                suite = SuiteEvidence(
+                    _flow_id(raw["id"]), app_id, slug, _flow_datetime(raw["created_at"])
+                )
+                result.setdefault(suite.id, suite)
+        return list(result.values())
+
+    def flow_check_runs(self, repository: str, sha: str) -> list[RunEvidence]:
+        """Read all attempts and actual completion times for flow and cache completeness."""
+        path = f"/repos/{repository}/commits/{sha}/check-runs?filter=all&per_page=100"
+        result: dict[int, RunEvidence] = {}
+        with _in_shape():
+            for raw in self._flow_check_pages(path, "check_runs"):
+                app_id, slug = _flow_app(raw)
+                started, completed = raw.get("started_at"), raw.get("completed_at")
+                run = RunEvidence(
+                    _flow_id(raw["id"]),
+                    _flow_text(raw["name"]),
+                    app_id,
+                    slug,
+                    _flow_text(raw["status"]),
+                    _flow_datetime(started) if started is not None else None,
+                    _flow_datetime(completed) if completed is not None else None,
+                )
+                result.setdefault(run.id, run)
+        return list(result.values())
+
+    def status_history(self, repository: str, sha: str) -> list[StatusEvidence]:
+        """Keep every status; a later status cannot erase a verdict before the merge."""
+        entries = self._paged_list(f"/repos/{repository}/commits/{sha}/statuses?per_page=100")
+        result: list[StatusEvidence] = []
+        with _in_shape():
+            for raw in entries:
+                description = raw.get("description")
+                if description is not None and not isinstance(description, str):
+                    raise GitHubError("GitHub status description out of shape")
+                result.append(
+                    StatusEvidence(
+                        _flow_id(raw["id"]),
+                        _flow_text(raw["context"]),
+                        _flow_text(raw["state"]),
+                        description or "",
+                        _flow_datetime(raw["created_at"]),
+                    )
+                )
+        return result
 
     def check_run_text(self, repository: str, check_id: int) -> str:
         """The `output.text` our App published on a check run (the rendered verdict)."""
