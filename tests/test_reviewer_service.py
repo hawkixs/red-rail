@@ -47,6 +47,12 @@ class FakeGitHub:
     files: dict[str, str] = field(default_factory=dict)  # path -> text at the head
     file_error: bool = False
 
+    def pull(self, repository, number):
+        return PR
+
+    def commit_shas(self, repository, number):
+        return []  # no earlier judged head unless a carry-over fixture declares one
+
     def file_at(self, repository, path, ref):
         self.calls.append(("file_at", path, ref))
         if self.file_error:

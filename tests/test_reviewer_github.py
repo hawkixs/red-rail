@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from rail.autonomy import MergedPull
 from rail.reviewer import github
-from rail.reviewer.github import CheckRun, GitHubApp, GitHubError, PullRequest
+from rail.reviewer.github import CheckRun, CommitStatus, GitHubApp, GitHubError, PullRequest
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PEM = KEY.private_bytes(
@@ -52,6 +52,144 @@ def _app(recorder: Recorder, now: datetime = T0) -> GitHubApp:
 
 
 TOKEN = {"token": "ghs_installation", "expires_at": (T0 + timedelta(hours=1)).isoformat()}
+
+
+def test_compare_files_reads_merge_base_and_both_rename_paths() -> None:
+    recorder = Recorder(
+        {
+            ("POST", "/app/installations/456/access_tokens"): TOKEN,
+            ("GET", "/repos/example/red-alpha/compare/base...head"): {
+                "merge_base_commit": {"sha": "merge-base"},
+                "files": [
+                    {
+                        "filename": "src/new.py",
+                        "previous_filename": "src/old.py",
+                        "status": "renamed",
+                        "sha": "blob-sha",
+                    }
+                ],
+            },
+        }
+    )
+    result = _app(recorder).compare_files("example/red-alpha", "base", "head")
+    assert result.merge_base == "merge-base"
+    assert set(result.files) == {"src/old.py", "src/new.py"}
+    assert result.file_details == (
+        github.ComparedFile("src/new.py", "src/old.py", "renamed", "blob-sha"),
+    )
+
+
+def test_compare_files_refuses_a_saturated_or_missing_file_list() -> None:
+    for files in (None, [{"filename": f"src/{n}.py"} for n in range(300)]):
+        body = {"merge_base_commit": {"sha": "base"}}
+        if files is not None:
+            body["files"] = files
+        recorder = Recorder(
+            {
+                ("POST", "/app/installations/456/access_tokens"): TOKEN,
+                ("GET", "/repos/example/red-alpha/compare/base...head"): body,
+            }
+        )
+        with pytest.raises(GitHubError):
+            _app(recorder).compare_files("example/red-alpha", "base", "head")
+
+
+def test_commit_statuses_reads_pages_and_keeps_latest_context() -> None:
+    def routed(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return httpx.Response(200, json=TOKEN)
+        if request.url.params.get("page") == "2":
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 1, "context": "lint", "state": "success", "description": "older"},
+                    {"id": 2, "context": "test-unit", "state": "pending", "description": None},
+                ],
+            )
+        return httpx.Response(
+            200,
+            json=[
+                {"id": 3, "context": "lint", "state": "failure", "description": "latest"},
+            ],
+            headers={"Link": '<https://api.github.com/statuses?page=2>; rel="next"'},
+        )
+
+    app = _app(routed)
+    assert app.commit_statuses("example/red-alpha", "head") == [
+        CommitStatus(3, "lint", "failure", "latest"),
+        CommitStatus(2, "test-unit", "pending", ""),
+    ]
+
+
+def test_reviewer_app_cannot_post_commit_statuses() -> None:
+    assert not hasattr(GitHubApp, "post_status")
+
+
+@pytest.mark.parametrize("missing", ["status", "sha"])
+def test_compare_files_refuses_missing_content_evidence(missing) -> None:
+    detail = {"filename": "src/x.py", "status": "modified", "sha": "blob-sha"}
+    del detail[missing]
+    recorder = Recorder(
+        {
+            ("POST", "/app/installations/456/access_tokens"): TOKEN,
+            ("GET", "/repos/example/red-alpha/compare/base...head"): {
+                "merge_base_commit": {"sha": "merge-base"},
+                "files": [detail],
+            },
+        }
+    )
+    with pytest.raises(GitHubError):
+        _app(recorder).compare_files("example/red-alpha", "base", "head")
+
+
+def test_ci_check_runs_read_every_page_without_an_app_filter() -> None:
+    requests = []
+
+    def routed(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("access_tokens"):
+            return httpx.Response(200, json=TOKEN)
+        assert "app_id" not in request.url.params and "check_name" not in request.url.params
+        if request.url.params.get("page") == "2":
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 2,
+                    "check_runs": [
+                        {"id": 2, "name": "lint", "status": "in_progress", "conclusion": None},
+                    ],
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 2,
+                "check_runs": [
+                    {"id": 1, "name": "test-unit", "status": "completed", "conclusion": "success"},
+                ],
+            },
+            headers={"Link": '<https://api.github.com/checks?page=2>; rel="next"'},
+        )
+
+    result = _app(routed).check_runs("example/red-alpha", "head")
+    assert result[-1] == CheckRun(2, "in_progress", None, "lint")
+    assert len(requests) == 3
+
+
+def test_check_runs_refuse_incomplete_pagination() -> None:
+    recorder = Recorder(
+        {
+            ("POST", "/app/installations/456/access_tokens"): TOKEN,
+            ("GET", "/repos/example/red-alpha/commits/head/check-runs"): {
+                "total_count": 2,
+                "check_runs": [
+                    {"id": 1, "name": "lint", "status": "completed", "conclusion": "success"}
+                ],
+            },
+        }
+    )
+    with pytest.raises(GitHubError, match="incomplete check runs"):
+        _app(recorder).check_runs("example/red-alpha", "head")
 
 
 @pytest.mark.parametrize("source", ["list", "merged", "timeline"])
