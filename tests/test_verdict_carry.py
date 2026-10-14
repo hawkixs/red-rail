@@ -17,6 +17,13 @@ from rail.reviewer.service import REVIEWER_IDENTITY, carry_review, review_pull
 from tests.test_reviewer_service import PR as BASE_PR
 from tests.test_reviewer_service import FakeGitHub, _repo, approve
 
+
+@pytest.fixture(autouse=True)
+def _host_environment(monkeypatch):
+    """`rail verdict carry` refuses CI; the command tests run as the host would."""
+    monkeypatch.delenv("CI", raising=False)
+
+
 PR = replace(BASE_PR, repository="example/red-alpha", author="example")
 OLD = "c" * 40
 OLDER = "d" * 40
