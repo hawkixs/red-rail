@@ -32,14 +32,18 @@ is a redeployment: counted in `redeployments`, never in `deployments`, lead time
 D2 — Lead time for changes (DORA). For a change C whose previous change on the target is P,
 the commits included are `git rev-list --no-merges P.sha..C.sha` read on
 `refs/remotes/origin/main`; lead time = C's time minus the committer date of the oldest of
-them. With no P, or a range git cannot read, the change has no lead time (never a guess).
+them. With no P, a P that is not an ancestor of C, or a range git cannot read, the change has
+no lead time (never a guess).
 The window publishes the median. Release-to-deploy (C's time minus the `released` record of
 the same digest) is published beside it.
 
 D3 — Change failure rate. A change failed when a non-drill `incident_detected` names its
 digest, or a non-drill `rolled_back` names it (`from_digest`), or, for records without a
-digest, a non-drill incident or rollback falls within 24 h after it. A failed candidate that
-never went live still counts as an attempt. CFR = failed changes / attempts.
+digest, a non-drill incident or rollback falls within 24 h after it. A failure is counted once
+per digest: an incident raised while a digest is redeployed counts against that digest's
+change. A failed candidate is a digest named by a non-drill incident or rollback that has no
+release-mode `deployed`; it counts as one attempt and one failure. CFR = failed changes /
+attempts.
 
 D4 — Recovery. A non-drill `restored` may carry `incident` (the record digest of the
 incident it closes), `restored_at` (event time, UTC) and `evidence` (the record digest of
@@ -52,7 +56,8 @@ it. Time to restore = the median over closed incidents; an open incident is coun
 D5 — `rail deploy` closes what it opened. A successful forward deployment closes every open
 non-drill incident of the project with a `restored` carrying `incident`, `restored_at` (its
 own deployment time) and `evidence` (its `deployed` record). Automatic rollback keeps its
-current records and gains `incident`. Same flow on every target; red-backup
+current records and gains `incident`. A manifest declares one deploy target, so the project and its target are the same unit.
+Same flow on every target; red-backup
 (`private-timers`) is the first to be checked by a deploy after the merge.
 
 D6 — No target, no invention. A repository without a deploy target is published in the
@@ -84,7 +89,8 @@ request.
 - Republished on the 2026-10-14 ledgers: brain-v42 shows 7 changes and 1 redeployment over
   30 days, a lead time in hours from its oldest included commit, CFR > 0; red-alerts shows
   0.1.0 counted once.
-- After D8, time to restore reads 18 min (brain-v42) and 71 s (red-alerts), never the
-  attestation date.
+- After D8, time to restore reads 18.07 min (brain-v42) and 1.18 min (red-alerts), never
+  the attestation date.
 - Every repository appears in the v2 delivery block, with `no_deployment` where it applies.
-- Tests pin D1–D6 on fixtures; `make ci` green; an independent non-codex judge approves.
+- Tests pin D1–D6 on fixtures, and D7: the answer carries `delivery` unchanged beside
+  `delivery_v2`, both validated by the contract; `make ci` green; an independent non-codex judge approves.
