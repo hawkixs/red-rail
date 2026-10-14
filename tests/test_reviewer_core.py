@@ -179,6 +179,8 @@ def test_an_implemented_by_trailer_names_a_producer_too() -> None:
         ("Implemented-by: codex/gpt-6.1-sol (ha 1)", {"codex"}),
         ("Implemented-by: opencode/openrouter/deepseek/deepseek-v4-flash (ha 1)", {"glm"}),
         ("Co-Authored-By: Claude Opus 5 <n@a>", {"claude"}),
+        # a trailer that lost its model still names its provider (excluding stays fail-closed)
+        ("Implemented-by: agy/ (ha 1)", {"agy"}),
     ],
 )
 def test_producer_trailers_identify_the_provider_and_model(
