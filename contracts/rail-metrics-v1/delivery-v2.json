@@ -1,0 +1,72 @@
+{
+  "delivery": {
+    "version": "rail-delivery/v1",
+    "generated_at": "2026-10-14T12:00:00+00:00",
+    "windows_days": [7, 30],
+    "projects": [
+      {
+        "project": "red-probe",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 2,
+          "deployment_frequency_per_week": 2.0,
+          "lead_time_commit_to_deploy_hours": 24.0,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": 1.0,
+          "drill_recovery_time_minutes": null
+        },
+        "d30": {
+          "deployments": 2,
+          "deployment_frequency_per_week": 0.467,
+          "lead_time_commit_to_deploy_hours": 24.0,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": 1.0,
+          "drill_recovery_time_minutes": null
+        }
+      }
+    ]
+  },
+  "delivery_v2": {
+    "version": "rail-delivery/v2",
+    "generated_at": "2026-10-14T12:00:00+00:00",
+    "windows_days": [7, 30],
+    "projects": [
+      {
+        "project": "red-probe",
+        "status": "measured",
+        "target": "private-compose",
+        "d7": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        },
+        "d30": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 0.233,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        }
+      },
+      {
+        "project": "red-zeta",
+        "status": "no_deployment",
+        "target": null,
+        "d7": null,
+        "d30": null
+      }
+    ]
+  }
+}

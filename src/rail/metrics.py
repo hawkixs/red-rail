@@ -13,6 +13,7 @@ from typing import Any
 
 from rail import gitrepo
 from rail.gates import run_gates
+from rail.incidents import match_recoveries, restored_time
 from rail.ledger import AttestationKind, Ledger, Record, RecordKind
 from rail.model import RailConfig, try_load_rail_config
 from rail.policy import applicable_stages
@@ -49,6 +50,22 @@ class DeliveryWindow:
     lead_time_commit_to_deploy_hours: float | None
     change_failure_rate: float | None
     recovery_time_hours: float | None
+    drill_recovery_time_minutes: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryWindowV2:
+    """Artefact changes and their failures, with recovery durations in minutes."""
+
+    changes: int
+    redeployments: int
+    deployment_frequency_per_week: float
+    lead_time_for_changes_hours: float | None
+    release_to_deploy_hours: float | None
+    change_failure_rate: float | None
+    failed_changes: int
+    time_to_restore_minutes: float | None
+    open_incidents: int
     drill_recovery_time_minutes: float | None
 
 
@@ -219,5 +236,133 @@ def delivery_window(
         lead_time_commit_to_deploy_hours=median(commit_leads) if commit_leads else None,
         change_failure_rate=round(len(failed) / attempts, 3) if attempts else None,
         recovery_time_hours=median(recoveries) if recoveries else None,
+        drill_recovery_time_minutes=median(drills) if drills else None,
+    )
+
+
+def delivery_window_v2(
+    ledger: Ledger,
+    project: str,
+    repo: Path,
+    *,
+    now: datetime,
+    window_days: int,
+    config: RailConfig,
+) -> DeliveryWindowV2:
+    """Attribute evidence over the whole history before selecting the change's window.
+
+    Repeated artefacts never create attempts, and late failure evidence stays with the
+    original change. Future records cannot change the state at publication time.
+    """
+    since = now - timedelta(days=window_days)
+    target = config.deploy.target.value if config.deploy is not None else None
+
+    def history(kind: AttestationKind) -> list[Record]:
+        return sorted(
+            (r for r in ledger.list(project, attestation=kind) if r.recorded_at <= now),
+            key=lambda r: r.recorded_at,
+        )
+
+    deployed = [
+        r
+        for r in history(AttestationKind.DEPLOYED)
+        if target is not None
+        and r.data.get("target") == target
+        and _mode(r) == "release"
+        and _digest(r)
+    ]
+    changes: dict[str, Record] = {}
+    redeployments = 0
+    for record in deployed:
+        digest = _digest(record)
+        if digest not in changes:
+            changes[digest] = record
+        elif record.recorded_at >= since:
+            redeployments += 1
+    window_changes = {d: r for d, r in changes.items() if r.recorded_at >= since}
+
+    releases = history(AttestationKind.RELEASED)
+    leads: list[timedelta] = []
+    release_delays: list[timedelta] = []
+    previous: Record | None = None
+    for change in changes.values():
+        if change.recorded_at >= since:
+            sha = str(change.data.get("sha") or "")
+            base = str(previous.data.get("sha") or "") if previous is not None else ""
+            if sha and base and gitrepo.is_ancestor(repo, base, sha):
+                times = gitrepo.commit_times_between(repo, base, sha)
+                if times:
+                    leads.append(change.recorded_at - min(times))
+            matching = [
+                r
+                for r in releases
+                if _digest(r) == _digest(change) and r.recorded_at <= change.recorded_at
+            ]
+            if matching:
+                release_delays.append(change.recorded_at - matching[-1].recorded_at)
+        previous = change
+
+    incidents = history(AttestationKind.INCIDENT_DETECTED)
+    restores = history(AttestationKind.RESTORED)
+    failures = sorted(
+        (r for r in incidents + history(AttestationKind.ROLLED_BACK) if not r.data.get("drill")),
+        key=lambda r: r.recorded_at,
+    )
+    failed: dict[str, Record] = {}
+    for failure in failures:
+        key = "from_digest" if failure.attestation is AttestationKind.ROLLED_BACK else "digest"
+        digest = str(failure.data.get(key) or "")
+        if not digest:
+            before = [r for r in deployed if r.recorded_at < failure.recorded_at]
+            if before and failure.recorded_at - before[-1].recorded_at <= FAILURE_WINDOW:
+                digest = _digest(before[-1])
+        if digest:
+            failed.setdefault(digest, failure)
+    candidates = {d for d, r in failed.items() if d not in changes and r.recorded_at >= since}
+    failed_count = len(window_changes.keys() & failed.keys()) + len(candidates)
+    attempts = len(window_changes) + len(candidates)
+
+    pairs, open_incidents = match_recoveries(
+        [r for r in incidents if not r.data.get("drill")],
+        [r for r in restores if not r.data.get("drill")],
+    )
+    recoveries = [
+        (restored_time(incident, restored) - incident.recorded_at).total_seconds() / 60
+        for incident, restored in pairs
+        if incident.recorded_at >= since
+    ]
+
+    # Keep the v1 drill rule: a failed drill cannot borrow the next drill's recovery.
+    drill_incidents = [r for r in incidents if r.data.get("drill") and r.recorded_at >= since]
+    drill_restores = [r for r in restores if r.data.get("drill") and r.recorded_at >= since]
+    drills: list[float] = []
+    for index, incident in enumerate(drill_incidents):
+        following = drill_incidents[index + 1 :]
+        bound = following[0].recorded_at if following else None
+        after = [
+            r
+            for r in drill_restores
+            if r.recorded_at > incident.recorded_at and (bound is None or r.recorded_at < bound)
+        ]
+        if not after:
+            continue
+        seconds = after[0].data.get("recovery_seconds")
+        if isinstance(seconds, int) and not isinstance(seconds, bool):
+            drills.append(round(seconds / 60, 2))
+        else:
+            drills.append(
+                round((after[0].recorded_at - incident.recorded_at).total_seconds() / 60, 2)
+            )
+
+    return DeliveryWindowV2(
+        changes=len(window_changes),
+        redeployments=redeployments,
+        deployment_frequency_per_week=round(len(window_changes) / (window_days / 7), 3),
+        lead_time_for_changes_hours=_hours(median(leads)) if leads else None,
+        release_to_deploy_hours=_hours(median(release_delays)) if release_delays else None,
+        change_failure_rate=round(failed_count / attempts, 3) if attempts else None,
+        failed_changes=failed_count,
+        time_to_restore_minutes=round(median(recoveries), 2) if recoveries else None,
+        open_incidents=sum(r.recorded_at >= since for r in open_incidents),
         drill_recovery_time_minutes=median(drills) if drills else None,
     )

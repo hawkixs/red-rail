@@ -143,5 +143,16 @@ def commit_timestamp(repo: Path, sha: str) -> datetime | None:
         return None
 
 
+def commit_times_between(repo: Path, base: str, head: str) -> list[datetime] | None:
+    """Read non-merge committer dates; an unreadable range is unknown, not empty."""
+    out = _git(repo, "log", "--no-merges", "--format=%cI", f"{base}..{head}")
+    if out is None:
+        return None
+    try:
+        return [datetime.fromisoformat(line) for line in out.splitlines()]
+    except ValueError:
+        return None
+
+
 def latest_tag(repo: Path) -> str | None:
     return _git(repo, "describe", "--tags", "--abbrev=0") or None
