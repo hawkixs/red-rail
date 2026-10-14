@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -246,6 +247,19 @@ class Record(BaseModel):
     idempotency_key: str = Field(min_length=1)
     payload: dict[str, Any]
     digest: str
+
+    @model_validator(mode="after")
+    def _attestation_payload(self) -> Record:
+        """Reject malformed attestations at ingestion so readers only see safe payloads."""
+        if self.kind is not RecordKind.ATTESTATION:
+            return self
+        try:
+            AttestationKind(self.payload.get("kind"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("an attestation payload requires a valid kind") from exc
+        if not isinstance(self.payload.get("data", {}), Mapping):
+            raise ValueError("attestation data must be a mapping")
+        return self
 
     @classmethod
     def build(

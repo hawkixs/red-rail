@@ -23,6 +23,7 @@ from rail.metrics import Conformance, Metrics
 from rail.metrics_contract import MAX_BYTES, Answer
 from rail.reviewer.config import DEFAULT_CONFIG
 from rail.reviewer.github import GitHubApp, GitHubError
+from tests.test_record_payload import MALFORMED_PAYLOADS, receipt_fields
 
 NOW = datetime(2026, 10, 13, 12, tzinfo=UTC)
 ROOT = Path(__file__).resolve().parents[1]
@@ -209,6 +210,42 @@ def test_publish_two_repositories(publication: dict[str, Any]) -> None:
     assert json.loads(raw)["autonomy"]["not_measured"] == fixture["autonomy"]["not_measured"]
     assert result.output == f"{publication['out']} {len(raw)} bytes 2/2 read\n"
     assert publication["github"].closed
+
+
+@pytest.mark.parametrize("source", ["main", "local"])
+@pytest.mark.parametrize("payload", MALFORMED_PAYLOADS)
+def test_publish_skips_malformed_file_attestation(
+    publication: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    payload: dict[str, Any],
+) -> None:
+    broken, healthy = publication["paths"]
+    manifest_path = broken / "rail.yaml"
+    manifest_path.write_text(manifest_path.read_text().split("ledger: brain")[0] + "ledger: file\n")
+    content = json.dumps(receipt_fields(payload, broken.name))
+    if source == "local":
+        receipts = broken / "docs/receipts"
+        receipts.mkdir(parents=True)
+        (receipts / "malformed.json").write_text(content)
+
+    def files_at(repo: Path, ref: str, path: str) -> dict[str, str]:
+        assert repo == broken
+        assert ref == "refs/remotes/origin/main" and path == "docs/receipts"
+        return {"docs/receipts/malformed.json": content} if source == "main" else {}
+
+    monkeypatch.setattr("rail.gitrepo.files_at", files_at)
+    result = invoke(publication)
+    assert result.exit_code == 0, result.output
+    answer = Answer.model_validate_json(publication["out"].read_bytes())
+    assert answer.autonomy is not None
+    coverage = answer.autonomy.coverage
+    assert coverage.missing == (broken.name,)
+    assert coverage.read == 1 and coverage.expected == 2
+    for section in (answer.autonomy, answer.delivery, answer.delivery_v2):
+        assert section is not None
+        assert [project.project for project in section.projects] == [healthy.name]
+    assert result.stderr == f"missing {broken.name}: ledger LedgerError\n"
 
 
 def test_publish_carries_both_delivery_versions(publication: dict[str, Any]) -> None:
