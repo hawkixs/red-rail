@@ -33,25 +33,40 @@ its final head: the head that was merged.
 D2 — Sources. Everything is read with the reviewer App's installation token, through the
 existing bounded GitHub client; nothing needs the Actions permission.
 
-- Push: the earliest `created_at` among the check suites of the final head.
+- Push (a proxy, stated as such): the earliest `created_at` among the check suites that the
+  CI app (GitHub Actions) created on the final head, but never earlier than the pull
+  request's creation. GitHub records no push time without the Actions permission; a check
+  suite is created when the push reaches the CI. A final head that was already pushed
+  elsewhere (a SHA reused across branches) is the known error of this proxy; the acceptance
+  check (success criteria) measures it against the 2026-10-14 analysis, which read workflow
+  run creation times.
 - Merge: the pull request's `merged_at`.
-- CI: the check runs of the final head whose source is the CI app (GitHub Actions), with
-  their `started_at` and `completed_at`.
-- Reviewer: our `red-rail/review` check run on the final head (start, end), and the
-  `review_verdict` receipts of the pull request in the project's ledger (round count,
-  `carried_from`).
-- Judge: the most recent `independent-review` status with state success on the final head,
-  through the commit statuses endpoint. Its `created_at` is the verdict time. When its
-  description contains `(ha <run_id>)`, the run id's timestamp is the judge start and the
-  provider named before it is recorded.
+- CI: every check run of the CI app on the final head, every attempt included (the client
+  reads them with `filter=all`), with `started_at` and `completed_at`.
+- Reviewer: every `red-rail/review` check run of our App on the final head, every attempt
+  included; the run that carries the final verdict is the one whose id is the
+  `check_run_id` of the pull request's latest `review_verdict` receipt for that head. The
+  receipts also give `rounds` and `carried_from` (D3).
+- Judge: the commit status history of the final head (every status, not the latest per
+  context), filtered to context `independent-review`, state success and `created_at` at or
+  before `merged_at`; the latest of those is the judge's verdict. A status posted after the
+  merge is ignored. When its description starts with `Carried from ` it is a carried
+  verdict (`rail verdict carry`): `judge_carried` is true and its run id, if any, belongs to
+  the source head, so no judge start is read from it. Otherwise, when the description
+  contains `(ha <run_id>)`, that run id's timestamp is the judge start and the provider named
+  before it is recorded.
 - Holder: the merge-queue journal of the host, for a repository whose entry in the private
-  reviewer configuration declares `merge_queue: <path>`. The holder interval of a pull
-  request runs from the previous `.merged[]` entry's `merged_at` to its own. The path is
-  host configuration and never appears in this public repository.
+  reviewer configuration declares `merge_queue: <path>`. The journal lists merged turns in
+  merge order (`.merged[]`: `pr`, `sha`, `merged_at`) and records no start for a past turn.
+  The holder interval therefore runs from the latest `holder_since` the entry carries, when
+  the journal provides it, else from the previous entry's `merged_at`, with
+  `holder_approx` set: that fallback counts a period with an empty queue as held. A request
+  goes to the queue's owner to record `holder_since` in each merged entry. The path is host
+  configuration and never appears in this public repository.
 
 Reading statuses needs the App's `statuses: read` permission on private repositories (it
-answers 403 there without it, measured 2026-10-14; ticket `b7c8b823`). Without it the judge
-segment is null for that repository and the reason is counted in coverage (D6).
+answers 403 there without it, measured 2026-10-14; ticket `b7c8b823`; the operator agreed to
+grant it). Without it the judge segments of that repository are null (D6).
 
 D3 — Segments, in minutes, per pull request:
 
@@ -59,46 +74,63 @@ D3 — Segments, in minutes, per pull request:
 |---|---|
 | `flow` | push → merge |
 | `ci_start` | push → first CI check run start (runner wait included) |
-| `ci_critical` | duration of the CI check run that completes last |
-| `review_start` | push → `red-rail/review` start |
-| `review` | `red-rail/review` start → end |
-| `judge_wait` | push → `independent-review` success |
-| `judge` | judge start → `independent-review` success, only when the description gives the run id |
-| `idle` | `flow` minus the union of the CI, reviewer and judge intervals, each clipped to [push, merge]; the judge interval enters the union only when its start is known |
-| `holder` | holder interval, only where a merge queue is declared |
+| `ci` | first CI check run start → last CI check run end (CI wall time) |
+| `ci_longest` | longest single CI check run, the bottleneck job when jobs run in parallel |
+| `review_start` | push → start of the reviewer run that carries the final verdict |
+| `review` | that run's start → end; 0 for a carried verdict |
+| `judge_wait` | push → the judge's verdict (D2) |
+| `judge` | judge start → judge's verdict, only when a judge start is read (D2) |
+| `idle` | `flow` minus the union of every CI attempt, every reviewer run and the judge interval, each clipped to [push, merge]; the judge interval enters the union only when its start is read |
+| `holder` | holder interval (D2), only where a merge queue is declared |
 
-Plus `rounds` (the number of non-carried `review_verdict` receipts of the pull request),
-`carried` (the final head's verdict has `carried_from`) and `judge_provider` when known.
-A segment whose evidence is absent is null, never 0. A carried verdict has `review` 0 and is
-marked `carried`.
+Plus, per pull request: `rounds`, the number of judged rounds as `rounds.py` counts them
+(mechanical, closure, carried and awaiting-ruling receipts are not rounds); `carried`, the
+final verdict has `carried_from`; `judge_carried`; `judge_provider` when known;
+`holder_approx`. A segment whose evidence is absent is null, never 0.
 
 D4 — Contract `rail-flow/v1`, a new block `flow` of the `/rail-metrics` answer, present or
 absent independently of `delivery`, `delivery_v2` and `autonomy`. It carries:
 
-- per repository and per segment: `median`, `p90` and `n` over the window. Carried verdicts
-  are excluded from the `review` percentiles, and each repository publishes `carry_rate`
-  (carried final heads over merged pull requests);
+- per repository and per segment: `median`, `p90` and `n` over the window. Carried reviewer
+  verdicts are excluded from the `review` percentiles and carried judge verdicts from the
+  `judge` percentiles; each repository publishes `carry_rate` (carried final heads over
+  merged pull requests);
 - `recent`: the timelines of the 20 most recently merged pull requests across repositories
   (repository, number, short head SHA, merge time, every segment, `rounds`, `carried`,
-  `judge_provider`);
-- `coverage`: the repositories that could not be read (`missing`) and the number of pull
-  requests left out (`unread_prs`), as in the delivery block.
+  `judge_carried`, `judge_provider`, `holder_approx`);
+- `coverage`: the repositories that could not be read (`missing`), the pull requests left
+  out (`unread_prs`), and per repository the pull requests kept with a segment that could
+  not be read, by segment (`unread_segments`, e.g. `{"judge_wait": 4}`).
 
 Fixtures for the contract live in `contracts/rail-metrics-v1/` and are validated by the
 contract tests; the README states the version rule (a consumer checks the major). A ticket
 asks red-monitor to display the block.
 
-D5 — Cost. A merged pull request no longer changes, so its timeline is cached on the host
-under `~/.local/state/red-rail/`, keyed by repository, number and merge SHA. Each hourly
-publication reads only the pull requests merged since the last one: about six bounded API
-calls per pull request, paginated with the client's page limit. A cache entry that fails to
-load is dropped and read again.
+D5 — Size. The answer is capped at 12 KiB today (`metrics_contract.MAX_BYTES`), and the
+eleven-repository fixture already takes about 8.5 KiB; the flow block for eleven
+repositories and twenty timelines needs about 9 KiB more. The cap rises to 32 KiB, in the
+contract README and in `MAX_BYTES`, with the fixtures re-measured. The cap guards a
+consumer against an unbounded answer; red-monitor's own read limit is confirmed through its
+ticket before the release that publishes the block, and the release waits for it.
 
-D6 — Failure. A read that fails for one pull request leaves that pull request out and
-increments `unread_prs`; a repository whose list of merged pull requests cannot be read is
-listed in `coverage.missing`. The publication never fails because of the flow block. The
-failing step (`pulls`, `checks`, `statuses`, `ledger`, `queue`) is logged on stderr, never
-in the public answer.
+D6 — Cost and cache. Each hourly publication lists the pull requests merged in the window
+(one paginated list per repository) and reads the evidence of a pull request only when its
+cache entry is absent, invalid or incomplete. The cache lives on the host under
+`~/.local/state/red-rail/`, keyed by repository, number and merge SHA. An entry is complete
+when every segment was read or is definitively absent, and the merge is older than 24 h (late
+statuses and receipts land within that time); only complete entries are reused without a
+call. An entry with a segment that could not be read (a 403, a transport error, a ledger
+that did not open) stays incomplete and is read again at the next publication, so granting
+`statuses: read` later fills it in. An entry that fails to load is dropped and read again;
+because discovery lists the whole window, nothing is lost by dropping it.
+
+D7 — Failure. A pull request whose detail, check suites or merge cannot be read (push or
+merge unknown) is left out and counted in `unread_prs`. A pull request whose other evidence
+cannot be read is kept: the affected segments are null and counted in `unread_segments`.
+A repository whose list of merged pull requests cannot be read is listed in
+`coverage.missing`. The publication never fails because of the flow block. The failing step
+(`pulls`, `checks`, `statuses`, `ledger`, `queue`) is logged on stderr, never in the public
+answer.
 
 ## Non-goals
 
@@ -113,10 +145,15 @@ in the public answer.
 ## Success criteria
 
 - On the host, for the 17 brain-v42 pull requests of the 2026-10-14 analysis, the published
-  `holder` median is 22.3 min ± 1 and the `ci_critical` median 19.7 min ± 1.
+  `holder` median is 22.3 min ± 1, the `ci` median 19.8 min ± 1 and the `ci_longest`
+  median 19.7 min ± 1; the push proxy differs from the analysis's push by at most 1 min on
+  at least 15 of the 17.
 - Every watched repository appears in `flow` or in `coverage.missing`; a judge segment that
   cannot be read is null with its reason counted, never 0.
-- A second publication with no new merge makes no per-pull-request API call (cache).
-- Tests pin D3 on synthetic timelines (overlapping intervals, clipping, carried verdict,
-  absent evidence, holder), D5 and D6 on a fake GitHub, and D4 on golden contract fixtures;
+- A second publication, with no new merge and only complete cache entries, makes no
+  per-pull-request API call; an incomplete entry is read again.
+- Tests pin D3 on synthetic timelines (overlapping intervals, clipping, every attempt,
+  carried reviewer and judge verdicts, a status posted after the merge, absent evidence,
+  holder with and without `holder_since`), D6 and D7 on a fake GitHub, and D4 and D5 on
+  golden contract fixtures;
   `make ci` green; an independent non-Claude, non-producer judge approves.
