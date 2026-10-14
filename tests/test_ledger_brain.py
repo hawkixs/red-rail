@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from rail.brain.client import BrainClient, BrainForbidden, BrainToolError
 from rail.contracts import ATTESTATION_CONTRACT, TOOL_ERROR_CODES
@@ -137,6 +138,20 @@ def test_list_wraps_record_building_value_errors(
     with pytest.raises(LedgerError, match="malformed delivery view") as error:
         ledger.list("red-probe")
     assert isinstance(error.value.__cause__, ValueError)
+
+
+def test_record_from_row_wraps_record_validation_errors() -> None:
+    row = {
+        "kind": "released",
+        "payload": RELEASE,
+        "digest": brain_digest(RELEASE),
+        "issuer_identity": "",
+        "idempotency_key": "release:1",
+        "emitted_at": T0.isoformat(),
+    }
+    with pytest.raises(LedgerError, match="malformed attestation") as error:
+        record_from_row("red-probe", row)
+    assert isinstance(error.value.__cause__, ValidationError)
 
 
 class TestBrainLedgerContract(LedgerContract):
