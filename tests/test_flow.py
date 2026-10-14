@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from rail import flow
 from rail.flow import (
     SEGMENTS,
     FlowDiscovery,
@@ -400,3 +401,220 @@ def test_holder_can_begin_before_push_but_not_after_merge() -> None:
     assert (invalid.segments.holder, invalid.holder_approx) == (None, None)
     missing = timeline(evidence())
     assert (missing.segments.holder, missing.holder_approx) == (None, None)
+
+
+def test_percentiles_use_per_segment_samples_and_nearest_rank() -> None:
+    """Each segment counts its own known values, including zero, without rounding."""
+    assert flow.segment_percentiles((3.0, 2.0, 1.0, 2.0)) == flow.Percentiles(2.0, 3.0, 4)
+    assert flow.segment_percentiles(()) == flow.Percentiles(None, None, 0)
+    assert flow.segment_percentiles((0.0,)) == flow.Percentiles(0.0, 0.0, 1)
+    assert flow.segment_percentiles((0.125, 0.25)) == flow.Percentiles(0.1875, 0.25, 2)
+    # For ten samples nearest-rank p90 is the ninth value, not the maximum.
+    assert flow.segment_percentiles(tuple(float(n) for n in range(10))) == flow.Percentiles(
+        4.5, 8.0, 10
+    )
+    base = timeline(evidence())
+    observations = (
+        replace(base, segments=Segments(1.0, 0.0, None, 1.0, None, None, None, None, 0.0, None)),
+        replace(base, segments=Segments(2.0, 0.0, 0.0, 2.0, None, None, None, None, 0.0, None)),
+        replace(base, segments=Segments(2.0, 0.0, None, 2.0, None, None, None, None, 0.0, None)),
+        replace(base, segments=Segments(3.0, 0.0, 2.0, 3.0, None, None, None, None, 0.0, None)),
+    )
+    summary = flow.summarize_repository("example/repo", observations)
+    assert summary.merged_prs == 4
+    assert tuple(summary.segments) == SEGMENTS
+    assert summary.segments == {
+        "flow": flow.Percentiles(2.0, 3.0, 4),
+        "ci_start": flow.Percentiles(0.0, 0.0, 4),
+        "ci": flow.Percentiles(1.0, 2.0, 2),
+        "ci_longest": flow.Percentiles(2.0, 3.0, 4),
+        "review_start": flow.Percentiles(None, None, 0),
+        "review": flow.Percentiles(None, None, 0),
+        "judge_wait": flow.Percentiles(None, None, 0),
+        "judge": flow.Percentiles(None, None, 0),
+        "idle": flow.Percentiles(0.0, 0.0, 4),
+        "holder": flow.Percentiles(None, None, 0),
+    }
+
+
+def test_carry_exclusions_are_local_to_review_and_judge() -> None:
+    """Reviewer and judge carry flags independently exclude only their own durations."""
+    base = timeline(evidence())
+    observations = (
+        replace(
+            base,
+            segments=Segments(10.0, 1.0, 2.0, 2.0, 3.0, 4.0, 8.0, 2.0, 1.0, 20.0),
+            carried=False,
+            judge_carried=False,
+        ),
+        replace(
+            base,
+            segments=Segments(20.0, 2.0, 4.0, 4.0, 6.0, 0.0, 16.0, 4.0, 2.0, 40.0),
+            carried=True,
+            judge_carried=False,
+        ),
+        replace(
+            base,
+            segments=Segments(30.0, 3.0, 6.0, 6.0, 9.0, 8.0, 24.0, 0.0, 3.0, 60.0),
+            carried=False,
+            judge_carried=True,
+        ),
+        replace(
+            base,
+            segments=Segments(40.0, 4.0, 8.0, 8.0, 12.0, 0.0, 32.0, None, 4.0, 80.0),
+            carried=True,
+            judge_carried=True,
+        ),
+    )
+    summary = flow.summarize_repository("example/repo", observations)
+    assert summary.merged_prs == 4
+    assert summary.carry_rate == 0.5
+    assert summary.segments == {
+        "flow": flow.Percentiles(25.0, 40.0, 4),
+        "ci_start": flow.Percentiles(2.5, 4.0, 4),
+        "ci": flow.Percentiles(5.0, 8.0, 4),
+        "ci_longest": flow.Percentiles(5.0, 8.0, 4),
+        "review_start": flow.Percentiles(7.5, 12.0, 4),
+        "review": flow.Percentiles(6.0, 8.0, 2),
+        "judge_wait": flow.Percentiles(20.0, 32.0, 4),
+        "judge": flow.Percentiles(3.0, 4.0, 2),
+        "idle": flow.Percentiles(2.5, 4.0, 4),
+        "holder": flow.Percentiles(50.0, 80.0, 4),
+    }
+    # Unknown flags do not prove carry and cannot exclude an observed true zero.
+    unknown = replace(base, segments=replace(base.segments, review=0.0, judge=0.0), carried=None)
+    unknown_summary = flow.summarize_repository("example/repo", (unknown,))
+    assert unknown_summary.segments["review"] == flow.Percentiles(0.0, 0.0, 1)
+    assert unknown_summary.segments["judge"] == flow.Percentiles(0.0, 0.0, 1)
+    all_carried = flow.summarize_repository("example/repo", (observations[3],))
+    assert all_carried.segments["review"] == flow.Percentiles(None, None, 0)
+    assert all_carried.segments["judge"] == flow.Percentiles(None, None, 0)
+
+
+def test_carry_rate_excludes_unknown_ledger_and_empty_denominator() -> None:
+    """Only known final reviewer flags enter the rate, independently of judge carry."""
+    base = timeline(evidence())
+    fresh = replace(base, carried=False, judge_carried=True)
+    carried = replace(base, carried=True, judge_carried=False)
+    unread = replace(base, carried=None, rounds=None)
+    known = (carried, carried, fresh)
+    assert flow.summarize_repository("example/repo", known).carry_rate == 2 / 3
+    with_unknown = flow.summarize_repository("example/repo", known + (unread, unread))
+    assert with_unknown.carry_rate == 2 / 3
+    assert with_unknown.merged_prs == 5
+    for observations, expected in (
+        ((carried, unread), 1.0),
+        ((fresh, unread), 0.0),
+        ((unread, unread), None),
+        ((), None),
+    ):
+        summary = flow.summarize_repository("example/repo", observations)
+        assert summary.carry_rate == expected
+        assert summary.merged_prs == len(observations)
+
+
+def test_recent_is_global_twenty_with_deterministic_ties() -> None:
+    """Recent selection is bounded globally; repository summaries retain older samples."""
+    base = timeline(evidence())
+    older = tuple(
+        replace(
+            base,
+            pull=replace(base.pull, repository="example/alpha", number=n, merged_at=at(n)),
+            segments=replace(base.segments, flow=float(n)),
+        )
+        for n in range(1, 23)
+    )
+    ties = tuple(
+        replace(
+            base,
+            pull=replace(base.pull, repository=repository, number=number, merged_at=at(30)),
+            segments=replace(base.segments, flow=duration),
+        )
+        for repository, number, duration in (
+            ("example/beta", 7, 400.0),
+            ("example/alpha", 30, 200.0),
+            ("example/beta", 3, 300.0),
+            ("example/alpha", 29, 100.0),
+        )
+    )
+    observations = older + ties
+    even = tuple(item for index, item in enumerate(observations) if index % 2 == 0)
+    odd = tuple(item for index, item in enumerate(observations) if index % 2 == 1)
+    shuffled = even + tuple(reversed(odd))
+    recent = flow.recent_timelines(shuffled)
+    assert len(recent) == 20
+    assert tuple((item.pull.repository, item.pull.number) for item in recent) == (
+        ("example/alpha", 29),
+        ("example/alpha", 30),
+        ("example/beta", 3),
+        ("example/beta", 7),
+        ("example/alpha", 22),
+        ("example/alpha", 21),
+        ("example/alpha", 20),
+        ("example/alpha", 19),
+        ("example/alpha", 18),
+        ("example/alpha", 17),
+        ("example/alpha", 16),
+        ("example/alpha", 15),
+        ("example/alpha", 14),
+        ("example/alpha", 13),
+        ("example/alpha", 12),
+        ("example/alpha", 11),
+        ("example/alpha", 10),
+        ("example/alpha", 9),
+        ("example/alpha", 8),
+        ("example/alpha", 7),
+    )
+    assert recent == flow.recent_timelines(shuffled[::-1], limit=20)
+    assert flow.recent_timelines(shuffled, limit=1) == (ties[3],)
+    assert flow.recent_timelines(shuffled, limit=0) == ()
+    assert flow.recent_timelines(()) == ()
+    assert flow.recent_timelines(ties) == (ties[3], ties[1], ties[2], ties[0])
+    for limit in (-1, 21):
+        with pytest.raises(ValueError):
+            flow.recent_timelines(shuffled, limit=limit)
+        with pytest.raises(ValueError):
+            flow.recent_timelines((), limit=limit)
+    # Alpha's 24 values are 1..22, 100, 200: median (12+13)/2; rank 22 gives p90 22.
+    alpha = flow.summarize_repository("example/alpha", shuffled)
+    assert alpha.repository == "example/alpha"
+    assert alpha.merged_prs == 24
+    assert alpha.segments["flow"] == flow.Percentiles(12.5, 22.0, 24)
+    beta = flow.summarize_repository("example/beta", shuffled)
+    assert beta.merged_prs == 2
+    assert beta.segments["flow"] == flow.Percentiles(350.0, 400.0, 2)
+
+
+def test_read_empty_repository_has_null_distributions_and_zero_samples() -> None:
+    """A read inactive repository remains present without fabricated durations or carry."""
+    summary = flow.summarize_repository("example/empty", ())
+    assert summary.repository == "example/empty"
+    assert summary.merged_prs == 0
+    assert summary.carry_rate is None
+    assert tuple(summary.segments) == SEGMENTS
+    assert summary.segments == {
+        "flow": flow.Percentiles(None, None, 0),
+        "ci_start": flow.Percentiles(None, None, 0),
+        "ci": flow.Percentiles(None, None, 0),
+        "ci_longest": flow.Percentiles(None, None, 0),
+        "review_start": flow.Percentiles(None, None, 0),
+        "review": flow.Percentiles(None, None, 0),
+        "judge_wait": flow.Percentiles(None, None, 0),
+        "judge": flow.Percentiles(None, None, 0),
+        "idle": flow.Percentiles(None, None, 0),
+        "holder": flow.Percentiles(None, None, 0),
+    }
+    assert flow.summarize_repository("example/empty", (timeline(evidence()),)) == summary
+    assert tuple(field.name for field in fields(flow.Percentiles)) == ("median", "p90", "n")
+    assert tuple(field.name for field in fields(flow.RepositorySummary)) == (
+        "repository",
+        "merged_prs",
+        "carry_rate",
+        "segments",
+    )
+    assert not hasattr(summary, "__dict__")
+    assert not hasattr(summary.segments["flow"], "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        summary.merged_prs = 1  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        summary.segments["flow"].n = 1  # type: ignore[misc]

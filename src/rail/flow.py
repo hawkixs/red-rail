@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from math import ceil
+from statistics import median
 from typing import Literal
 
 Segment = Literal[
@@ -335,3 +337,61 @@ def compute_timeline(
         provider,
         holder_approx,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class Percentiles:
+    """Keep unrounded observations and their count so absent samples remain unknown."""
+
+    median: float | None
+    p90: float | None
+    n: int
+
+
+@dataclass(frozen=True, slots=True)
+class RepositorySummary:
+    """Keep every segment for one repository, including a successfully read empty window."""
+
+    repository: str
+    merged_prs: int
+    carry_rate: float | None
+    segments: dict[Segment, Percentiles]
+
+
+def segment_percentiles(values: tuple[float, ...]) -> Percentiles:
+    """Use the median and nearest-rank p90 without inventing values for empty samples."""
+    if not values:
+        return Percentiles(None, None, 0)
+    ordered = sorted(values)
+    n = len(ordered)
+    return Percentiles(median(ordered), ordered[ceil(0.9 * n) - 1], n)
+
+
+def summarize_repository(repository: str, timelines: tuple[FlowTimeline, ...]) -> RepositorySummary:
+    """Summarize the full repository window; carry excludes only its own duration sample."""
+    kept = tuple(timeline for timeline in timelines if timeline.pull.repository == repository)
+    segments = {
+        segment: segment_percentiles(
+            tuple(
+                value
+                for timeline in kept
+                if not (segment == "review" and timeline.carried is True)
+                and not (segment == "judge" and timeline.judge_carried is True)
+                if (value := getattr(timeline.segments, segment)) is not None
+            )
+        )
+        for segment in SEGMENTS
+    }
+    known = tuple(timeline for timeline in kept if timeline.carried is not None)
+    carry_rate = sum(timeline.carried is True for timeline in known) / len(known) if known else None
+    return RepositorySummary(repository, len(kept), carry_rate, segments)
+
+
+def recent_timelines(
+    timelines: tuple[FlowTimeline, ...], *, limit: int = 20
+) -> tuple[FlowTimeline, ...]:
+    """Bound recent merges globally, using repository and PR order to make ties stable."""
+    if not 0 <= limit <= 20:
+        raise ValueError("recent timeline limit must be between 0 and 20")
+    ties = sorted(timelines, key=lambda timeline: (timeline.pull.repository, timeline.pull.number))
+    return tuple(sorted(ties, key=lambda timeline: timeline.pull.merged_at, reverse=True)[:limit])
