@@ -40,8 +40,9 @@ the same digest) is published beside it.
 D3 — Change failure rate. A change failed when a non-drill `incident_detected` names its
 digest, or a non-drill `rolled_back` names it (`from_digest`), or, for records without a
 digest, a non-drill incident or rollback falls within 24 h after it: such a record is
-attributed to one change only, the newest change (never a redeployment) whose first
-deployment precedes it by at most 24 h. A failure is counted once
+attributed to one digest only, that of the newest release-mode deployment (a first
+deployment or a redeployment) preceding it by at most 24 h, and fails that digest's change
+without adding an attempt. A failure is counted once
 per digest: an incident raised while a digest is redeployed counts against that digest's
 change. A failed candidate is a digest named by a non-drill incident or rollback that has no
 release-mode `deployed`; it counts as one attempt and one failure. Window membership: a
