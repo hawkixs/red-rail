@@ -14,7 +14,7 @@ from typing import Any
 from rail import gitrepo
 from rail.gates import run_gates
 from rail.ledger import AttestationKind, Ledger, Record, RecordKind
-from rail.model import try_load_rail_config
+from rail.model import RailConfig, try_load_rail_config
 from rail.policy import applicable_stages
 
 FAILURE_WINDOW = timedelta(hours=24)
@@ -145,10 +145,11 @@ def delivery_window(
     *,
     now: datetime,
     window_days: int,
+    config: RailConfig | None = None,
 ) -> DeliveryWindow:
-    """Compute delivery metrics from ledger evidence without evaluating repository gates."""
+    """Use the supplied manifest with its evidence, or read the checkout for local metrics."""
     since = now - timedelta(days=window_days)
-    cfg = try_load_rail_config(repo)
+    cfg = config if config is not None else try_load_rail_config(repo)
     target = cfg.deploy.target.value if cfg is not None and cfg.deploy is not None else None
 
     def windowed(kind: AttestationKind) -> list[Record]:

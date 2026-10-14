@@ -133,6 +133,11 @@ def publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, An
     paths = [tmp_path / "red-zeta", tmp_path / "red-alpha"]
     for path in paths:
         manifest(path, path.name)
+        manifest_path = path / "rail.yaml"
+        manifest_path.write_text(
+            manifest_path.read_text()
+            + "ledger: brain\nticket: 00000000-0000-0000-0000-000000000001\n"
+        )
     config = tmp_path / "reviewer.yaml"
     key = tmp_path / "app.pem"
     key.write_text("fixture key")
@@ -163,6 +168,13 @@ def publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, An
     monkeypatch.setattr(command_module, "datetime", FrozenDatetime)
     monkeypatch.setattr(command_module, "open_ledger", read_ledger)
     monkeypatch.setattr("rail.reviewer.github.GitHubApp", github_app)
+    monkeypatch.setattr("rail.gitrepo.fetch_main", lambda repo: True)
+
+    def file_at(repo: Path, ref: str, path: str) -> str:
+        assert ref == "refs/remotes/origin/main" and path == "rail.yaml"
+        return (repo / path).read_text()
+
+    monkeypatch.setattr("rail.gitrepo.file_at", file_at)
     return {
         "config": config,
         "out": tmp_path / "state" / "metrics.json",
@@ -394,6 +406,7 @@ def test_development_repository_has_no_delivery_entry(publication: dict[str, Any
     path = publication["paths"][0]
     path.joinpath("rail.yaml").write_text(
         f"rail: 1\nproject: {path.name}\nbrain_key: {path.name}\ntier: dev\nstack: python\n"
+        "ledger: brain\nticket: 00000000-0000-0000-0000-000000000001\n"
     )
     result = invoke(publication)
     assert result.exit_code == 0, result.output
@@ -407,9 +420,17 @@ def test_file_ledger_uses_checkout_receipts(
     publication: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for path in publication["paths"]:
+        manifest_path = path / "rail.yaml"
+        manifest_path.write_text(manifest_path.read_text().split("ledger: brain")[0])
         FileLedger(path / "docs/receipts", clock=lambda: NOW).attest(
             path.name, AttestationKind.RELEASED, {}, issuer="operator", idempotency_key="release"
         )
+
+    def files_at(repo: Path, ref: str, directory: str) -> dict[str, str]:
+        assert ref == "refs/remotes/origin/main" and directory == "docs/receipts"
+        return {}
+
+    monkeypatch.setattr("rail.gitrepo.files_at", files_at)
     monkeypatch.setattr(command_module, "open_ledger", open_ledger)
     result = invoke(publication)
     assert result.exit_code == 0, result.output
