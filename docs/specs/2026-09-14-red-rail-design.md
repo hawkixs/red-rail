@@ -278,6 +278,13 @@ is what allows **measuring the drift between git and what is deployed**.
    `integration` receipt.
 6. **release** — from the host: `rail release` → tag, image built and pushed with digest,
    `docs/receipts/`, `rail attest released`.
+   Under `ledger: file`, the release also sweeps verified JSON receipts from the reviewer
+   checkout configured for origin's GitHub slug into `docs/receipts/`, preserving their bytes
+   and leaving existing files and the source untouched. Commit these receipts with the
+   released receipt in the dedicated receipts PR (decision `c8b0ea45`). `--plan` reports the
+   counts without copying; `--json` includes a `sweep` report with counts and file names.
+   Refusals and conflicts are reported on stderr without failing the release. Missing or
+   unusable reviewer configuration skips the sweep; `ledger: brain` does not sweep.
 7. **deploy** — `rail deploy` refuses without a `released` attestation and asks for explicit
    confirmation. For the POC, **the human approval gate is the operator running the command
    from the host**; GitHub *environments* arrive when deployment moves into CI (phase 2).
