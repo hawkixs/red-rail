@@ -23,9 +23,10 @@ Name = Annotated[str, Field(pattern=NAME_PATTERN.pattern)]
 
 
 def _require_utc(value: datetime) -> datetime:
+    """Normalize aware zero-offset zones so serialized timestamps always use UTC."""
     if value.tzinfo is None or value.utcoffset() != UTC.utcoffset(value):
         raise ValueError("datetime must be timezone-aware UTC")
-    return value
+    return value.astimezone(UTC)
 
 
 UtcDatetime = Annotated[

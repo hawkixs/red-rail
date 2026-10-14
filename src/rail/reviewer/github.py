@@ -24,6 +24,7 @@ JSON = "application/vnd.github+json"
 DIFF = "application/vnd.github.diff"
 RAW = "application/vnd.github.raw+json"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_PAGES = 100  # Bound linked pagination so a faulty server cannot keep a read running forever.
 MAX_COMMIT_PAGES = 3  # GitHub lists at most 250 commits on a pull request, 100 per page
 MAX_FILE_PAGES = 30  # GitHub lists at most 3000 files on a pull request, 100 per page
 TIMEOUT_SECONDS = 10.0
@@ -246,7 +247,11 @@ class GitHubApp:
     def _paged_list(self, path: str) -> list[Any]:
         """Read every page; a partial list is never returned as a complete answer."""
         items: list[Any] = []
+        seen: set[str] = set()
         while path:
+            if path in seen or len(seen) >= MAX_PAGES:
+                raise GitHubError("pagination repeated a cursor or exceeded the page limit")
+            seen.add(path)
             body, path = self._request_page(path)
             if not isinstance(body, list):
                 raise GitHubError("incomplete answer")
@@ -280,7 +285,11 @@ class GitHubApp:
         )
         path: str | None = f"/repos/{repository}/pulls?{query}"
         result: list[MergedPull] = []
+        seen: set[str] = set()
         while path:
+            if path in seen or len(seen) >= MAX_PAGES:
+                raise GitHubError("pagination repeated a cursor or exceeded the page limit")
+            seen.add(path)
             page, next_page = self._request_page(path)
             if not isinstance(page, list):
                 raise GitHubError("incomplete answer")

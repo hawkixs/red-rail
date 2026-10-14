@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from rail.autonomy import MergedPull
+from rail.reviewer import github
 from rail.reviewer.github import CheckRun, GitHubApp, GitHubError, PullRequest
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -51,6 +52,35 @@ def _app(recorder: Recorder, now: datetime = T0) -> GitHubApp:
 
 
 TOKEN = {"token": "ghs_installation", "expires_at": (T0 + timedelta(hours=1)).isoformat()}
+
+
+@pytest.mark.parametrize("source", ["list", "merged", "timeline"])
+@pytest.mark.parametrize("repeat", [False, True], ids=["endless", "repeated"])
+def test_pagination_is_bounded(source: str, repeat: bool) -> None:
+    calls = 0
+    limit = getattr(github, "MAX_PAGES", 100)
+
+    def routed(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert calls <= limit, "pagination exceeded its request budget"
+        cursor = "same" if repeat else str(calls)
+        return httpx.Response(
+            200,
+            json=[],
+            headers={"Link": f'<https://api.github.com/next?cursor={cursor}>; rel="next"'},
+        )
+
+    app = _contents_app(routed)
+    with pytest.raises(GitHubError, match="pagination"):
+        if source == "list":
+            app._paged_list("/first")
+        elif source == "merged":
+            app.merged_pulls("o/r", base="main", since=T0)
+        else:
+            app.ready_for_review_at("o/r", 1)
+    assert calls == (2 if repeat else limit)
+    app.close()
 
 
 def test_installation_token_comes_from_a_signed_app_jwt() -> None:

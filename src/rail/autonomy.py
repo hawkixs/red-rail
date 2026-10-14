@@ -76,13 +76,14 @@ def window_start(now: datetime, days: int) -> datetime:
 
 
 def window_samples(facts: ProjectFacts, *, now: datetime, days: int) -> Samples:
-    """Select merges by window, then keep their review history since actor coverage began."""
+    """Select window facts and review history only through now to exclude future evidence."""
     start = window_start(now, days)
-    records = [record for record in facts.records if record.recorded_at >= start]
-    merged = [pull for pull in facts.merged if pull.merged_at >= start]
+    history_records = [record for record in facts.records if record.recorded_at <= now]
+    records = [record for record in history_records if record.recorded_at >= start]
+    merged = [pull for pull in facts.merged if start <= pull.merged_at <= now]
     reviews: dict[int, list[Record]] = {}
     rulings: dict[int, list[Record]] = {}
-    for record in sorted(facts.records, key=lambda record: record.recorded_at):
+    for record in sorted(history_records, key=lambda record: record.recorded_at):
         if record.data.get("repository") != facts.repository:
             continue
         pr = record.data.get("pr")
@@ -133,7 +134,7 @@ def window_samples(facts: ProjectFacts, *, now: datetime, days: int) -> Samples:
             record.attestation == AttestationKind.ROLLED_BACK and not record.data.get("drill")
             for record in records
         ),
-        reverts=sum(at >= start for at in facts.reverts),
+        reverts=sum(start <= at <= now for at in facts.reverts),
         incidents=sum(
             record.attestation == AttestationKind.INCIDENT_DETECTED and not record.data.get("drill")
             for record in records

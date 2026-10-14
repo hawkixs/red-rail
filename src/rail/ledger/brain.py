@@ -40,6 +40,7 @@ MILESTONE_ISSUER = "brain-v42"
 # contract, while attestations and bindings are the executor's (the project's).
 REQUESTER = "red"
 PAGE = 100
+MAX_PAGES = 100  # Bound cursor pagination so a faulty server cannot keep a ledger read running.
 HISTORY = 50  # receipts and revisions the delivery view's history page carries (brain's max: 100)
 KNOWN_REFUSALS: frozenset[str] = frozenset(
     {
@@ -379,7 +380,11 @@ class BrainLedger:
 
     def _row_by_key(self, kind: AttestationKind, key: str) -> dict[str, Any] | None:
         cursor: str | None = None
+        seen: set[str | None] = set()
         while True:
+            if cursor in seen or len(seen) >= MAX_PAGES:
+                raise LedgerError("pagination repeated a cursor or exceeded the page limit")
+            seen.add(cursor)
             arguments: dict[str, Any] = {
                 "actor_project": self.project,
                 "ticket_id": str(self.ticket),
@@ -502,7 +507,11 @@ class BrainLedger:
         evidence survive a ticket change; milestones stay the manifest ticket's."""
         records: list[Record] = []
         cursor: str | None = None
+        seen: set[str | None] = set()
         while True:
+            if cursor in seen or len(seen) >= MAX_PAGES:
+                raise LedgerError("pagination repeated a cursor or exceeded the page limit")
+            seen.add(cursor)
             arguments: dict[str, Any] = {
                 "actor_project": self.project,
                 "issuer_project": self.project,

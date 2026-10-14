@@ -37,13 +37,19 @@ def create_server(file: Path, *, port: int = 9230) -> ThreadingHTTPServer:
                     status = 200
                 except (OSError, ValidationError, TooLarge):
                     status = 503
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(body)
+            try:
+                self.send_response(status)
+                if status == 405:
+                    self.send_header("Allow", "GET")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                # A disconnected probe is routine; other response failures must remain visible.
+                pass
 
         def log_message(self, format: str, *args: object) -> None:
             """Disable the access log because each probe needs no persistent log line."""
