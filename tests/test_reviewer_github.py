@@ -125,6 +125,60 @@ def test_reviewer_app_cannot_post_commit_statuses() -> None:
     assert not hasattr(GitHubApp, "post_status")
 
 
+@pytest.mark.parametrize("source", [{"id": 42}, {"id": "42"}, {}, None])
+@pytest.mark.parametrize("evidence", ["check", "status"])
+def test_ci_evidence_parses_optional_source_ids(source, evidence) -> None:
+    expected = 42 if source and "id" in source else None
+    entry = {"id": 1, "name": "lint", "status": "completed", "conclusion": "success"}
+    if evidence == "check":
+        if source is not None:
+            entry["app"] = source
+        endpoint = "check-runs"
+        body = {"total_count": 1, "check_runs": [entry]}
+    else:
+        entry = {"id": 1, "context": "lint", "state": "success"}
+        if source is not None:
+            entry["creator"] = source
+        endpoint = "statuses"
+        body = [entry]
+    recorder = Recorder(
+        {
+            ("POST", "/app/installations/456/access_tokens"): TOKEN,
+            ("GET", f"/repos/example/red-alpha/commits/head/{endpoint}"): body,
+        }
+    )
+    app = _app(recorder)
+    if evidence == "check":
+        assert app.check_runs("example/red-alpha", "head")[0].app_id == expected
+    else:
+        assert app.commit_statuses("example/red-alpha", "head")[0].creator_id == expected
+
+
+def test_commit_statuses_keep_latest_state_for_each_context_and_creator() -> None:
+    def routed(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("access_tokens"):
+            return httpx.Response(200, json=TOKEN)
+        if request.url.params.get("page") == "2":
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 2, "context": "lint", "state": "failure", "creator": {"id": 42}},
+                    {"id": 1, "context": "lint", "state": "success", "creator": {"id": 42}},
+                ],
+            )
+        return httpx.Response(
+            200,
+            json=[{"id": 3, "context": "lint", "state": "success", "creator": {"id": 43}}],
+            headers={"Link": '<https://api.github.com/statuses?page=2>; rel="next"'},
+        )
+
+    statuses = _app(routed).commit_statuses("example/red-alpha", "head")
+    assert [(s.id, s.creator_id, s.state) for s in statuses] == [
+        (3, 43, "success"),
+        (2, 42, "failure"),
+    ]
+
+
 @pytest.mark.parametrize("missing", ["status", "sha"])
 def test_compare_files_refuses_missing_content_evidence(missing) -> None:
     detail = {"filename": "src/x.py", "status": "modified", "sha": "blob-sha"}

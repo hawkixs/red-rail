@@ -89,6 +89,7 @@ class CheckRun:
     status: str
     conclusion: str | None
     name: str = ""
+    app_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +98,7 @@ class CommitStatus:
     context: str
     state: str
     description: str
+    creator_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,11 +137,13 @@ def _pull(repository: str, raw: dict[str, Any]) -> PullRequest:
 
 
 def _check(raw: dict[str, Any]) -> CheckRun:
+    app_id = (raw.get("app") or {}).get("id")
     return CheckRun(
         id=int(raw["id"]),
         status=str(raw["status"]),
         conclusion=raw.get("conclusion"),
         name=str(raw.get("name", "")),
+        app_id=int(app_id) if app_id is not None else None,
     )
 
 
@@ -567,19 +571,22 @@ class GitHubApp:
         return result
 
     def commit_statuses(self, repository: str, sha: str) -> list[CommitStatus]:
-        """Only the latest state per context counts; GitHub returns history newest first."""
+        """Keep the latest state per context and creator; GitHub returns newest first."""
         raw = self._paged_list(f"/repos/{repository}/commits/{sha}/statuses?per_page=100")
-        latest: dict[str, CommitStatus] = {}
+        latest: dict[tuple[str, int | None], CommitStatus] = {}
         with _in_shape():
             for item in raw:
                 context = str(item["context"])
+                creator_id = (item.get("creator") or {}).get("id")
+                creator_id = int(creator_id) if creator_id is not None else None
                 latest.setdefault(
-                    context,
+                    (context, creator_id),
                     CommitStatus(
                         int(item["id"]),
                         context,
                         str(item["state"]),
                         str(item.get("description") or ""),
+                        creator_id,
                     ),
                 )
         return list(latest.values())

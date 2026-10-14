@@ -256,6 +256,74 @@ def test_judged_ci_evidence_must_be_present_on_the_new_head(require_green, evide
     assert not github.calls
 
 
+@pytest.mark.parametrize("evidence", ["check", "status"])
+@pytest.mark.parametrize("judged_source,new_source", [(42, 43), (42, None), (None, 43)])
+@pytest.mark.parametrize("include_trusted", [False, True])
+def test_same_name_ci_from_another_source_is_refused(
+    evidence, judged_source, new_source, include_trusted
+):
+    github = CarryGitHub()
+    if evidence == "check":
+        trusted = CheckRun(30, "completed", "success", "lint", app_id=judged_source)
+        github.checks[OLD].append(trusted)
+        github.checks[PR.head_sha] = [replace(trusted, id=31, app_id=new_source)]
+        if include_trusted:
+            github.checks[PR.head_sha].append(replace(trusted, id=32))
+    else:
+        trusted = CommitStatus(30, "lint", "success", "passed", creator_id=judged_source)
+        github.statuses[OLD].append(trusted)
+        github.statuses[PR.head_sha] = [replace(trusted, id=31, creator_id=new_source)]
+        if include_trusted:
+            github.statuses[PR.head_sha].append(replace(trusted, id=32))
+    decision = carry_decision(github, PR.repository, PR.number, PR.head_sha)
+    assert not decision.allowed
+    assert decision.reason == "CI source differs: lint"
+    assert not github.calls
+
+
+@pytest.mark.parametrize("evidence", ["check", "status"])
+@pytest.mark.parametrize("missing", [False, True])
+def test_each_judged_ci_source_pair_is_required(evidence, missing):
+    github = CarryGitHub()
+    if evidence == "check":
+        pairs = [CheckRun(30 + i, "completed", "success", "lint", app_id=i) for i in (42, 43)]
+        github.checks[OLD].extend(pairs)
+        github.checks[PR.head_sha] = pairs[:1] if missing else pairs
+    else:
+        pairs = [CommitStatus(30 + i, "lint", "success", "", creator_id=i) for i in (42, 43)]
+        github.statuses[OLD].extend(pairs)
+        github.statuses[PR.head_sha] = pairs[:1] if missing else pairs
+    decision = carry_decision(github, PR.repository, PR.number, PR.head_sha)
+    assert decision.allowed is (not missing)
+    if missing:
+        assert decision.reason == "CI not green: lint missing"
+
+
+@pytest.mark.parametrize("evidence", ["check", "status"])
+@pytest.mark.parametrize("source", [42, 43, None])
+@pytest.mark.parametrize("failed", [False, True])
+def test_relaxed_carry_checks_failures_from_every_source(evidence, source, failed):
+    github = CarryGitHub()
+    if evidence == "check":
+        trusted = CheckRun(30, "completed", "success", "lint", app_id=42)
+        github.checks[OLD].append(trusted)
+        github.checks[PR.head_sha] = [
+            trusted,
+            replace(trusted, id=31, app_id=source, conclusion="failure" if failed else "success"),
+        ]
+    else:
+        trusted = CommitStatus(30, "lint", "success", "", creator_id=42)
+        github.statuses[OLD].append(trusted)
+        github.statuses[PR.head_sha] = [
+            trusted,
+            replace(trusted, id=31, creator_id=source, state="failure" if failed else "success"),
+        ]
+    decision = carry_decision(github, PR.repository, PR.number, PR.head_sha, require_green=False)
+    assert decision.allowed is (not failed)
+    if failed:
+        assert decision.reason == "CI not green: lint failure"
+
+
 @pytest.mark.parametrize("require_green", [True, False])
 def test_carried_verdicts_alone_are_not_green_ci_evidence(require_green):
     github = CarryGitHub()
@@ -328,11 +396,15 @@ def source_record(ledger):
     )
 
 
-def test_automatic_carry_preserves_findings_without_a_new_round_or_status(tmp_path):
+@pytest.mark.parametrize("creator_id", [None, 42])
+def test_automatic_carry_preserves_findings_without_a_new_round_or_status(tmp_path, creator_id):
     _, ledger = _repo(tmp_path)
     source = source_record(ledger)
     github = CarryGitHub()
+    github.statuses[OLD] = [replace(github.statuses[OLD][0], creator_id=creator_id)]
     github.checks[PR.head_sha] = [CheckRun(20, "in_progress", None, "test-unit")]
+    decision = carry_decision(github, PR.repository, PR.number, PR.head_sha, require_green=False)
+    assert decision.independent_status.creator_id == creator_id
 
     def no_judge(*args, **kwargs):
         pytest.fail("unchanged patch must not be judged again")
@@ -350,6 +422,7 @@ def test_automatic_carry_preserves_findings_without_a_new_round_or_status(tmp_pa
     carried = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)[-1]
     assert carried.data["sha"] == PR.head_sha
     assert carried.data["carried_from"] == OLD
+    assert carried.data["source_status_creator_id"] == creator_id
     assert carried.data["findings"] == source.data["findings"]
     assert carried.data["carry_forwards"] == source.data["carry_forwards"]
     before = rounds.loop_state([source], [])
@@ -362,6 +435,7 @@ def test_automatic_carry_preserves_findings_without_a_new_round_or_status(tmp_pa
         rounds.open_carry_forwards([source], [], repository=PR.repository)
     )
     assert "57fa86dc" in github.check_summaries[99]
+    assert f"independent-review by creator {creator_id}" in github.check_summaries[99]
 
 
 def test_a_carried_head_does_not_expire_rulings_after_the_source(tmp_path):

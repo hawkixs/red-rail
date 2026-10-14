@@ -719,8 +719,12 @@ def carry_review(
     if not sources:
         raise CarrySourceError("source verdict unavailable in the ledger")
     source = sources[-1].data
+    source_status_creator_id = (
+        decision.independent_status.creator_id if decision.independent_status is not None else None
+    )
     summary = (
         f"Carried from {decision.judged_head}, check run {decision.rail_check.id}; "
+        f"independent-review by creator {source_status_creator_id}; "
         f"patch-id {decision.patch_id}. Base diff {decision.judged_base}...{decision.new_base} "
         "checked: no PR file changed. Decision 57fa86dc."
     )
@@ -745,6 +749,7 @@ def carry_review(
         "judged_base": decision.judged_base,
         "new_base": decision.new_base,
         "source_check_run_id": decision.rail_check.id,
+        "source_status_creator_id": source_status_creator_id,
         "carry_decision": "57fa86dc",
     }
     try:

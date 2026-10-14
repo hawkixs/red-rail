@@ -140,14 +140,32 @@ def carry_decision(
             if not checks and not statuses:
                 return replace(decision, reason="CI not green: no check on the new head")
             judged_checks = {
-                c.name for c in github.check_runs(repository, decision.judged_head)
-            } - excluded
+                (c.name, c.app_id)
+                for c in github.check_runs(repository, decision.judged_head)
+                if c.name not in excluded
+            }
             judged_statuses = {
-                s.context for s in github.commit_statuses(repository, decision.judged_head)
-            } - excluded
+                (s.context, s.creator_id)
+                for s in github.commit_statuses(repository, decision.judged_head)
+                if s.context not in excluded
+            }
+            new_checks = {(c.name, c.app_id) for c in checks}
+            new_statuses = {(s.context, s.creator_id) for s in statuses}
+            judged_check_names = {name for name, _ in judged_checks}
+            judged_status_names = {name for name, _ in judged_statuses}
+            mismatched = sorted(
+                {name for name, _ in new_checks - judged_checks if name in judged_check_names}
+                | {
+                    name
+                    for name, _ in new_statuses - judged_statuses
+                    if name in judged_status_names
+                }
+            )
+            if mismatched:
+                return replace(decision, reason=f"CI source differs: {mismatched[0]}")
             missing = sorted(
-                (judged_checks - {c.name for c in checks})
-                | (judged_statuses - {s.context for s in statuses})
+                {name for name, _ in judged_checks - new_checks}
+                | {name for name, _ in judged_statuses - new_statuses}
             )
             if missing:
                 return replace(decision, reason=f"CI not green: {missing[0]} missing")
