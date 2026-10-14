@@ -206,7 +206,7 @@ def test_cli_plan_and_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         main, ["release", "--repo", str(repo), "--version", "0.1.0", "--yes", "--json"]
     )
     assert out.exit_code == 0, out.output
-    assert json.loads(out.output)["payload"]["data"]["digest"] == DIGEST
+    assert json.loads(out.stdout)["payload"]["data"]["digest"] == DIGEST
 
 
 def test_a_release_whose_tag_already_names_head_resumes(tmp_path: Path) -> None:

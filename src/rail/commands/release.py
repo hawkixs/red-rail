@@ -59,13 +59,23 @@ def _reviewer_checkout(repo: Path) -> tuple[Path | None, str | None]:
     return entry.path, None
 
 
-def _sweep(repo: Path, *, dry_run: bool, as_json: bool) -> dict[str, Any]:
+def _sweep(repo: Path, *, project: str, dry_run: bool, as_json: bool) -> dict[str, Any]:
     """A sweep cannot fail an already published release; every diagnostic stays path-free."""
     source, reason = _reviewer_checkout(repo)
     report = sweep.SweepReport()
     if source is not None:
         try:
-            report = sweep.sweep_receipts(source, repo, dry_run=dry_run)
+            from rail.reviewer.service import REVIEWER_IDENTITY
+
+            report = sweep.sweep_receipts(
+                source,
+                repo,
+                project=project,
+                reviewer_identity=REVIEWER_IDENTITY,
+                dry_run=dry_run,
+            )
+        except ImportError:
+            reason = "reviewer identity is unavailable"
         except OSError:
             reason = "reviewer receipts are unavailable"
     if reason:
@@ -75,13 +85,20 @@ def _sweep(repo: Path, *, dry_run: bool, as_json: bool) -> dict[str, Any]:
         click.echo(
             f"{len(report.copied)} reviewer receipt(s) {action} from {source.name} "
             f"into docs/receipts ({len(report.already_present)} already present, "
-            f"{len(report.refused)} refused, {len(report.conflicts)} conflicts); "
+            f"{len(report.refused)} refused, {len(report.conflicts)} conflicts, "
+            f"{len(report.skipped)} skipped (not the reviewer's receipts)); "
             "commit them with the released receipt in the receipts PR (decision c8b0ea45)"
         )
     for name in report.refused:
         click.echo(f"refused: {name}", err=True)
     for name in report.conflicts:
         click.echo(f"conflict: {name}", err=True)
+    if report.skipped:
+        click.echo(
+            f"{len(report.skipped)} skipped (not the reviewer's receipts): "
+            + ", ".join(report.skipped),
+            err=True,
+        )
     return {**report.as_dict(), "source": source.name if source else None, "reason": reason}
 
 
@@ -113,7 +130,7 @@ def command(repo: Path, version: str, dry_run: bool, yes: bool, as_json: bool) -
                         "sha": plan.sha,
                         "image_tag": plan.image_tag,
                         "steps": plan.steps(),
-                        "sweep": _sweep(repo, dry_run=True, as_json=True),
+                        "sweep": _sweep(repo, project=config.project, dry_run=True, as_json=True),
                     },
                     indent=2,
                 )
@@ -123,7 +140,7 @@ def command(repo: Path, version: str, dry_run: bool, yes: bool, as_json: bool) -
         for step in plan.steps():
             click.echo(f"  {step}")
         if config.ledger is LedgerBackend.FILE:
-            _sweep(repo, dry_run=True, as_json=False)
+            _sweep(repo, project=config.project, dry_run=True, as_json=False)
         return
     if not yes:
         click.confirm(
@@ -161,7 +178,7 @@ def command(repo: Path, version: str, dry_run: bool, yes: bool, as_json: bool) -
     if config.ledger is LedgerBackend.FILE:
         if not as_json:
             echo_record(record, repo, False)
-        report = _sweep(repo, dry_run=False, as_json=as_json)
+        report = _sweep(repo, project=config.project, dry_run=False, as_json=as_json)
         if as_json:
             click.echo(json.dumps({**record.model_dump(mode="json"), "sweep": report}, indent=2))
         elif report["reason"] and (repo / RECEIPTS_DIR / receipt_filename(record)).is_file():

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from rail.ledger import RECEIPTS_DIR, LedgerError
+from rail.ledger import RECEIPTS_DIR, AttestationKind, LedgerError
 from rail.ledger.file import load_receipt
 
 
@@ -19,6 +19,7 @@ class SweepReport:
     already_present: tuple[str, ...] = ()
     refused: tuple[str, ...] = ()
     conflicts: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
 
     @property
     def counts(self) -> dict[str, int]:
@@ -31,6 +32,7 @@ class SweepReport:
             "already_present": self.already_present,
             "refused": self.refused,
             "conflicts": self.conflicts,
+            "skipped": self.skipped,
         }
 
     def as_dict(self) -> dict[str, Any]:
@@ -45,9 +47,17 @@ def _existing(path: Path, content: bytes) -> str:
         return "conflicts"
 
 
-def sweep_receipts(source: Path, target: Path, *, dry_run: bool = False) -> SweepReport:
-    """Copy only verified JSON receipts, preserving bytes and both checkouts' evidence.
+def sweep_receipts(
+    source: Path,
+    target: Path,
+    *,
+    project: str,
+    reviewer_identity: str,
+    dry_run: bool = False,
+) -> SweepReport:
+    """Copy only verified verdicts and rulings from this project's reviewer.
 
+    Other verified receipts are skipped; bytes and both checkouts' evidence are preserved.
     `dry_run` applies the same checks without creating anything; `copied` then names what
     would be copied. Exclusive creation also prevents overwriting a concurrent arrival.
     """
@@ -56,6 +66,7 @@ def sweep_receipts(source: Path, target: Path, *, dry_run: bool = False) -> Swee
         "already_present": [],
         "refused": [],
         "conflicts": [],
+        "skipped": [],
     }
     for path in sorted((source / RECEIPTS_DIR).glob("*.json")):
         try:
@@ -68,8 +79,18 @@ def sweep_receipts(source: Path, target: Path, *, dry_run: bool = False) -> Swee
             found["refused"].append(path.name)
             continue
         destination = target / RECEIPTS_DIR / path.name
+        # a receipt the target already holds is reported as such, whoever issued it: the
+        # reviewer's checkout also carries every committed receipt of its own history
         if os.path.lexists(destination):
             found[_existing(destination, content)].append(path.name)
+            continue
+        if (
+            record.attestation
+            not in (AttestationKind.REVIEW_VERDICT, AttestationKind.REVIEW_RULING)
+            or record.issuer != reviewer_identity
+            or record.project != project
+        ):
+            found["skipped"].append(path.name)
             continue
         if not dry_run:
             try:
