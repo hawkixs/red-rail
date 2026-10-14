@@ -41,11 +41,17 @@ existing bounded GitHub client; nothing needs the Actions permission.
   check (success criteria) measures it against the 2026-10-14 analysis, which read workflow
   run creation times.
 - Merge: the pull request's `merged_at`.
-- CI: every check run of the CI app on the final head, every attempt included (the client
-  reads them with `filter=all`), with `started_at` and `completed_at`.
-- Reviewer: every `red-rail/review` check run of our App on the final head, every attempt
-  included; the run that carries the final verdict is the one whose id is the
-  `check_run_id` of the pull request's latest `review_verdict` receipt for that head. The
+- Evidence is bounded by the merge. Only what happened before `merged_at` describes the
+  delivery: a check run that started after the merge, a status or a receipt recorded after
+  it, is ignored. A check run still running at the merge (no `completed_at`, or one after
+  `merged_at`) ends at `merged_at` for every segment.
+- CI: every check run of the CI app on the final head that started before the merge, every
+  attempt included (the client reads them with `filter=all`), with `started_at` and
+  `completed_at`.
+- Reviewer: every `red-rail/review` check run of our App on the final head that started
+  before the merge, every attempt included; the run that carries the final verdict is the
+  one whose id is the `check_run_id` of the latest `review_verdict` receipt for that head
+  recorded before the merge. The
   receipts also give `rounds` and `carried_from` (D3).
 - Judge: the commit status history of the final head (every status, not the latest per
   context), filtered to context `independent-review`, state success and `created_at` at or
@@ -114,19 +120,26 @@ consumer against an unbounded answer; red-monitor's own read limit is confirmed 
 ticket before the release that publishes the block, and the release waits for it.
 
 D6 — Cost and cache. Each hourly publication lists the pull requests merged in the window
-(one paginated list per repository) and reads the evidence of a pull request only when its
-cache entry is absent, invalid or incomplete. The cache lives on the host under
-`~/.local/state/red-rail/`, keyed by repository, number and merge SHA. An entry is complete
-when every segment was read or is definitively absent, and the merge is older than 24 h (late
-statuses and receipts land within that time); only complete entries are reused without a
-call. An entry with a segment that could not be read (a 403, a transport error, a ledger
-that did not open) stays incomplete and is read again at the next publication, so granting
-`statuses: read` later fills it in. An entry that fails to load is dropped and read again;
-because discovery lists the whole window, nothing is lost by dropping it.
+(one paginated list per repository, without a per-pull-request call). Only the GitHub
+evidence is cached; the ledger receipts and the merge-queue journal are local reads and are
+read again at every publication, so a receipt replayed late, or a `merge_queue` declared
+later, is taken into account without invalidating anything. The cache lives on the host
+under `~/.local/state/red-rail/`, keyed by repository, number, merge SHA and the contract
+version. Because D2 bounds the GitHub evidence by the merge, it can no longer change once
+every check run that started before the merge has completed and the merge is older than
+24 h; such an entry is complete and is reused without a call. An entry with a GitHub read
+that failed (a 403, a transport error) stays incomplete and is read again at the next
+publication, so granting `statuses: read` later fills it in. An entry that fails to load is
+dropped and read again; because discovery lists the whole window, nothing is lost by
+dropping it.
 
 D7 — Failure. A pull request whose detail, check suites or merge cannot be read (push or
 merge unknown) is left out and counted in `unread_prs`. A pull request whose other evidence
 cannot be read is kept: the affected segments are null and counted in `unread_segments`.
+When the ledger cannot be read, `rounds`, `carried` and the review segments that depend on
+the receipt are null, the pull request leaves the `carry_rate` denominator, and
+`unread_segments` counts it under `ledger`: an unread verdict is never taken as not carried,
+an unread round count never as zero.
 A repository whose list of merged pull requests cannot be read is listed in
 `coverage.missing`. The publication never fails because of the flow block. The failing step
 (`pulls`, `checks`, `statuses`, `ledger`, `queue`) is logged on stderr, never in the public
