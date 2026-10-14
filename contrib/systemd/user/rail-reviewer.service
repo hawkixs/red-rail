@@ -7,5 +7,5 @@ Type=oneshot
 ExecStart=%h/.local/bin/rail reviewer once
 Environment=PATH=%h/.local/bin:%h/.opencode/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
-TimeoutStartSec=3600
+TimeoutStartSec=4h
 Nice=5

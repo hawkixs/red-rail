@@ -50,7 +50,7 @@ def test_reviewer_pass_is_oneshot_and_bounded() -> None:
     parser = _read_unit("rail-reviewer.service")
     assert parser["Service"]["Type"] == "oneshot"
     assert parser["Service"].get("ExecStart", raw=True) == "%h/.local/bin/rail reviewer once"
-    assert parser["Service"]["TimeoutStartSec"] == "3600"
+    assert parser["Service"]["TimeoutStartSec"] == "4h"
 
 
 def test_reviewer_path_reaches_the_judge_clis() -> None:
