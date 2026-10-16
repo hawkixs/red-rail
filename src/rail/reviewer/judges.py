@@ -142,6 +142,7 @@ class JudgeReply:
     reason: str | None = None  # why it dropped out, classified (`failure_reason`)
     sight: Sight | None = None  # elsewhere-built replies saw their whole input (spec D1)
     note: str | None = None
+    prompt_bytes: int = 0
 
 
 # Why a judge dropped out (ticket 0b950eea). The check runs are public and a seat's logs can
@@ -616,6 +617,7 @@ def judge(
             raw="",
             reason="prompt too large",
             sight=sight_of(built.visible, diff),
+            prompt_bytes=len(built.text.encode("utf-8")),
         )
     base = root or ephemeral_root(os.environ) or Path(tempfile.gettempdir())
     note = None

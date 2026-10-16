@@ -495,6 +495,39 @@ def test_check_run_reads_started_at() -> None:
     )
 
 
+@pytest.mark.parametrize("output", [{"title": "no verdict: judge timeout"}, {}, None])
+def test_check_run_reads_output_title(output) -> None:
+    parsed = github._check({"id": 1, "status": "completed", "output": output})
+    assert parsed.title == (output or {}).get("title", "")
+    assert github._check({"id": 2, "status": "in_progress"}).title == ""
+
+
+def test_review_check_runs_include_previous_attempts() -> None:
+    recorder = Recorder(
+        {
+            ("POST", "/app/installations/456/access_tokens"): TOKEN,
+            ("GET", f"/repos/hawkixs/red-rail/commits/{'a' * 40}/check-runs"): {
+                "total_count": 2,
+                "check_runs": [
+                    {
+                        "id": 1,
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "output": {
+                            "title": "no verdict: judge timeout, one automatic retry pending"
+                        },
+                    },
+                    {"id": 2, "status": "in_progress"},
+                ],
+            },
+        }
+    )
+    found = _app(recorder).check_runs("hawkixs/red-rail", "a" * 40, name="red-rail/review")
+    assert recorder.requests[-1].url.params["filter"] == "all"
+    assert [check.id for check in found] == [1, 2]
+    assert found[0].title == "no verdict: judge timeout, one automatic retry pending"
+
+
 def test_review_and_label_removal() -> None:
     recorder = Recorder(
         {
