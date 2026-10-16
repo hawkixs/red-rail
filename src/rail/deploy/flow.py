@@ -6,6 +6,7 @@ end."""
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -37,6 +38,7 @@ class Target(Protocol):
     def steps(self, artefact: Artefact) -> list[Step]: ...
     def apply(self, artefact: Artefact) -> LiveVersion: ...
     def redact(self, text: str) -> str: ...
+    def file_at(self, sha: str, path: str, what: str) -> str: ...
 
 
 def implementations() -> dict[DeployTarget, type]:
@@ -186,6 +188,54 @@ def previous_artefact(ledger: Ledger, project: str, other_than: str) -> Artefact
         if record.data.get("digest") and record.data["digest"] != other_than:
             return Artefact.from_release(record.data)
     return None
+
+
+class DrillRefused(DeployError):
+    """A preflight refusal with a stable reason for CLI consumers."""
+
+    def __init__(self, reason: str, message: str, **details: Any) -> None:
+        super().__init__(message)
+        self.data = {"refused": True, "reason": reason, "message": message, **details}
+
+
+def _check_schema_heads(
+    cfg: RailConfig, ledger: Ledger, target: Target, live: Artefact, previous: Artefact
+) -> None:
+    declared = cfg.drill.schema_head if cfg.drill else None
+    if declared is None:
+        return
+    releases = ledger.list(cfg.project, attestation=AttestationKind.RELEASED)
+    heads: list[str | int] = []
+    for artefact in (live, previous):
+        try:
+            release = next(r for r in reversed(releases) if r.data.get("digest") == artefact.digest)
+            released = Artefact.from_release(release.data)
+            content = json.loads(target.file_at(released.sha, declared.path, "drill schema head"))
+            head = content.get(declared.field) if isinstance(content, dict) else None
+            if not isinstance(head, str | int) or isinstance(head, bool) or head == "":
+                raise ValueError("missing or invalid schema head")
+        except (StopIteration, DeployError, OSError, ValueError) as exc:
+            raise DrillRefused(
+                "schema_head_unknown",
+                f"rollback drill refused: schema head unknown for {artefact.version}: "
+                f"cannot read {declared.path} field {declared.field!r} at its released commit; "
+                "provide a readable JSON file and schema head before drilling",
+                version=artefact.version,
+                path=declared.path,
+                field=declared.field,
+            ) from exc
+        heads.append(head)
+    if heads[0] != heads[1]:
+        raise DrillRefused(
+            "schema_head_mismatch",
+            f"rollback drill refused: live {live.version} is on schema head {heads[0]}, "
+            f"previous {previous.version} expects {heads[1]}; "
+            "a schema-crossing rollback is drilled by restore (rail drill --restore)",
+            live_version=live.version,
+            live_head=heads[0],
+            previous_version=previous.version,
+            previous_head=heads[1],
+        )
 
 
 def build_or_refuse(target: Target, *artefacts: Artefact) -> None:
@@ -453,6 +503,7 @@ def drill(
     previous = previous_artefact(ledger, cfg.project, live.digest) if live else None
     if live is None or previous is None:
         raise DeployError("a drill needs two deployed artefacts: deploy a second release first")
+    _check_schema_heads(cfg, ledger, target, live, previous)
     build_or_refuse(target, previous, live)  # the rollback, then the roll-forward
     started = clock()
     attester.attest(

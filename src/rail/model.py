@@ -237,6 +237,26 @@ class GateOverride(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class SchemaHeadConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    field: str = Field(min_length=1)
+
+    @field_validator("path")
+    @classmethod
+    def _repository_path(cls, value: str) -> str:
+        if not value or "\\" in value or Path(value).is_absolute() or _has_dot_segment(value):
+            raise ValueError("drill.schema_head.path must be a relative path inside the repository")
+        return value
+
+
+class DrillConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_head: SchemaHeadConfig | None = None
+
+
 class RailConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -248,6 +268,7 @@ class RailConfig(BaseModel):
     ledger: LedgerBackend = LedgerBackend.FILE
     ticket: UUID | None = None  # the delivery ticket (`red → <project>`), brain ledger only
     deploy: DeployConfig | None = None
+    drill: DrillConfig | None = None
     gates: dict[str, GateOverride] = Field(default_factory=dict)
 
     @field_validator("project")
