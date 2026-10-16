@@ -34,7 +34,12 @@ from rail.reviewer.judges import (
 )
 from rail.reviewer.policy import ReviewPolicy, producer_providers
 from rail.reviewer.split import Sight, oversized, sight_of, split_diff
-from rail.reviewer.verdict import CarryForwards, Finding, PreviousAnswer, ReviewVerdict
+from rail.reviewer.verdict import (
+    CarryForwards,
+    Finding,
+    PreviousAnswer,
+    ReviewVerdict,
+)
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
 RunJudge = Callable[..., JudgeReply]
@@ -117,7 +122,92 @@ def pending_reviews(
     ]
 
 
-def _close_interrupted_checks(pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy) -> None:
+def _attested_check(ledger: Ledger, project: str, check_id: int) -> Record | None:
+    """An attested check must never be overwritten by an error (ticket 62195cc5)."""
+    return next(
+        (
+            record
+            for record in reversed(ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT))
+            if record.issuer == REVIEWER_IDENTITY and record.data.get("check_run_id") == check_id
+        ),
+        None,
+    )
+
+
+def complete_attested_checks(
+    repository: str,
+    *,
+    github: Any,
+    policy: ReviewPolicy,
+    ledger: Ledger,
+    project: str,
+) -> int:
+    """Publish durable verdicts whose completion was lost, without judging or attesting."""
+    completed = 0
+    # Only the reviewer's own receipts publish a verdict: a file ledger lives in the repository
+    # under review, where anyone who can push could commit a receipt (ticket 62195cc5).
+    receipts = [
+        record
+        for record in ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
+        if record.issuer == REVIEWER_IDENTITY
+    ]
+    for pr in github.open_pulls(repository):
+        for check in github.check_runs(repository, pr.head_sha, name=policy.check_name):
+            if check.status != "in_progress":
+                continue
+            receipt = next(
+                (
+                    record
+                    for record in reversed(receipts)
+                    if record.data.get("check_run_id") == check.id
+                    and record.data.get("repository") == repository
+                    and record.data.get("pr") == pr.number
+                    and record.data.get("sha") == pr.head_sha
+                ),
+                None,
+            )
+            if receipt is None:
+                continue
+            data = receipt.data
+            fields = {k: v for k, v in data.items() if k in ReviewVerdict.model_fields}
+            # Reconstruct publication prose without changing the attestation payload.
+            fields.setdefault("summary", f"Attested verdict: {data['verdict']}")
+            if isinstance(fields.get("findings"), list):
+                fields["findings"] = [
+                    {**f, "evidence": f.get("evidence") or "(trimmed)"} for f in fields["findings"]
+                ]
+            else:
+                fields.pop("findings", None)
+            verdict = ReviewVerdict.model_validate(fields)
+            title = (
+                f"approve carried from {data['carried_from']}"
+                if data.get("carried_from")
+                else "awaiting ruling"
+                if verdict.round == "awaiting_ruling"
+                else "no verdict"
+                if verdict.round == "no_verdict"
+                else verdict.verdict
+            )
+            github.complete_check(
+                repository,
+                check.id,
+                conclusion="success" if verdict.verdict == "approve" else "failure",
+                title=title,
+                summary=verdict.summary,
+                text=_render(verdict),
+            )
+            completed += 1
+    return completed
+
+
+def _close_interrupted_checks(
+    pr: PullRequest,
+    *,
+    github: GitHubLike,
+    policy: ReviewPolicy,
+    ledger: Ledger,
+    project: str,
+) -> None:
     # Ticket 71776743: retire stale runs before starting a replacement pass.
     cutoff = datetime.now(UTC) - timedelta(minutes=policy.stale_check_minutes)
     for check in github.check_runs(pr.repository, pr.head_sha, name=policy.check_name):
@@ -125,6 +215,7 @@ def _close_interrupted_checks(pr: PullRequest, *, github: GitHubLike, policy: Re
             check.status == "in_progress"
             and check.started_at is not None
             and check.started_at < cutoff
+            and _attested_check(ledger, project, check.id) is None
         ):
             started = check.started_at.isoformat()
             github.complete_check(
@@ -599,7 +690,7 @@ def _capped(findings: list[Finding]) -> list[Finding]:
     return [f for i, f in enumerate(findings) if i not in dropped]
 
 
-def _render(verdict: ReviewVerdict) -> str:
+def _render(verdict: ReviewVerdict, *, judge_notes: list[str] | None = None) -> str:
     lines = []
     if verdict.round is not None:
         lines.append(f"Round: {verdict.round} ({verdict.artifact})")
@@ -611,7 +702,7 @@ def _render(verdict: ReviewVerdict) -> str:
             "Models: "
             + ", ".join(f"{provider}={model}" for provider, model in verdict.models.items())
         )
-    lines += ["", verdict.summary, ""]
+    lines += ["", *(judge_notes or []), verdict.summary, ""]
     for f in verdict.findings:
         where = f"{f.file}:{f.line}" if f.line else f.file
         tag = f.klass or f.severity
@@ -644,6 +735,7 @@ def _judge_chain(
     wanted: int,
     notes: str = "",
     instructions: str = "",
+    judge_notes: list[str] | None = None,
 ) -> list[JudgeReply]:
     """Walk the chain until `wanted` verdicts are in hand; a failure is logged, never fatal."""
     replies: list[JudgeReply] = []
@@ -659,6 +751,8 @@ def _judge_chain(
             **({"notes": notes} if notes else {}),
             **({"instructions": instructions} if instructions else {}),
         )
+        if reply.note and judge_notes is not None:
+            judge_notes.append(f"{provider}/{tier}: {reply.note}")
         if reply.verdict is None:
             why = f" ({reply.reason})" if reply.reason else ""  # classified, ticket 0b950eea
             failures.append(f"{provider}/{tier}: {reply.failure}{why}")
@@ -699,7 +793,7 @@ def review_pull(
                 # A missing or malformed source receipt proves no findings state. Judge the
                 # patch normally; carry_review validates it before creating any check.
                 pass
-    _close_interrupted_checks(pr, github=github, policy=policy)
+    _close_interrupted_checks(pr, github=github, policy=policy, ledger=ledger, project=project)
     check = github.start_check(pr.repository, pr.head_sha, name=policy.check_name)
     try:
         return _review_started(
@@ -713,7 +807,10 @@ def review_pull(
             run_judge=run_judge,
             root=root,
         )
-    except Exception as exc:  # never leave a check in progress: fail it, then surface the crash
+    except Exception as exc:
+        # Ticket 62195cc5: reconciliation publishes an attested verdict on the next pass.
+        if _attested_check(ledger, project, check.id) is not None:
+            raise
         github.complete_check(
             pr.repository,
             check.id,
@@ -774,7 +871,7 @@ def carry_review(
         verdict = ReviewVerdict.model_validate({**fields, "summary": summary})
     except (ValueError, TypeError, AttributeError) as exc:
         raise CarrySourceError(f"source verdict malformed: {exc}") from exc
-    _close_interrupted_checks(pr, github=github, policy=policy)
+    _close_interrupted_checks(pr, github=github, policy=policy, ledger=ledger, project=project)
     check = github.start_check(pr.repository, pr.head_sha, name="red-rail/review")
     data = {
         **source,
@@ -804,6 +901,8 @@ def carry_review(
             publish_review=False,
         )
     except Exception as exc:
+        if _attested_check(ledger, project, check.id) is not None:
+            raise
         github.complete_check(
             pr.repository,
             check.id,
@@ -828,7 +927,9 @@ def _publish(
     failures: list[str],
     attestation_data: dict[str, Any] | None = None,
     publish_review: bool = True,
+    judge_notes: list[str] | None = None,
 ) -> ReviewOutcome:
+    rendered = _render(verdict, judge_notes=judge_notes)
     # Attest FIRST: GitHub must never show an approval the ledger does not hold (found by the
     # independent reviewer on PR #3). The check run exists already (in progress), so its id is
     # part of the attestation; the conclusion and the PR review follow the ledger's answer.
@@ -877,7 +978,7 @@ def _publish(
             conclusion="failure",
             title=f"{ruling}, not attested: {exc.cause}",
             summary=note,
-            text=_render(verdict),
+            text=rendered,
         )
         if publish_review:
             github.review(
@@ -885,7 +986,7 @@ def _publish(
                 pr.number,
                 commit_id=pr.head_sha,
                 event="REQUEST_CHANGES",
-                body=note + "\n\n" + _render(verdict),
+                body=note + "\n\n" + rendered,
             )
         return outcome
     outcome.attested = True
@@ -899,7 +1000,7 @@ def _publish(
         conclusion=conclusion,
         title=title,
         summary=verdict.summary,
-        text=_render(verdict),
+        text=rendered,
     )
     if publish_review:
         github.review(
@@ -907,7 +1008,7 @@ def _publish(
             pr.number,
             commit_id=pr.head_sha,
             event="APPROVE" if conclusion == "success" else "REQUEST_CHANGES",
-            body=_render(verdict),
+            body=rendered,
         )
     if policy.rerun_label in pr.labels:
         github.remove_label(pr.repository, pr.number, policy.rerun_label)
@@ -1204,6 +1305,7 @@ def _review_started(
         )
 
     failures: list[str] = []
+    judge_notes: list[str] = []
     cf_addressed = carry.addressed(cf_open, section)
 
     # I3: the context is built from the judged state, mechanical findings removed — they are
@@ -1262,6 +1364,7 @@ def _review_started(
         failures=failures,
         notes=notes,
         instructions=instructions,
+        judge_notes=judge_notes,
     )
     # One depth for the whole review, computed once from the change. The chunked path below
     # used to hardcode `deep` and never read `light`, so a docs-only pull request big enough
@@ -1415,4 +1518,5 @@ def _review_started(
         project=project,
         repo_path=repo_path,
         failures=failures,
+        judge_notes=judge_notes,
     )

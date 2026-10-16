@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1022,6 +1023,154 @@ OPENCODE_QUOTA = (
     'level=ERROR message="stream error" providerID=opencode-go modelID=glm-5.3-flash '
     'error.error="AI_APICallError: Go usage limit exceeded"'
 )
+
+
+def test_a_glm_quota_failure_is_remembered_and_the_primary_skipped(tmp_path: Path) -> None:
+    now = datetime(2026, 10, 16, 10, tzinfo=UTC)
+    until = now + timedelta(hours=2)
+    attempted: list[str] = []
+
+    def runner(provider, spec):
+        attempted.append(spec.model)
+        if spec.model == GLM_SUBSCRIPTION:
+            spec.stderr_log.write_text("usage limit exceeded; resets in 2h")
+            return 1, ""
+        return 0, json.dumps({"verdict": "approve", "summary": "ok", "findings": []})
+
+    def run(at):
+        return judge(
+            PR,
+            DIFF,
+            default_policy(),
+            provider="glm",
+            tier="light",
+            runner=runner,
+            root=tmp_path,
+            clock=lambda: at,
+        )
+
+    first = run(now)
+    memory = tmp_path / "state" / "red-rail" / "reviewer-glm-quota.json"
+    assert attempted == [GLM_SUBSCRIPTION, GLM_OPENROUTER]
+    assert first.failure is None and first.model == GLM_OPENROUTER
+    assert json.loads(memory.read_text()) == {"until": until.isoformat()}
+    assert memory.stat().st_mode & 0o777 == 0o600
+    assert memory.parent.stat().st_mode & 0o777 == 0o700
+    assert first.note == (f"primary glm hit its usage limit; skipping it until {until.isoformat()}")
+
+    attempted.clear()
+    second = run(now + timedelta(hours=1))
+    assert attempted == [GLM_OPENROUTER]
+    assert second.failure is None and second.model == GLM_OPENROUTER
+    assert second.note == (f"primary glm skipped: usage limit remembered until {until.isoformat()}")
+
+    attempted.clear()
+    run(until + timedelta(seconds=1))
+    assert attempted == [GLM_SUBSCRIPTION, GLM_OPENROUTER]
+
+
+def test_a_garbled_reset_parks_the_primary_for_a_day_at_most(tmp_path: Path) -> None:
+    now = datetime(2026, 10, 16, 10, tzinfo=UTC)
+
+    def runner(provider, spec):
+        if spec.model == GLM_SUBSCRIPTION:
+            spec.stderr_log.write_text("usage limit exceeded; resets in 999h")
+            return 1, ""
+        return 0, json.dumps({"verdict": "approve", "summary": "ok", "findings": []})
+
+    judge(
+        PR,
+        DIFF,
+        default_policy(),
+        provider="glm",
+        tier="light",
+        runner=runner,
+        root=tmp_path,
+        clock=lambda: now,
+    )
+    memory = tmp_path / "state" / "red-rail" / "reviewer-glm-quota.json"
+    assert json.loads(memory.read_text()) == {"until": (now + timedelta(hours=24)).isoformat()}
+
+
+@pytest.mark.parametrize(
+    "bad_memory",
+    [
+        "{",
+        "[]",
+        "{}",
+        '{"until": null}',
+        '{"until": "bad"}',
+        '{"until": "2026-10-16T12:00:00"}',
+        '{"until": "0001-01-01T00:00:00+01:00"}',
+    ],
+)
+def test_a_non_quota_failure_or_bad_memory_changes_nothing(
+    tmp_path: Path,
+    bad_memory: str,
+) -> None:
+    now = datetime(2026, 10, 16, 10, tzinfo=UTC)
+    memory = tmp_path / "state" / "red-rail" / "reviewer-glm-quota.json"
+    error = "connection refused"
+    attempted: list[str] = []
+
+    def runner(provider, spec):
+        attempted.append(spec.model)
+        if spec.model == GLM_SUBSCRIPTION:
+            spec.stderr_log.write_text(error)
+            return 1, ""
+        return 0, json.dumps({"verdict": "approve", "summary": "ok", "findings": []})
+
+    def run(policy: ReviewPolicy | None = None):
+        return judge(
+            PR,
+            DIFF,
+            policy or default_policy(),
+            provider="glm",
+            tier="light",
+            runner=runner,
+            root=tmp_path,
+            clock=lambda: now,
+        )
+
+    reply = run()
+    assert attempted == [GLM_SUBSCRIPTION, GLM_OPENROUTER]
+    assert reply.failure is None and reply.note is None
+    assert not memory.exists()
+
+    memory.parent.mkdir(parents=True, exist_ok=True)
+    memory.write_text(bad_memory)
+    attempted.clear()
+    assert run().failure is None
+    assert attempted == [GLM_SUBSCRIPTION, GLM_OPENROUTER]
+    assert memory.read_text() == bad_memory
+
+    memory.unlink()
+    memory.mkdir()
+    attempted.clear()
+    assert run().failure is None
+    assert attempted == [GLM_SUBSCRIPTION, GLM_OPENROUTER]
+    memory.rmdir()
+
+    error = "usage limit exceeded"
+    assert run().failure is None
+    assert json.loads(memory.read_text()) == {"until": (now + timedelta(minutes=60)).isoformat()}
+
+    memory.unlink()
+    assert run(ReviewPolicy(glm_quota_skip_minutes=15)).failure is None
+    assert json.loads(memory.read_text()) == {"until": (now + timedelta(minutes=15)).isoformat()}
+
+    memory.unlink()
+    error = "usage limit exceeded; resets in 1H2M3S"
+    assert run().failure is None
+    assert json.loads(memory.read_text()) == {
+        "until": (now + timedelta(hours=1, minutes=2, seconds=3)).isoformat()
+    }
+
+
+@pytest.mark.parametrize("minutes", [0, -1])
+def test_the_glm_quota_skip_window_must_be_positive(minutes: float) -> None:
+    with pytest.raises(ValidationError):
+        ReviewPolicy(glm_quota_skip_minutes=minutes)
 
 
 def test_an_exhausted_glm_subscription_falls_back_to_openrouter(tmp_path: Path) -> None:

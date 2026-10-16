@@ -13,6 +13,7 @@ from yaml import YAMLError
 from rail.commands._options import json_option, repo_option
 from rail.ledger import LedgerError, open_ledger
 from rail.metrics import compute_metrics
+from rail.metrics_contract import MAX_BYTES
 from rail.model import load_rail_config
 
 
@@ -82,7 +83,15 @@ def command(ctx: click.Context, repo: Path, window: int, ci: bool, as_json: bool
         "Default: $XDG_STATE_HOME/red-rail/metrics.json (or ~/.local/state/red-rail/metrics.json)."
     ),
 )
-def publish(config_path: Path | None, out: Path | None) -> None:
+@click.option(
+    "--max-bytes",
+    type=click.IntRange(1, MAX_BYTES),
+    default=16 * 1024,
+    show_default=True,
+    help="Consumer budget; above 16 KiB requires confirmed relay upgrades before release.",
+)
+@click.pass_context
+def publish(ctx: click.Context, config_path: Path | None, out: Path | None, max_bytes: int) -> None:
     """Publish delivery and autonomy metrics from the reviewer's read-only sources."""
     import jwt
 
@@ -105,11 +114,12 @@ def publish(config_path: Path | None, out: Path | None) -> None:
                 clock=lambda: datetime.now(UTC),
                 open_ledger=open_ledger,
                 github=github,
+                window_days=ctx.parent.params["window"],
             )
         finally:
             github.close()
         destination = out or publication.default_output()
-        size = publication.write(answer, destination)
+        size = publication.write(answer, destination, max_bytes=max_bytes)
     except (
         ValueError,
         OSError,
@@ -121,9 +131,14 @@ def publish(config_path: Path | None, out: Path | None) -> None:
     ) as exc:
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc
-    assert answer.autonomy is not None
-    coverage = answer.autonomy.coverage
-    click.echo(f"{destination} {size} bytes {coverage.read}/{coverage.expected} read")
+    if answer.autonomy is not None:
+        coverage = answer.autonomy.coverage
+        read, expected = coverage.read, coverage.expected
+    else:
+        assert answer.flow is not None
+        read = len(answer.flow.repositories)
+        expected = read + len(answer.flow.coverage.missing)
+    click.echo(f"{destination} {size} bytes {read}/{expected} read")
 
 
 @command.command("serve")
@@ -137,7 +152,14 @@ def publish(config_path: Path | None, out: Path | None) -> None:
     ),
 )
 @click.option("--port", type=click.IntRange(0, 65535), default=9230, show_default=True)
-def serve(file_path: Path | None, port: int) -> None:
+@click.option(
+    "--max-bytes",
+    type=click.IntRange(1, MAX_BYTES),
+    default=16 * 1024,
+    show_default=True,
+    help="Consumer budget; above 16 KiB requires confirmed relay upgrades before release.",
+)
+def serve(file_path: Path | None, port: int, max_bytes: int) -> None:
     """Serve strictly validated metrics on 127.0.0.1 only."""
     from rail import publish as publication
     from rail.serve import create_server
@@ -145,7 +167,7 @@ def serve(file_path: Path | None, port: int) -> None:
     if file_path is None:
         file_path = publication.default_output()
     try:
-        with create_server(file_path, port=port) as server:
+        with create_server(file_path, port=port, max_bytes=max_bytes) as server:
             server.serve_forever()
     except OSError as exc:
         click.echo(f"error: {exc}", err=True)

@@ -1,0 +1,352 @@
+{
+  "flow": {
+    "version": "rail-flow/v1",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "window_days": 30,
+    "window_start": "2026-09-13T15:00:00+00:00",
+    "repositories": [
+      {
+        "repository": "example/ledger",
+        "merged_prs": 1,
+        "carry_rate": null,
+        "segments": {
+          "flow": {
+            "median": 10.0,
+            "p90": 10.0,
+            "n": 1
+          },
+          "ci_start": {
+            "median": 1.0,
+            "p90": 1.0,
+            "n": 1
+          },
+          "ci": {
+            "median": 4.0,
+            "p90": 4.0,
+            "n": 1
+          },
+          "ci_longest": {
+            "median": 3.0,
+            "p90": 3.0,
+            "n": 1
+          },
+          "review_start": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "review": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "judge_wait": {
+            "median": 8.0,
+            "p90": 8.0,
+            "n": 1
+          },
+          "judge": {
+            "median": 1.0,
+            "p90": 1.0,
+            "n": 1
+          },
+          "idle": {
+            "median": 5.0,
+            "p90": 5.0,
+            "n": 1
+          },
+          "holder": {
+            "median": 12.0,
+            "p90": 12.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "repository": "example/omitted",
+        "merged_prs": 1,
+        "carry_rate": 0.0,
+        "segments": {
+          "flow": {
+            "median": 10.0,
+            "p90": 10.0,
+            "n": 1
+          },
+          "ci_start": {
+            "median": 1.0,
+            "p90": 1.0,
+            "n": 1
+          },
+          "ci": {
+            "median": 4.0,
+            "p90": 4.0,
+            "n": 1
+          },
+          "ci_longest": {
+            "median": 3.0,
+            "p90": 3.0,
+            "n": 1
+          },
+          "review_start": {
+            "median": 2.0,
+            "p90": 2.0,
+            "n": 1
+          },
+          "review": {
+            "median": 2.0,
+            "p90": 2.0,
+            "n": 1
+          },
+          "judge_wait": {
+            "median": 8.0,
+            "p90": 8.0,
+            "n": 1
+          },
+          "judge": {
+            "median": 1.0,
+            "p90": 1.0,
+            "n": 1
+          },
+          "idle": {
+            "median": 5.0,
+            "p90": 5.0,
+            "n": 1
+          },
+          "holder": {
+            "median": 12.0,
+            "p90": 12.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "repository": "example/statuses",
+        "merged_prs": 1,
+        "carry_rate": 0.0,
+        "segments": {
+          "flow": {
+            "median": 10.0,
+            "p90": 10.0,
+            "n": 1
+          },
+          "ci_start": {
+            "median": 1.0,
+            "p90": 1.0,
+            "n": 1
+          },
+          "ci": {
+            "median": 4.0,
+            "p90": 4.0,
+            "n": 1
+          },
+          "ci_longest": {
+            "median": 3.0,
+            "p90": 3.0,
+            "n": 1
+          },
+          "review_start": {
+            "median": 2.0,
+            "p90": 2.0,
+            "n": 1
+          },
+          "review": {
+            "median": 2.0,
+            "p90": 2.0,
+            "n": 1
+          },
+          "judge_wait": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "judge": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "idle": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "holder": {
+            "median": 12.0,
+            "p90": 12.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "repository": "example/undeclared",
+        "merged_prs": 1,
+        "carry_rate": 0.0,
+        "segments": {
+          "flow": {
+            "median": 10.0,
+            "p90": 10.0,
+            "n": 1
+          },
+          "ci_start": {
+            "median": 1.0,
+            "p90": 1.0,
+            "n": 1
+          },
+          "ci": {
+            "median": 4.0,
+            "p90": 4.0,
+            "n": 1
+          },
+          "ci_longest": {
+            "median": 3.0,
+            "p90": 3.0,
+            "n": 1
+          },
+          "review_start": {
+            "median": 2.0,
+            "p90": 2.0,
+            "n": 1
+          },
+          "review": {
+            "median": 2.0,
+            "p90": 2.0,
+            "n": 1
+          },
+          "judge_wait": {
+            "median": 8.0,
+            "p90": 8.0,
+            "n": 1
+          },
+          "judge": {
+            "median": 1.0,
+            "p90": 1.0,
+            "n": 1
+          },
+          "idle": {
+            "median": 5.0,
+            "p90": 5.0,
+            "n": 1
+          },
+          "holder": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          }
+        }
+      }
+    ],
+    "recent": [
+      {
+        "repository": "example/ledger",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": null,
+          "review": null,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": null,
+        "carried": null,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/omitted",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/statuses",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": null,
+          "judge": null,
+          "idle": null,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": null,
+        "judge_provider": null,
+        "holder_approx": false
+      },
+      {
+        "repository": "example/undeclared",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": null
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": null
+      }
+    ],
+    "coverage": {
+      "missing": [
+        "example/missing"
+      ],
+      "unread_prs": {
+        "example/omitted": 1
+      },
+      "unread_segments": {
+        "example/ledger": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/statuses": {
+          "judge_wait": 1,
+          "judge": 1,
+          "idle": 1
+        }
+      }
+    }
+  }
+}

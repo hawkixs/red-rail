@@ -58,6 +58,56 @@ def _app(recorder: Recorder, now: datetime = T0) -> GitHubApp:
 TOKEN = {"token": "ghs_installation", "expires_at": (T0 + timedelta(hours=1)).isoformat()}
 
 
+@pytest.mark.parametrize("disconnects, status", [(2, 200), (3, 200), (0, 422)])
+def test_complete_check_retries_transport_errors(disconnects: int, status: int) -> None:
+    """Ticket 62195cc5: repeat only an idempotent completion lost in transport."""
+    attempts = []
+    sleeps = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json=TOKEN)
+        assert request.method == "PATCH"
+        assert request.url.path == "/repos/example/red-alpha/check-runs/99"
+        attempts.append(json.loads(request.content))
+        if len(attempts) <= disconnects:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response")
+        return httpx.Response(
+            status, json={"id": 99, "status": "completed", "conclusion": "success"}
+        )
+
+    app = GitHubApp(
+        app_id=123,
+        installation_id=456,
+        private_key_pem=PEM,
+        transport=httpx.MockTransport(transport),
+        clock=lambda: T0,
+        sleep=sleeps.append,
+    )
+    try:
+        if disconnects == 3:
+            with pytest.raises(github.GitHubTransportError):
+                app.complete_check(
+                    "example/red-alpha", 99, conclusion="success", title="approve", summary="clean"
+                )
+        elif status == 422:
+            with pytest.raises(GitHubError) as caught:
+                app.complete_check(
+                    "example/red-alpha", 99, conclusion="success", title="approve", summary="clean"
+                )
+            assert type(caught.value) is GitHubError and caught.value.status == 422
+        else:
+            completed = app.complete_check(
+                "example/red-alpha", 99, conclusion="success", title="approve", summary="clean"
+            )
+            assert completed == CheckRun(99, "completed", "success")
+        assert len(attempts) == (3 if disconnects else 1)
+        assert attempts == [attempts[0]] * len(attempts)
+        assert sleeps == ([1, 2] if disconnects else [])
+    finally:
+        app.close()
+
+
 def test_compare_files_reads_merge_base_and_both_rename_paths() -> None:
     recorder = Recorder(
         {

@@ -107,7 +107,7 @@ def test_invalid_or_oversized_file_is_unavailable(
 
 def test_file_at_size_cap_is_valid(endpoint: tuple[ThreadingHTTPServer, Path]) -> None:
     server, file = endpoint
-    file.write_bytes(b"{}" + b" " * (MAX_BYTES - 2))
+    file.write_bytes(b"{}" + b" " * (16 * 1024 - 2))
     assert_answer(request(server), 200, b"{}")
 
 
@@ -130,7 +130,41 @@ def test_file_read_is_bounded(
 
     monkeypatch.setattr(Path, "open", open_file)
     assert_answer(request(server), 503, b"{}")
-    assert limits == [MAX_BYTES + 1]
+    assert limits == [16 * 1024 + 1]
+
+
+def test_serve_flow_and_consumer_cap(tmp_path: Path) -> None:
+    from rail.serve import create_server
+    from tests.test_cli_metrics_publish import sized_flow_answer
+
+    file = tmp_path / "metrics.json"
+    for cap in (16384, MAX_BYTES):
+        with create_server(file, port=0, max_bytes=cap) as server:
+            thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+            thread.start()
+            try:
+                file.unlink(missing_ok=True)
+                assert_answer(request(server), 200, b"{}")
+                alone = Answer.model_validate_json((CONTRACT / "flow-only.json").read_bytes())
+                for answer in (alone, sized_flow_answer(16384)):
+                    file.write_bytes(encode(answer))
+                    assert_answer(request(server), 200, encode(answer))
+                answer = sized_flow_answer(16385)
+                file.write_bytes(encode(answer))
+                assert_answer(
+                    request(server),
+                    503 if cap == 16384 else 200,
+                    b"{}" if cap == 16384 else encode(answer),
+                )
+                for raw in (b" " * (MAX_BYTES + 1), b'{"flow":{"version":"rail-flow/v2"}}'):
+                    file.write_bytes(raw)
+                    assert_answer(request(server), 503, b"{}")
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+    for cap in (0, MAX_BYTES + 1):
+        with pytest.raises(ValueError):
+            create_server(file, port=0, max_bytes=cap)
 
 
 @pytest.mark.parametrize("invalid", ["string_count", "extra_field", "unknown_version"])
@@ -259,7 +293,8 @@ def test_serve_uses_default_file_and_port(tmp_path: Path, monkeypatch: pytest.Mo
         def serve_forever(self) -> None:
             pass
 
-    def create(file: Path, *, port: int) -> Server:
+    def create(file: Path, *, port: int, max_bytes: int) -> Server:
+        assert max_bytes == 16 * 1024
         calls.append((file, port))
         return Server()
 
