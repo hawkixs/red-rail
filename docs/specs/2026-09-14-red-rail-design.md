@@ -303,8 +303,39 @@ Schema-aware drills (decision 20c229ed): a manifest may declare
 `drill.schema_head: {path: schema.json, field: head}`. Before any remote step or attestation,
 `rail drill` reads that top-level JSON field at each artefact's released commit and refuses
 the swap if either head is unknown or the heads differ, naming both versions and heads on
-a mismatch and pointing to `rail drill --restore`. Restore execution follows in part B;
-`observe.drill` already accepts a single `restored` attestation strictly after the latest
+a mismatch and pointing to `rail drill --restore`.
+
+`rail drill --restore --backup <absolute-target-path> --backup-sha256 <64-hex>` is supported
+only on `private-compose` with a declared `drill.restore`. The section names a digest-pinned
+PostgreSQL `database_image`, `database_env` (URL variable names), an `env` mapping of literal
+values, `env_deny_prefixes`, and argv lists `health_command` and `read_command` run with
+`docker exec` inside the previous artefact. Environment keys matching a denied prefix are
+invalid; extra environment keys cannot override a database URL. The project explicitly
+disables external writers through this allow-list. No project environment file or host
+environment is passed to the artefact.
+
+Before ssh, the rail requires both deployed artefacts and the previous artefact's schema
+head from its released commit. One remote script holds the deployment lock throughout.
+Its first check compares that head with `--backup-schema-head`, or with the plain-text
+`schema_head_file` from `drill.restore` (a relative path resolves beside the backup).
+Mismatch refuses as `backup_schema_mismatch`. It then checks the backup SHA-256
+(`backup_digest_mismatch`) and free bytes on both the backup filesystem and Docker's data
+root: each must cover backup size times `disk_margin` (at least 1, default 2.0).
+`insufficient_disk` reports required and available bytes before any restore starts.
+
+The script creates a uniquely named internal Docker network and a disposable database
+with a password generated only in the script. Neither container publishes ports. The
+backup is mounted read-only, restored by `pg_restore`, and the previous image runs by
+digest on the same internal network with only the declared environment overrides. Health
+retries are bounded; a minimal database read must then succeed. Recovery timing starts
+immediately before the restore and stops after that read. The remote deadline and signal
+traps remove both containers, the database's volumes and the network on failure or timeout;
+success is reported only after cleanup. Docker and application output is never printed.
+Production compose services and `current` are never changed. Failure records no incident
+and no restore evidence; success attests exactly one `restored`, naming live and previous
+versions as well as the evidence below.
+
+`observe.drill` accepts a single `restored` attestation strictly after the latest
 release-mode deployment with `drill: true`, `restore: true`, `artefact_digest` (the previous
 artefact booted), `backup_sha256`, and numeric `recovery_seconds > 0` in its payload. This
 evidence needs no `rolled_back` record and stays excluded from real-incident metrics.

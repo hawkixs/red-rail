@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from collections.abc import Callable
@@ -133,23 +134,30 @@ def heredoc(name: str, text: str) -> str:
     return f"cat > {name} <<'{marker}'\n{body}{marker}"
 
 
-def lock_preamble(root: str, release: str) -> list[str]:
+def lock_preamble(root: str, release: str | None) -> list[str]:
     """The first lines of every remote script: strict mode, the release directory, the
     target's lock — `LOCKED` when another deployment holds it — then into the release.
     `releases/` and the release are created with an explicit 0755, whatever the ssh session's
     umask: a unit running as its own user must traverse them to reach `current` (a 007 umask
     left them 0770 and the first red-backup run failed with 203/EXEC). The chmod is idempotent
     and also repairs a directory an earlier deployment left 0770."""
+    # An isolated drill takes the same lock without creating a production release directory.
+    if release is None:
+        directories = []
+    else:
+        directories = [
+            f"release={shlex.quote(release)}",
+            'mkdir -p "$release"',
+            'chmod 0755 "$root/releases" "$release"',
+        ]
     return [
         "set -euo pipefail",
-        f"root={root}",
-        f"release={release}",
-        'mkdir -p "$release"',
-        'chmod 0755 "$root/releases" "$release"',
+        f"root={shlex.quote(root)}",
+        *directories,
         'exec 9>"$root/.deploy.lock"',
         f'flock -n 9 || {{ echo "another deployment holds $root/.deploy.lock" >&2; '
         f"exit {LOCKED}; }}",
-        'cd "$release"',
+        'cd "$release"' if release is not None else 'cd "$root"',
     ]
 
 
