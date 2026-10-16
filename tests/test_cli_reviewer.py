@@ -50,6 +50,60 @@ def test_once_reports_the_error_of_an_unreadable_checkout(tmp_path: Path, monkey
     assert out.exit_code != 0 and "rail.yaml" in out.output
 
 
+def test_reconciliation_failure_still_reviews_pending_pulls_of_the_repository(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    repo = tmp_path / "red-alpha"
+    repo.mkdir()
+    (repo / "rail.yaml").write_text(
+        "rail: 1\nproject: red-alpha\nbrain_key: red-alpha\ntier: dev\nstack: python\n"
+    )
+    pull = SimpleNamespace(number=7, head_sha="a" * 40)
+    seen = []
+
+    class NoGitHub:
+        def __init__(self, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    def complete_attested_checks(repository, **kwargs):
+        seen.append(("reconcile", repository))
+        raise RuntimeError("private exception details")
+
+    def pending_reviews(github, repository, policy):
+        seen.append(("pending", repository))
+        return [pull]
+
+    def review_pull(pr, **kwargs):
+        seen.append(("review", pr))
+        return SimpleNamespace(
+            attested=True,
+            verdict=ReviewVerdict(verdict="approve", summary="clean"),
+            check_run_id=99,
+            failures=[],
+        )
+
+    monkeypatch.setattr("rail.reviewer.github.GitHubApp", NoGitHub)
+    monkeypatch.setattr("rail.commands.reviewer._merged_ignored_globs", lambda *a: ())
+    monkeypatch.setattr("rail.reviewer.service.complete_attested_checks", complete_attested_checks)
+    monkeypatch.setattr("rail.reviewer.service.pending_reviews", pending_reviews)
+    monkeypatch.setattr("rail.reviewer.service.review_pull", review_pull)
+    out = CliRunner().invoke(main, ["reviewer", "once", "--config", str(_config(tmp_path))])
+
+    assert out.exit_code == 0, out.output
+    assert seen == [
+        ("reconcile", "hawkixs/red-alpha"),
+        ("pending", "hawkixs/red-alpha"),
+        ("review", pull),
+    ]
+    assert out.stderr == "hawkixs/red-alpha: RuntimeError\n"
+    assert "reviewed 1 pull request(s)" in out.stdout
+
+
 GLOBS = (
     "gates:\n  review.ignored_globs:\n    value: ['internal/web/static/*']\n"
     "    reason: committed bundle, proven equal to its build by CI\n"
@@ -89,6 +143,7 @@ def _policy_seen(
 
     monkeypatch.setattr("rail.reviewer.github.GitHubApp", OnePullGitHub)
     monkeypatch.setattr("rail.reviewer.service.review_pull", review_pull)
+    monkeypatch.setattr("rail.reviewer.service.complete_attested_checks", lambda *a, **kw: 0)
     repo = conforming_tree(tmp_path, "red-alpha", "dev")
     manifest = repo / "rail.yaml"
     manifest.write_text(manifest.read_text() + merged)
