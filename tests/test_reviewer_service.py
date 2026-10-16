@@ -751,6 +751,39 @@ def test_an_attested_verdict_is_never_published_as_a_failure(tmp_path: Path) -> 
     assert not any(call[0] == "review" for call in github.calls)
 
 
+def test_a_receipt_from_another_issuer_never_completes_a_check(tmp_path: Path) -> None:
+    """A file ledger lives in the repository under review: a receipt anyone could commit, with
+    the reviewer's fields but not its identity, must neither publish a verdict nor shield a
+    crashed check from its failure (ticket 62195cc5)."""
+    from rail.reviewer import service
+
+    ledger = FileLedger(tmp_path / "receipts")
+    ledger.attest(
+        "red-alpha",
+        AttestationKind.REVIEW_VERDICT,
+        {
+            "verdict": "approve",
+            "check_run_id": 99,
+            "repository": PR.repository,
+            "pr": PR.number,
+            "sha": PR.head_sha,
+        },
+        issuer="someone-else",
+        idempotency_key="forged",
+    )
+
+    class OpenChecks(FakeGitHub):
+        def open_pulls(self, repository):
+            return [PR]
+
+    github = OpenChecks(existing_checks=[CheckRun(99, "in_progress", None)])
+    completed = service.complete_attested_checks(
+        PR.repository, github=github, policy=default_policy(), ledger=ledger, project="red-alpha"
+    )
+    assert completed == 0 and not github.completed_checks
+    assert service._attested_check(ledger, "red-alpha", 99) is None
+
+
 @pytest.mark.parametrize("decision", ["approve", "request_changes"])
 def test_the_next_pass_completes_an_attested_check_from_its_receipt(
     tmp_path: Path, monkeypatch, decision: str

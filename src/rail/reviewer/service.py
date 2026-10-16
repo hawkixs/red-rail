@@ -128,7 +128,7 @@ def _attested_check(ledger: Ledger, project: str, check_id: int) -> Record | Non
         (
             record
             for record in reversed(ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT))
-            if record.data.get("check_run_id") == check_id
+            if record.issuer == REVIEWER_IDENTITY and record.data.get("check_run_id") == check_id
         ),
         None,
     )
@@ -144,7 +144,13 @@ def complete_attested_checks(
 ) -> int:
     """Publish durable verdicts whose completion was lost, without judging or attesting."""
     completed = 0
-    receipts = ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
+    # Only the reviewer's own receipts publish a verdict: a file ledger lives in the repository
+    # under review, where anyone who can push could commit a receipt (ticket 62195cc5).
+    receipts = [
+        record
+        for record in ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
+        if record.issuer == REVIEWER_IDENTITY
+    ]
     for pr in github.open_pulls(repository):
         for check in github.check_runs(repository, pr.head_sha, name=policy.check_name):
             if check.status != "in_progress":
