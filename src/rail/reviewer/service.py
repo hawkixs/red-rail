@@ -690,7 +690,7 @@ def _capped(findings: list[Finding]) -> list[Finding]:
     return [f for i, f in enumerate(findings) if i not in dropped]
 
 
-def _render(verdict: ReviewVerdict) -> str:
+def _render(verdict: ReviewVerdict, *, judge_notes: list[str] | None = None) -> str:
     lines = []
     if verdict.round is not None:
         lines.append(f"Round: {verdict.round} ({verdict.artifact})")
@@ -702,7 +702,7 @@ def _render(verdict: ReviewVerdict) -> str:
             "Models: "
             + ", ".join(f"{provider}={model}" for provider, model in verdict.models.items())
         )
-    lines += ["", verdict.summary, ""]
+    lines += ["", *(judge_notes or []), verdict.summary, ""]
     for f in verdict.findings:
         where = f"{f.file}:{f.line}" if f.line else f.file
         tag = f.klass or f.severity
@@ -735,6 +735,7 @@ def _judge_chain(
     wanted: int,
     notes: str = "",
     instructions: str = "",
+    judge_notes: list[str] | None = None,
 ) -> list[JudgeReply]:
     """Walk the chain until `wanted` verdicts are in hand; a failure is logged, never fatal."""
     replies: list[JudgeReply] = []
@@ -750,6 +751,8 @@ def _judge_chain(
             **({"notes": notes} if notes else {}),
             **({"instructions": instructions} if instructions else {}),
         )
+        if reply.note and judge_notes is not None:
+            judge_notes.append(f"{provider}/{tier}: {reply.note}")
         if reply.verdict is None:
             why = f" ({reply.reason})" if reply.reason else ""  # classified, ticket 0b950eea
             failures.append(f"{provider}/{tier}: {reply.failure}{why}")
@@ -924,7 +927,9 @@ def _publish(
     failures: list[str],
     attestation_data: dict[str, Any] | None = None,
     publish_review: bool = True,
+    judge_notes: list[str] | None = None,
 ) -> ReviewOutcome:
+    rendered = _render(verdict, judge_notes=judge_notes)
     # Attest FIRST: GitHub must never show an approval the ledger does not hold (found by the
     # independent reviewer on PR #3). The check run exists already (in progress), so its id is
     # part of the attestation; the conclusion and the PR review follow the ledger's answer.
@@ -973,7 +978,7 @@ def _publish(
             conclusion="failure",
             title=f"{ruling}, not attested: {exc.cause}",
             summary=note,
-            text=_render(verdict),
+            text=rendered,
         )
         if publish_review:
             github.review(
@@ -981,7 +986,7 @@ def _publish(
                 pr.number,
                 commit_id=pr.head_sha,
                 event="REQUEST_CHANGES",
-                body=note + "\n\n" + _render(verdict),
+                body=note + "\n\n" + rendered,
             )
         return outcome
     outcome.attested = True
@@ -995,7 +1000,7 @@ def _publish(
         conclusion=conclusion,
         title=title,
         summary=verdict.summary,
-        text=_render(verdict),
+        text=rendered,
     )
     if publish_review:
         github.review(
@@ -1003,7 +1008,7 @@ def _publish(
             pr.number,
             commit_id=pr.head_sha,
             event="APPROVE" if conclusion == "success" else "REQUEST_CHANGES",
-            body=_render(verdict),
+            body=rendered,
         )
     if policy.rerun_label in pr.labels:
         github.remove_label(pr.repository, pr.number, policy.rerun_label)
@@ -1300,6 +1305,7 @@ def _review_started(
         )
 
     failures: list[str] = []
+    judge_notes: list[str] = []
     cf_addressed = carry.addressed(cf_open, section)
 
     # I3: the context is built from the judged state, mechanical findings removed — they are
@@ -1358,6 +1364,7 @@ def _review_started(
         failures=failures,
         notes=notes,
         instructions=instructions,
+        judge_notes=judge_notes,
     )
     # One depth for the whole review, computed once from the change. The chunked path below
     # used to hardcode `deep` and never read `light`, so a docs-only pull request big enough
@@ -1511,4 +1518,5 @@ def _review_started(
         project=project,
         repo_path=repo_path,
         failures=failures,
+        judge_notes=judge_notes,
     )

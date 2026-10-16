@@ -10,6 +10,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -140,6 +141,7 @@ class JudgeReply:
     raw: str
     reason: str | None = None  # why it dropped out, classified (`failure_reason`)
     sight: Sight | None = None  # elsewhere-built replies saw their whole input (spec D1)
+    note: str | None = None
 
 
 # Why a judge dropped out (ticket 0b950eea). The check runs are public and a seat's logs can
@@ -210,6 +212,62 @@ def _tail(path: Path | None, *, since: float) -> str:
     with path.open("rb") as stream:
         stream.seek(max(0, path.stat().st_size - _LOG_TAIL))
         return stream.read().decode("utf-8", errors="replace")
+
+
+_GLM_QUOTA_MAX_SKIP = timedelta(hours=24)
+
+
+def _glm_quota_path() -> Path:
+    # Import at invocation time: publish also uses the review service.
+    from rail.publish import state_directory
+
+    return state_directory() / "reviewer-glm-quota.json"
+
+
+def _glm_quota_until(path: Path) -> datetime | None:
+    """Ticket af44b221: broken host-local memory never prevents a review."""
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            return None
+        until = datetime.fromisoformat(data["until"])
+        return until.astimezone(UTC) if until.tzinfo is not None else None
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        return None
+
+
+def _remember_glm_quota(path: Path, until: datetime) -> None:
+    """Replace complete private state atomically; an unwritable cache is optional too."""
+    temporary: Path | None = None
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=path.parent,
+                prefix=".glm-quota-",
+                delete=False,
+            ) as file:
+                temporary = Path(file.name)
+                os.fchmod(file.fileno(), 0o600)
+                json.dump({"until": until.isoformat()}, file)
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _glm_quota_delay(reason: str, policy: ReviewPolicy) -> timedelta:
+    if resets := _RESETS_IN.search(reason):
+        seconds = sum(
+            int(amount) * {"h": 3600, "m": 60, "s": 1}[unit.lower()]
+            for amount, unit in re.findall(r"(\d+)([hms])", resets[1], re.I)
+        )
+        # A garbled reset never parks the subscription for longer than a day.
+        return min(timedelta(seconds=seconds), _GLM_QUOTA_MAX_SKIP)
+    return timedelta(minutes=policy.glm_quota_skip_minutes)
 
 
 _HUNK = re.compile(r"(?=^diff --git )", re.MULTILINE)
@@ -502,6 +560,7 @@ def judge(
     criteria: list[str] | None = None,
     notes: str = "",
     instructions: str = "",
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> JudgeReply:
     built = build_prompt(
         pr, diff, policy, criteria=criteria, notes=notes, instructions=instructions
@@ -521,10 +580,26 @@ def judge(
                 pr, diff, shrunk, criteria=criteria, notes=notes, instructions=instructions
             )
     base = root or ephemeral_root(os.environ) or Path(tempfile.gettempdir())
-    spec = build_spec(pr, built.text, policy, provider=provider, tier=tier, root=base)
+    note = None
+    model = policy.model(provider, tier)
+    quota_path = _glm_quota_path() if provider == "glm" and model == GLM_FLASH else None
+    if quota_path is not None:
+        until = _glm_quota_until(quota_path)
+        if until is not None and until > clock():
+            model = GLM_FLASH_FALLBACK
+            note = f"primary glm skipped: usage limit remembered until {until.isoformat()}"
+    spec = build_spec(pr, built.text, policy, provider=provider, tier=tier, root=base, model=model)
     started = time.time() - 1.0  # a second of slack for a filesystem's coarse mtime
     exit_code, text = _run(runner, provider, spec)
     if provider == "glm" and spec.model == GLM_FLASH and exit_code != 0:
+        # Ticket af44b221: classify the first attempt before fallback reuses its logs.
+        primary_reason = failure_reason(
+            _tail(spec.stderr_log, since=started), _tail(spec.events_log, since=started)
+        )
+        if primary_reason.startswith("quota exhausted") and quota_path is not None:
+            until = clock().astimezone(UTC) + _glm_quota_delay(primary_reason, policy)
+            _remember_glm_quota(quota_path, until)
+            note = f"primary glm hit its usage limit; skipping it until {until.isoformat()}"
         # decision 9f2947cb: the subscription did not answer (quota spent, outage, timeout):
         # the same model on OpenRouter, so a quota alone never fails the pass closed. The
         # reply names the model that answered, and the check's Models: line with it.
@@ -570,6 +645,7 @@ def judge(
         raw=text,
         reason=reason,
         sight=sight_of(built.visible, diff),
+        note=note,
     )
 
 

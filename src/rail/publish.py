@@ -65,11 +65,15 @@ NOT_MEASURED = (
 )
 
 
-def default_output() -> Path:
+def state_directory() -> Path:
     """Resolve the user state directory at invocation time so the environment stays effective."""
     state = os.environ.get("XDG_STATE_HOME")
     root = Path(state) if state else Path("~/.local/state").expanduser()
-    return root / "red-rail" / "metrics.json"
+    return root / "red-rail"
+
+
+def default_output() -> Path:
+    return state_directory() / "metrics.json"
 
 
 def collect(

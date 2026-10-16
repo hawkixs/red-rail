@@ -51,6 +51,13 @@ def _no_host_spool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_host_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The reviewer remembers a GLM usage limit under `$XDG_STATE_HOME/red-rail` (ticket
+    af44b221): a test never reads or writes the developer's own `~/.local/state/red-rail`."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+
+@pytest.fixture(autouse=True)
 def _operator_actor(monkeypatch: pytest.MonkeyPatch) -> None:
     """A test never inherits the harness running the suite: no agent marker, and the actor is
     the operator unless the test declares another one with `RAIL_ACTOR`."""
