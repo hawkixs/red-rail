@@ -173,6 +173,8 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
                     f"{repository.slug}#{pull.number} {pull.head_sha[:12]} "
                     f"{verdict} check={outcome.check_run_id} {status}"
                 )
+                for line in outcome.judge_timings:
+                    click.echo(f"  · {line}", err=True)
                 for failure in outcome.failures:
                     click.echo(f"  ! {failure}", err=True)
     except (GitHubError, LedgerError, FileNotFoundError) as exc:

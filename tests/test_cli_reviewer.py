@@ -51,8 +51,18 @@ def test_once_reports_the_error_of_an_unreadable_checkout(tmp_path: Path, monkey
 
 
 @pytest.mark.parametrize("verdict", ["approve", None])
+@pytest.mark.parametrize(
+    "timings",
+    [
+        [],
+        [
+            "glm/light model=test-glm 12.3s timeout (budget)",
+            "codex/light model=test-codex 4.8s approve",
+        ],
+    ],
+)
 def test_reconciliation_failure_still_reviews_pending_pulls_of_the_repository(
-    tmp_path: Path, monkeypatch, verdict: str | None
+    tmp_path: Path, monkeypatch, verdict: str | None, timings: list[str]
 ) -> None:
     from types import SimpleNamespace
 
@@ -85,7 +95,8 @@ def test_reconciliation_failure_still_reviews_pending_pulls_of_the_repository(
             attested=verdict is not None,
             verdict=ReviewVerdict(verdict=verdict, summary="clean") if verdict else None,
             check_run_id=99,
-            failures=[],
+            failures=["glm/light: timeout (budget)"],
+            judge_timings=timings,
         )
 
     monkeypatch.setattr("rail.reviewer.github.GitHubApp", NoGitHub)
@@ -101,7 +112,13 @@ def test_reconciliation_failure_still_reviews_pending_pulls_of_the_repository(
         ("pending", "hawkixs/red-alpha"),
         ("review", pull),
     ]
-    assert out.stderr == "hawkixs/red-alpha: RuntimeError\n"
+    assert out.stderr == (
+        "hawkixs/red-alpha: RuntimeError\n"
+        + "".join(f"  · {line}\n" for line in timings)
+        + "  ! glm/light: timeout (budget)\n"
+    )
+    if timings:
+        assert out.output.index("check=99") < out.output.index("  · ")
     assert "reviewed 1 pull request(s)" in out.stdout
     assert f"{verdict or 'no verdict'} check=99" in out.stdout
 
