@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import time
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -87,6 +88,7 @@ class ReviewOutcome:
     attested: bool = False
     receipt: Path | None = None
     failures: list[str] = field(default_factory=list)
+    judge_timings: list[str] = field(default_factory=list)
 
 
 class CarrySourceError(ValueError):
@@ -783,10 +785,13 @@ def _judge_chain(
     instructions: str = "",
     judge_notes: list[str] | None = None,
     attempts: list[JudgeReply] | None = None,
+    timings: list[str] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> list[JudgeReply]:
     """Walk the chain until `wanted` verdicts are in hand; a failure is logged, never fatal."""
     replies: list[JudgeReply] = []
     for provider in chain:
+        started = clock()
         reply = run_judge(
             pr,
             diff,
@@ -798,12 +803,17 @@ def _judge_chain(
             **({"notes": notes} if notes else {}),
             **({"instructions": instructions} if instructions else {}),
         )
+        elapsed = clock() - started
+        why = f" ({reply.reason})" if reply.reason else ""  # classified, ticket 0b950eea
+        outcome = reply.verdict.verdict if reply.verdict is not None else f"{reply.failure}{why}"
+        if timings is not None:
+            model = policy.models.get(tier, {}).get(provider, "?")
+            timings.append(f"{provider}/{tier} model={model} {elapsed:.1f}s {outcome}")
         if attempts is not None:
             attempts.append(reply)
         if reply.note and judge_notes is not None:
             judge_notes.append(f"{provider}/{tier}: {reply.note}")
         if reply.verdict is None:
-            why = f" ({reply.reason})" if reply.reason else ""  # classified, ticket 0b950eea
             failures.append(f"{provider}/{tier}: {reply.failure}{why}")
             continue
         replies.append(reply)
@@ -981,13 +991,20 @@ def _publish(
     attestation_data: dict[str, Any] | None = None,
     publish_review: bool = True,
     judge_notes: list[str] | None = None,
+    judge_timings: list[str] | None = None,
 ) -> ReviewOutcome:
     rendered = _render(verdict, judge_notes=judge_notes)
     # Attest FIRST: GitHub must never show an approval the ledger does not hold (found by the
     # independent reviewer on PR #3). The check run exists already (in progress), so its id is
     # part of the attestation; the conclusion and the PR review follow the ledger's answer.
     outcome = ReviewOutcome(
-        pr.repository, pr.number, pr.head_sha, verdict, check.id, failures=failures
+        pr.repository,
+        pr.number,
+        pr.head_sha,
+        verdict,
+        check.id,
+        failures=failures,
+        judge_timings=judge_timings or [],
     )
     data = (
         attestation_data
@@ -1359,6 +1376,7 @@ def _review_started(
 
     failures: list[str] = []
     judge_notes: list[str] = []
+    judge_timings: list[str] = []
     cf_addressed = carry.addressed(cf_open, section)
 
     # I3: the context is built from the judged state, mechanical findings removed — they are
@@ -1420,6 +1438,7 @@ def _review_started(
         instructions=instructions,
         judge_notes=judge_notes,
         attempts=judge_replies,
+        timings=judge_timings,
     )
     # One depth for the whole review, computed once from the change. The chunked path below
     # used to hardcode `deep` and never read `light`, so a docs-only pull request big enough
@@ -1561,7 +1580,13 @@ def _review_started(
             text="\n".join(details),
         )
         return ReviewOutcome(
-            pr.repository, pr.number, pr.head_sha, None, check.id, failures=failures
+            pr.repository,
+            pr.number,
+            pr.head_sha,
+            None,
+            check.id,
+            failures=failures,
+            judge_timings=judge_timings,
         )
     else:
         verdict = _finish(
@@ -1590,4 +1615,5 @@ def _review_started(
         repo_path=repo_path,
         failures=failures,
         judge_notes=judge_notes,
+        judge_timings=judge_timings,
     )

@@ -134,6 +134,81 @@ def fail(provider: str, tier: str = "light") -> JudgeReply:
     )
 
 
+@pytest.mark.parametrize("reason", [None, "budget"])
+@pytest.mark.parametrize("models", [{"light": {"glm": GLM_FLASH, "codex": "test-model"}}, {}])
+def test_judge_chain_times_every_attempt_with_its_model_and_outcome(reason, models) -> None:
+    from rail.reviewer.service import _judge_chain
+
+    ticks = iter([10.0, 22.3, 30.0, 34.75])
+    calls = []
+    failures = []
+    attempts = []
+    timings = []
+
+    def run(pr, diff, policy, *, provider, tier, **kwargs):
+        calls.append(provider)
+        return (
+            replace(fail(provider, tier), reason=reason)
+            if provider == "glm"
+            else approve(provider, tier)
+        )
+
+    replies = _judge_chain(
+        PR,
+        DIFF,
+        default_policy().model_copy(update={"models": models}),
+        ("glm", "codex", "agy"),
+        tier="light",
+        criteria=None,
+        run_judge=run,
+        root=None,
+        failures=failures,
+        wanted=1,
+        attempts=attempts,
+        timings=timings,
+        clock=lambda: next(ticks),
+    )
+
+    suffix = " (budget)" if reason else ""
+    assert timings == [
+        f"glm/light model={GLM_FLASH if models else '?'} 12.3s timeout{suffix}",
+        f"codex/light model={'test-model' if models else '?'} 4.8s approve",
+    ]
+    assert failures == [f"glm/light: timeout{suffix}"]
+    assert calls == ["glm", "codex"]
+    assert len(attempts) == 2
+    assert [reply.provider for reply in replies] == ["codex"]
+
+
+@pytest.mark.parametrize("answered", [False, True])
+def test_review_outcome_carries_timings_even_when_no_judge_answers(tmp_path, monkeypatch, answered):
+    from functools import partial
+
+    from rail.reviewer import service
+
+    ticks = iter([10.0, 22.3, 30.0, 34.75])
+    monkeypatch.setattr(
+        service, "_judge_chain", partial(service._judge_chain, clock=lambda: next(ticks))
+    )
+
+    def run(pr, diff, policy, *, provider, tier, **kwargs):
+        return approve(provider, tier) if answered and provider == "codex" else fail(provider, tier)
+
+    out = review_pull(
+        PR,
+        github=FakeGitHub(),
+        policy=default_policy().model_copy(update={"providers": ("glm", "codex")}),
+        ledger=FileLedger(tmp_path / RECEIPTS_DIR),
+        project="red-alpha",
+        run_judge=run,
+    )
+    assert out.judge_timings == [
+        f"glm/light model={GLM_FLASH} 12.3s timeout",
+        f"codex/light model=gpt-5.6-luna 4.8s {'approve' if answered else 'timeout'}",
+    ]
+    assert (out.verdict is not None) == answered
+
+
 def _repo(tmp_path: Path) -> tuple[Path, FileLedger]:
     repo = conforming_tree(tmp_path, "red-alpha", "dev")
     ledger = FileLedger(repo / RECEIPTS_DIR)
