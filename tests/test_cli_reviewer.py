@@ -104,6 +104,34 @@ def test_reconciliation_failure_still_reviews_pending_pulls_of_the_repository(
     assert "reviewed 1 pull request(s)" in out.stdout
 
 
+def test_once_does_not_count_a_head_skipped_after_selection(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    class NoGitHub:
+        def __init__(self, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    repo = tmp_path / "red-alpha"
+    repo.mkdir()
+    (repo / "rail.yaml").write_text(
+        "rail: 1\nproject: red-alpha\nbrain_key: red-alpha\ntier: dev\nstack: python\n"
+    )
+    pull = SimpleNamespace(number=7, head_sha="a" * 40)
+    monkeypatch.setattr("rail.reviewer.github.GitHubApp", NoGitHub)
+    monkeypatch.setattr("rail.commands.reviewer._merged_ignored_globs", lambda *a: ())
+    monkeypatch.setattr("rail.reviewer.service.complete_attested_checks", lambda *a, **k: 0)
+    monkeypatch.setattr("rail.reviewer.service.pending_reviews", lambda *a: [pull])
+    monkeypatch.setattr("rail.reviewer.service.review_pull", lambda *a, **k: None)
+    out = CliRunner().invoke(main, ["reviewer", "once", "--config", str(_config(tmp_path))])
+    assert repo.is_dir()
+    assert out.exit_code == 0, out.output
+    assert "skipped:" in out.stdout
+    assert "reviewed 0 pull request(s)" in out.stdout
+
+
 GLOBS = (
     "gates:\n  review.ignored_globs:\n    value: ['internal/web/static/*']\n"
     "    reason: committed bundle, proven equal to its build by CI\n"

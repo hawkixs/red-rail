@@ -2,6 +2,7 @@
 
 import subprocess
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from types import SimpleNamespace
 
@@ -473,6 +474,38 @@ def test_a_carried_head_does_not_expire_rulings_after_the_source(tmp_path):
     assert after.findings == before.findings
 
 
+@pytest.mark.parametrize("state", ["fresh", "success", "stale"])
+def test_carry_rechecks_the_head_before_opening_a_check(tmp_path, caplog, state):
+    _, ledger = _repo(tmp_path)
+    source_record(ledger)
+    github = CarryGitHub()
+    policy = default_policy()
+    decision = carry_decision(github, PR.repository, PR.number, PR.head_sha)
+    assert decision.allowed
+    github.checks[PR.head_sha].append(
+        CheckRun(
+            20,
+            "completed" if state == "success" else "in_progress",
+            "success" if state == "success" else None,
+            "red-rail/review",
+            started_at=datetime.now(UTC)
+            - timedelta(minutes=policy.stale_check_minutes + 1 if state == "stale" else 0),
+        )
+    )
+    with caplog.at_level("INFO", logger="rail.reviewer.service"):
+        outcome = carry_review(
+            PR, decision, github=github, policy=policy, ledger=ledger, project="red-alpha"
+        )
+    if state == "stale":
+        assert outcome is not None and outcome.attested
+        assert sum(c[0] == "start" for c in github.calls) == 1
+    else:
+        assert not any(c[0] == "start" for c in github.calls)
+        assert outcome is None
+        assert "skipping" in caplog.text
+        assert PR.head_sha in caplog.text
+
+
 def test_rerun_label_forces_a_judge(tmp_path):
     _, ledger = _repo(tmp_path)
     source_record(ledger)
@@ -646,6 +679,32 @@ def test_carry_command(tmp_path, monkeypatch, scenario):
     if scenario in ("in_progress", "failure", "neutral"):
         state = "in_progress/none" if scenario == "in_progress" else f"completed/{scenario}"
         assert f"new head already judged: {state}" in result.output
+
+
+@pytest.mark.parametrize("state", ["in_progress", "completed"])
+def test_carry_command_handles_a_check_appearing_before_publication(tmp_path, monkeypatch, state):
+    from rail.reviewer import service
+
+    github = CarryGitHub()
+    verdict, ledger = command_setup(tmp_path, monkeypatch, github)
+    original = service.carry_review
+
+    def concurrent_review(*args, **kwargs):
+        github.checks[PR.head_sha].append(
+            CheckRun(20, state, "success" if state == "completed" else None, "red-rail/review")
+        )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service, "carry_review", concurrent_review)
+    monkeypatch.setattr(
+        verdict, "post_independent_status", lambda *a, **k: pytest.fail("no status to publish")
+    )
+    count = len(ledger.list("red-alpha"))
+    result = invoke_carry(verdict)
+    assert result.exit_code == 1, result.output
+    assert "review check appeared" in result.output
+    assert not any(c[0] == "start" for c in github.calls)
+    assert len(ledger.list("red-alpha")) == count
 
 
 def test_carry_retry_after_gh_failure_posts_only_status(tmp_path, monkeypatch):
