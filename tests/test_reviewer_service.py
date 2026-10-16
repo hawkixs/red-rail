@@ -215,7 +215,9 @@ def test_light_review_approves_publishes_and_attests(tmp_path: Path) -> None:
     github = FakeGitHub()
     seen = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append((provider, tier, tuple(criteria)))
         return approve(provider, tier)
 
@@ -240,13 +242,54 @@ def test_light_review_approves_publishes_and_attests(tmp_path: Path) -> None:
     assert outcome.attested and outcome.receipt is not None and outcome.receipt.is_file()
 
 
+def test_the_check_text_names_a_skipped_primary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    repo, ledger = _repo(tmp_path)
+    _bind(ledger)
+    github = FakeGitHub()
+    note = "primary glm skipped: usage limit remembered until 2026-10-16T12:00:00+00:00"
+
+    def run_judge(
+        pr,
+        diff,
+        policy,
+        *,
+        provider,
+        tier,
+        criteria,
+        root=None,
+        notes="",
+        instructions="",
+    ):
+        return replace(approve(provider, tier), note=note)
+
+    review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert f"glm/light: {note}" in github.check_texts[99].splitlines()
+    assert "Models: glm=m" in github.check_texts[99].splitlines()
+
+
 def test_deep_review_escalates_on_disagreement_and_the_deep_judge_wins(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
     big = replace(PR, additions=900)
     github = FakeGitHub(messages=["chore: plain"])
     seen = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append((provider, tier))
         if tier == "deep":
             return block(provider, tier)
@@ -286,7 +329,9 @@ def test_a_dissent_is_never_arbitrated_by_one_disputant_alone(tmp_path: Path, gl
         else ["chore: plain"]
     )
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         return approve(provider, tier) if provider == approver else block(provider, tier)
 
     outcome = review_pull(
@@ -320,7 +365,9 @@ def test_an_agreeing_deep_arbitration_still_records_the_light_dissent(
         else ["chore: plain"]
     )
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         if tier == "deep":
             return approve(provider, tier)
         return approve(provider, tier) if provider == approver else block(provider, tier)
@@ -355,7 +402,9 @@ def test_a_dissenter_whose_deep_run_fails_keeps_its_light_request_changes(tmp_pa
         else ["chore: plain"]
     )
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         if provider == dissenter:
             return fail(provider, tier) if tier == "deep" else block(provider, tier)
         return approve(provider, tier)
@@ -385,7 +434,9 @@ def test_a_fresh_deep_arbitrator_decides_and_the_light_dissent_stays_named(tmp_p
     policy = default_policy() if glm else ReviewPolicy(providers=("agy", "codex", "claude"))
     seen = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append((provider, tier))
         if glm:
             return (
@@ -423,7 +474,9 @@ def test_a_failed_judge_walks_the_chain(tmp_path: Path) -> None:
     github = FakeGitHub(messages=["chore: plain"])
     seen = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         seen.append(provider)
         return (
             fail(provider)
@@ -2869,7 +2922,9 @@ def test_a_path_the_header_pattern_cannot_read_is_always_judged(tmp_path: Path) 
     github = FakeGitHub(diff_text=unparsed + added_receipt_diff(other.path_of(made)))
     calls = []
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         calls.append(provider)
         return approve(provider, tier)
 
@@ -2906,7 +2961,9 @@ def test_a_spec_renamed_into_code_is_judged_as_code(tmp_path: Path) -> None:
     repo, ledger = _repo(tmp_path)
     github = FakeGitHub(diff_text=RENAME_TO_CODE)
 
-    def run_judge(pr, diff, policy, *, provider, tier, criteria, root=None, instructions=""):
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
         return approve(provider, tier)
 
     outcome = review_pull(
