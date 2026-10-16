@@ -482,7 +482,9 @@ def test_failures_are_attributed_by_from_digest_and_failed_candidates_are_attemp
     assert m.deployments == 1 and m.change_failure_rate == 0.5
 
 
-def test_drill_recovery_time_is_measured_apart(tmp_path: Path) -> None:
+def test_drill_recovery_time_is_measured_apart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = conforming_tree(tmp_path, "red-alpha", "prod")
     write_roster(tmp_path, ["red-alpha"])
     head = git(repo, "rev-parse", "HEAD")
@@ -511,6 +513,15 @@ def test_drill_recovery_time_is_measured_apart(tmp_path: Path) -> None:
     m = compute_metrics(FileLedger(repo / RECEIPTS_DIR), "red-alpha", repo, now=T0 + 10 * h)
     assert m.drill_recovery_time_minutes == 2.5
     assert m.recovery_time_hours is None and m.change_failure_rate == 0.0
+    # The command reads the wall clock; freeze it so the fixed receipts stay inside its window.
+    from rail.commands import metrics as metrics_command
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return T0 + 10 * h
+
+    monkeypatch.setattr(metrics_command, "datetime", _Frozen)
     out = CliRunner().invoke(main, ["metrics", "--repo", str(repo), "--json"])
     assert out.exit_code == 0, out.output
     assert json.loads(out.output)["drill_recovery_time_minutes"] == 2.5
