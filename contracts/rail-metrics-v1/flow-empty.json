@@ -1,0 +1,73 @@
+{
+  "flow": {
+    "version": "rail-flow/v1",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "window_days": 30,
+    "window_start": "2026-09-13T15:00:00+00:00",
+    "repositories": [
+      {
+        "repository": "example/empty",
+        "merged_prs": 0,
+        "carry_rate": null,
+        "segments": {
+          "flow": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "ci_start": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "ci": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "ci_longest": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "review_start": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "review": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "judge_wait": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "judge": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "idle": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          },
+          "holder": {
+            "median": null,
+            "p90": null,
+            "n": 0
+          }
+        }
+      }
+    ],
+    "recent": [],
+    "coverage": {
+      "missing": [],
+      "unread_prs": {},
+      "unread_segments": {}
+    }
+  }
+}

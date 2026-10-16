@@ -1,0 +1,1780 @@
+{
+  "delivery": {
+    "version": "rail-delivery/v1",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "windows_days": [
+      7,
+      30
+    ],
+    "projects": [
+      {
+        "project": "brain-v42",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-alerts",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-backup",
+        "target": "private-timers",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-life",
+        "target": "private-compose",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      },
+      {
+        "project": "red-probe",
+        "target": "vps-traefik",
+        "d7": {
+          "deployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_commit_to_deploy_hours": 0.42,
+          "change_failure_rate": 0.0,
+          "recovery_time_hours": null,
+          "drill_recovery_time_minutes": 0.31
+        },
+        "d30": {
+          "deployments": 4,
+          "deployment_frequency_per_week": 0.933,
+          "lead_time_commit_to_deploy_hours": 0.55,
+          "change_failure_rate": 0.25,
+          "recovery_time_hours": 0.12,
+          "drill_recovery_time_minutes": 0.31
+        }
+      }
+    ]
+  },
+  "autonomy": {
+    "version": "rail-autonomy/v1",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "experimental": true,
+    "windows_days": [
+      7,
+      30
+    ],
+    "since": "2026-10-04T00:00:00+00:00",
+    "coverage": {
+      "expected": 11,
+      "read": 11,
+      "missing": []
+    },
+    "total": {
+      "d7": {
+        "window_start": "2026-10-06T15:00:00+00:00",
+        "releases": 5,
+        "operator_gestures": 14,
+        "operator_gestures_per_release": 2.8,
+        "agent_gesture_ratio": 0.533,
+        "merged_prs": 28,
+        "reviewed_prs": 20,
+        "rulings_per_reviewed_pr": 0.4,
+        "agent_rulings": 1,
+        "review_rounds_median": 2.0,
+        "review_rounds_p90": 4.0,
+        "first_pass_approval_ratio": 0.25,
+        "awaiting_ruling_passes": 5,
+        "ready_to_merged_hours_median": 3.25,
+        "rollbacks": 0,
+        "reverts": 0,
+        "incidents": 0
+      },
+      "d30": {
+        "window_start": "2026-10-04T00:00:00+00:00",
+        "releases": 20,
+        "operator_gestures": 56,
+        "operator_gestures_per_release": 2.8,
+        "agent_gesture_ratio": 0.516,
+        "merged_prs": 92,
+        "reviewed_prs": 84,
+        "rulings_per_reviewed_pr": 0.321,
+        "agent_rulings": 2,
+        "review_rounds_median": 2.0,
+        "review_rounds_p90": 4.0,
+        "first_pass_approval_ratio": 0.31,
+        "awaiting_ruling_passes": 15,
+        "ready_to_merged_hours_median": 3.25,
+        "rollbacks": 0,
+        "reverts": 0,
+        "incidents": 0
+      }
+    },
+    "projects": [
+      {
+        "project": "brain-v42",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 3,
+          "operator_gestures": 8,
+          "operator_gestures_per_release": 2.667,
+          "agent_gesture_ratio": 0.0,
+          "merged_prs": 7,
+          "reviewed_prs": 7,
+          "rulings_per_reviewed_pr": 0.429,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 4.0,
+          "first_pass_approval_ratio": 0.286,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-alerts",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 0,
+          "operator_gestures": 3,
+          "operator_gestures_per_release": null,
+          "agent_gesture_ratio": 1.0,
+          "merged_prs": 10,
+          "reviewed_prs": 9,
+          "rulings_per_reviewed_pr": 0.333,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.333,
+          "awaiting_ruling_passes": 2,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-backup",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 0,
+          "operator_gestures": 9,
+          "operator_gestures_per_release": null,
+          "agent_gesture_ratio": 0.4,
+          "merged_prs": 10,
+          "reviewed_prs": 9,
+          "rulings_per_reviewed_pr": 0.333,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.333,
+          "awaiting_ruling_passes": 2,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-cockpit",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 0,
+          "operator_gestures": 1,
+          "operator_gestures_per_release": null,
+          "agent_gesture_ratio": 0.0,
+          "merged_prs": 2,
+          "reviewed_prs": 2,
+          "rulings_per_reviewed_pr": 0.0,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 3.0,
+          "first_pass_approval_ratio": 0.5,
+          "awaiting_ruling_passes": 0,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-ha",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 4,
+          "operator_gestures": 3,
+          "operator_gestures_per_release": 0.75,
+          "agent_gesture_ratio": 0.667,
+          "merged_prs": 4,
+          "reviewed_prs": 4,
+          "rulings_per_reviewed_pr": 0.25,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.5,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.25,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-life",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 2,
+          "operator_gestures": 4,
+          "operator_gestures_per_release": 2.0,
+          "agent_gesture_ratio": 1.0,
+          "merged_prs": 11,
+          "reviewed_prs": 10,
+          "rulings_per_reviewed_pr": 0.4,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 4.0,
+          "first_pass_approval_ratio": 0.2,
+          "awaiting_ruling_passes": 2,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-memoria",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 3,
+          "operator_gestures": 6,
+          "operator_gestures_per_release": 2.0,
+          "agent_gesture_ratio": 0.444,
+          "merged_prs": 11,
+          "reviewed_prs": 10,
+          "rulings_per_reviewed_pr": 0.2,
+          "agent_rulings": 1,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 3.0,
+          "first_pass_approval_ratio": 0.3,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-monitor",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 2,
+          "operator_gestures": 4,
+          "operator_gestures_per_release": 2.0,
+          "agent_gesture_ratio": 0.857,
+          "merged_prs": 9,
+          "reviewed_prs": 8,
+          "rulings_per_reviewed_pr": 0.375,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 4.0,
+          "first_pass_approval_ratio": 0.375,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-probe",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 2,
+          "operator_gestures": 8,
+          "operator_gestures_per_release": 4.0,
+          "agent_gesture_ratio": 0.375,
+          "merged_prs": 10,
+          "reviewed_prs": 9,
+          "rulings_per_reviewed_pr": 0.333,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.444,
+          "awaiting_ruling_passes": 2,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-rail",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 2,
+          "operator_gestures": 2,
+          "operator_gestures_per_release": 1.0,
+          "agent_gesture_ratio": 0.75,
+          "merged_prs": 8,
+          "reviewed_prs": 7,
+          "rulings_per_reviewed_pr": 0.143,
+          "agent_rulings": 0,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.286,
+          "awaiting_ruling_passes": 1,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      },
+      {
+        "project": "red-writer",
+        "d30": {
+          "window_start": "2026-10-04T00:00:00+00:00",
+          "releases": 2,
+          "operator_gestures": 8,
+          "operator_gestures_per_release": 4.0,
+          "agent_gesture_ratio": 0.286,
+          "merged_prs": 10,
+          "reviewed_prs": 9,
+          "rulings_per_reviewed_pr": 0.444,
+          "agent_rulings": 1,
+          "review_rounds_median": 2.0,
+          "review_rounds_p90": 5.0,
+          "first_pass_approval_ratio": 0.222,
+          "awaiting_ruling_passes": 2,
+          "ready_to_merged_hours_median": 3.25,
+          "rollbacks": 0,
+          "reverts": 0,
+          "incidents": 0
+        }
+      }
+    ],
+    "not_measured": [
+      {
+        "what": "operator_questions_and_decisions",
+        "why": "not recorded anywhere yet (T1)"
+      },
+      {
+        "what": "human_active_and_waiting_time",
+        "why": "no source"
+      },
+      {
+        "what": "justified_vs_avoidable_classification",
+        "why": "classification not decided (T1, Q1)"
+      }
+    ]
+  },
+  "delivery_v2": {
+    "version": "rail-delivery/v2",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "windows_days": [
+      7,
+      30
+    ],
+    "projects": [
+      {
+        "project": "brain-v42",
+        "status": "measured",
+        "target": "private-compose",
+        "d7": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        },
+        "d30": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        }
+      },
+      {
+        "project": "red-alerts",
+        "status": "measured",
+        "target": "private-compose",
+        "d7": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        },
+        "d30": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        }
+      },
+      {
+        "project": "red-backup",
+        "status": "measured",
+        "target": "private-timers",
+        "d7": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        },
+        "d30": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        }
+      },
+      {
+        "project": "red-cockpit",
+        "status": "no_deployment",
+        "target": null,
+        "d7": null,
+        "d30": null
+      },
+      {
+        "project": "red-ha",
+        "status": "no_deployment",
+        "target": null,
+        "d7": null,
+        "d30": null
+      },
+      {
+        "project": "red-life",
+        "status": "measured",
+        "target": "private-compose",
+        "d7": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        },
+        "d30": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        }
+      },
+      {
+        "project": "red-memoria",
+        "status": "no_deployment",
+        "target": null,
+        "d7": null,
+        "d30": null
+      },
+      {
+        "project": "red-monitor",
+        "status": "no_deployment",
+        "target": null,
+        "d7": null,
+        "d30": null
+      },
+      {
+        "project": "red-probe",
+        "status": "measured",
+        "target": "vps-traefik",
+        "d7": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        },
+        "d30": {
+          "changes": 1,
+          "redeployments": 1,
+          "deployment_frequency_per_week": 1.0,
+          "lead_time_for_changes_hours": 72.0,
+          "release_to_deploy_hours": 24.0,
+          "change_failure_rate": 1.0,
+          "failed_changes": 1,
+          "time_to_restore_minutes": 1.18,
+          "open_incidents": 0,
+          "drill_recovery_time_minutes": null
+        }
+      },
+      {
+        "project": "red-rail",
+        "status": "no_deployment",
+        "target": null,
+        "d7": null,
+        "d30": null
+      },
+      {
+        "project": "red-writer",
+        "status": "no_deployment",
+        "target": null,
+        "d7": null,
+        "d30": null
+      }
+    ]
+  },
+  "flow": {
+    "version": "rail-flow/v1",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "window_days": 30,
+    "window_start": "2026-09-13T15:00:00+00:00",
+    "repositories": [
+      {
+        "repository": "example/brain-v42",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-alerts",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-backup",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-cockpit",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-ha",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-life",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-memoria",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-monitor",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-probe",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-rail",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      },
+      {
+        "repository": "example/red-writer",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      }
+    ],
+    "recent": [
+      {
+        "repository": "example/brain-v42",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/brain-v42",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-alerts",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-alerts",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-backup",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-backup",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-cockpit",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-cockpit",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-ha",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-ha",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-life",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-life",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-memoria",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-memoria",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-monitor",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-monitor",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-probe",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-probe",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-rail",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      },
+      {
+        "repository": "example/red-rail",
+        "number": 2,
+        "head_sha": "000000000002",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 20.0,
+          "ci_start": 2.0,
+          "ci": 8.0,
+          "ci_longest": 6.0,
+          "review_start": 4.0,
+          "review": 0.0,
+          "judge_wait": 16.0,
+          "judge": 2.0,
+          "idle": 10.0,
+          "holder": 24.0
+        },
+        "rounds": 0,
+        "carried": true,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      }
+    ],
+    "coverage": {
+      "missing": [],
+      "unread_prs": {},
+      "unread_segments": {
+        "example/brain-v42": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-alerts": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-backup": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-cockpit": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-ha": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-life": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-memoria": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-monitor": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-probe": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-rail": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        },
+        "example/red-writer": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        }
+      }
+    }
+  }
+}
