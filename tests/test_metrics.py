@@ -19,6 +19,18 @@ from tests.helpers import conforming_tree, git, write_roster
 T0 = datetime(2026, 9, 15, 8, 0, tzinfo=UTC)  # == the fixture commit timestamp
 
 
+def _freeze_command_clock(monkeypatch: pytest.MonkeyPatch, instant: datetime) -> None:
+    """`rail metrics` reads the wall clock; fixed receipts would leave its window by date."""
+    from rail.commands import metrics as metrics_command
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return instant
+
+    monkeypatch.setattr(metrics_command, "datetime", _Frozen)
+
+
 def test_compute_metrics_reads_deployments_and_config_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -343,8 +355,9 @@ def test_metrics_without_evidence_are_explicit(tmp_path: Path) -> None:
     assert m.conformance.passed < m.conformance.applicable  # no contract yet
 
 
-def test_cli_metrics(tmp_path: Path) -> None:
+def test_cli_metrics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _history(tmp_path)
+    _freeze_command_clock(monkeypatch, T0 + timedelta(hours=100))
     out = CliRunner().invoke(main, ["metrics", "--repo", str(repo), "--json"])
     assert out.exit_code == 0, out.output
     payload = json.loads(out.output)
@@ -482,7 +495,9 @@ def test_failures_are_attributed_by_from_digest_and_failed_candidates_are_attemp
     assert m.deployments == 1 and m.change_failure_rate == 0.5
 
 
-def test_drill_recovery_time_is_measured_apart(tmp_path: Path) -> None:
+def test_drill_recovery_time_is_measured_apart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = conforming_tree(tmp_path, "red-alpha", "prod")
     write_roster(tmp_path, ["red-alpha"])
     head = git(repo, "rev-parse", "HEAD")
@@ -511,6 +526,7 @@ def test_drill_recovery_time_is_measured_apart(tmp_path: Path) -> None:
     m = compute_metrics(FileLedger(repo / RECEIPTS_DIR), "red-alpha", repo, now=T0 + 10 * h)
     assert m.drill_recovery_time_minutes == 2.5
     assert m.recovery_time_hours is None and m.change_failure_rate == 0.0
+    _freeze_command_clock(monkeypatch, T0 + 10 * h)
     out = CliRunner().invoke(main, ["metrics", "--repo", str(repo), "--json"])
     assert out.exit_code == 0, out.output
     assert json.loads(out.output)["drill_recovery_time_minutes"] == 2.5
