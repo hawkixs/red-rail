@@ -1,0 +1,103 @@
+{
+  "flow": {
+    "version": "rail-flow/v1",
+    "generated_at": "2026-10-13T15:00:00+00:00",
+    "window_days": 30,
+    "window_start": "2026-09-13T15:00:00+00:00",
+    "repositories": [
+      {
+        "repository": "example/brain-v42",
+        "merged_prs": 4,
+        "carry_rate": 0.333,
+        "segments": {
+          "flow": {
+            "median": 25.0,
+            "p90": 40.0,
+            "n": 4
+          },
+          "ci_start": {
+            "median": 2.5,
+            "p90": 4.0,
+            "n": 4
+          },
+          "ci": {
+            "median": 10.0,
+            "p90": 16.0,
+            "n": 4
+          },
+          "ci_longest": {
+            "median": 7.5,
+            "p90": 12.0,
+            "n": 4
+          },
+          "review_start": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 3
+          },
+          "review": {
+            "median": 4.0,
+            "p90": 6.0,
+            "n": 2
+          },
+          "judge_wait": {
+            "median": 20.0,
+            "p90": 32.0,
+            "n": 4
+          },
+          "judge": {
+            "median": 2.0,
+            "p90": 4.0,
+            "n": 3
+          },
+          "idle": {
+            "median": 14.0,
+            "p90": 20.0,
+            "n": 4
+          },
+          "holder": {
+            "median": 30.0,
+            "p90": 48.0,
+            "n": 4
+          }
+        }
+      }
+    ],
+    "recent": [
+      {
+        "repository": "example/brain-v42",
+        "number": 1,
+        "head_sha": "000000000001",
+        "merged_at": "2026-10-13T12:00:00+00:00",
+        "segments": {
+          "flow": 10.0,
+          "ci_start": 1.0,
+          "ci": 4.0,
+          "ci_longest": 3.0,
+          "review_start": 2.0,
+          "review": 2.0,
+          "judge_wait": 8.0,
+          "judge": 1.0,
+          "idle": 5.0,
+          "holder": 12.0
+        },
+        "rounds": 1,
+        "carried": false,
+        "judge_carried": false,
+        "judge_provider": "provider_a",
+        "holder_approx": false
+      }
+    ],
+    "coverage": {
+      "missing": [],
+      "unread_prs": {},
+      "unread_segments": {
+        "example/brain-v42": {
+          "review_start": 1,
+          "review": 1,
+          "ledger": 1
+        }
+      }
+    }
+  }
+}

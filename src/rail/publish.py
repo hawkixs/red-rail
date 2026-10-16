@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -26,10 +27,13 @@ from rail.autonomy import (
     window_values,
 )
 from rail.brain.settings import DEFAULT_REVIEWER_TOKEN_FILE
-from rail.ledger import Ledger, LedgerError
+from rail.flow_cache import FlowCache, default_cache_root
+from rail.flow_publish import collect_flow, flow_block
+from rail.ledger import Ledger, LedgerError, Record
 from rail.ledger.committed import MAIN_REF, CommittedLedger
 from rail.metrics import delivery_window, delivery_window_v2
 from rail.metrics_contract import (
+    MAX_BYTES,
     Answer,
     AutonomyBlock,
     AutonomyProject,
@@ -43,6 +47,7 @@ from rail.metrics_contract import (
     DeliveryWindowModel,
     DeliveryWindowV2Model,
     NotMeasured,
+    TooLarge,
     encode,
 )
 from rail.model import LedgerBackend, RailConfig, Tier, load_rail_config
@@ -74,6 +79,8 @@ def collect(
     clock: Callable[[], datetime],
     open_ledger: Callable[..., Ledger],
     github: GitHubApp,
+    window_days: int = 30,
+    flow_cache: FlowCache | None = None,
 ) -> Answer:
     """Read failures make coverage partial; computed contract violations fail the entire run."""
     missing: list[str] = []
@@ -81,7 +88,9 @@ def collect(
     delivery_projects: list[DeliveryProject] = []
     delivery_projects_v2: list[DeliveryProjectV2] = []
     samples: dict[int, list[Samples]] = {7: [], 30: []}
+    snapshots: dict[str, list[Record] | None] = {}
     for repository in config.repositories:
+        snapshots[repository.slug] = None
         tail = repository.slug.rsplit("/", 1)[-1].lower()
         name = re.sub(r"[^a-z0-9]+", "-", tail).strip("-")[:64].rstrip("-") or "unknown"
         step = "fetch"
@@ -112,6 +121,7 @@ def collect(
                 )
             )
             records = ledger.list(cfg.project)
+            snapshots[repository.slug] = records
             step = "github"
             branch = github.default_branch(repository.slug)
             merged = github.merged_pulls(repository.slug, base=branch, since=SINCE)
@@ -158,6 +168,8 @@ def collect(
         except (LedgerError, GitHubError, OSError) as error:
             # past the manifest, coverage names the project as v1 always did
             missing.append(cfg.project)
+            if step == "ledger":
+                snapshots[repository.slug] = None
             print(f"missing {cfg.project}: {step} {type(error).__name__}", file=sys.stderr)
             continue
 
@@ -197,8 +209,6 @@ def collect(
         for days in (7, 30):
             samples[days].append(observed[days])
 
-    if not samples[30]:
-        raise ValueError("no repository could be read; metrics were not published")
     total = (
         AutonomyTotal(
             d7=AutonomyWindow.model_validate(
@@ -208,20 +218,39 @@ def collect(
                 window_values(merge(*samples[30]), start=window_start(now, 30))
             ),
         )
-        if not missing
+        if samples[30] and not missing
         else None
     )
-    generated_at = clock()
-    return Answer(
+    flow = None
+    step = "pulls"
+    try:
+        collection = collect_flow(
+            config,
+            now=now,
+            window_days=window_days,
+            github=github,
+            cache=flow_cache if flow_cache is not None else FlowCache(default_cache_root()),
+            records_for=lambda repository: snapshots[repository.slug],
+        )
+        step = "checks"
+        flow = flow_block(collection, generated_at=now, now=now, window_days=window_days)
+    except Exception as error:
+        # Flow is optional; ordinary assembly defects cannot suppress the existing blocks.
+        print("flow", step, type(error).__name__, file=sys.stderr)
+    if not samples[30] and (flow is None or not flow.repositories):
+        raise ValueError("no repository could be read; metrics were not published")
+    answer = Answer(
         delivery=DeliveryBlock(
             version="rail-delivery/v1",
-            generated_at=generated_at,
+            generated_at=now,
             windows_days=(7, 30),
             projects=tuple(sorted(delivery_projects, key=lambda project: project.project)),
-        ),
+        )
+        if samples[30]
+        else None,
         autonomy=AutonomyBlock(
             version="rail-autonomy/v1",
-            generated_at=generated_at,
+            generated_at=now,
             experimental=True,
             windows_days=(7, 30),
             since=SINCE,
@@ -231,19 +260,51 @@ def collect(
             total=total,
             projects=tuple(sorted(projects, key=lambda project: project.project)),
             not_measured=NOT_MEASURED,
-        ),
+        )
+        if samples[30]
+        else None,
         delivery_v2=DeliveryBlockV2(
             version="rail-delivery/v2",
-            generated_at=generated_at,
+            generated_at=now,
             windows_days=(7, 30),
             projects=tuple(sorted(delivery_projects_v2, key=lambda project: project.project)),
-        ),
+        )
+        if samples[30]
+        else None,
+        flow=flow,
+    )
+    generated_at = clock()
+    return answer.model_copy(
+        update={
+            name: block.model_copy(update={"generated_at": generated_at})
+            for name in ("delivery", "autonomy", "delivery_v2", "flow")
+            if (block := getattr(answer, name)) is not None
+        }
     )
 
 
-def write(answer: Answer, out: Path) -> int:
+def write(answer: Answer, out: Path, *, max_bytes: int = 16 * 1024) -> int:
     """Encode before touching the old file, then replace it only after a durable complete write."""
-    payload = encode(answer)
+    if not 1 <= max_bytes <= MAX_BYTES:
+        raise ValueError(f"metrics budget must be between 1 and {MAX_BYTES}")
+    base = answer.model_copy(update={"flow": None})
+    # Revalidation also catches invalid non-flow values introduced through model_copy.
+    base = Answer.model_validate_json(_compact(base), strict=True)
+    try:
+        payload = encode(base)
+    except TooLarge as error:
+        raise ValueError(f"metrics answer is {error.size} bytes; budget is {max_bytes}") from None
+    if len(payload) > max_bytes:
+        raise ValueError(f"metrics answer is {len(payload)} bytes; budget is {max_bytes}")
+    if answer.flow is not None:
+        try:
+            candidate = _compact(answer)
+            if len(candidate) > max_bytes:
+                print("flow_size", len(payload), len(candidate), max_bytes, file=sys.stderr)
+            else:
+                payload = encode(Answer.model_validate_json(candidate, strict=True))
+        except Exception as error:
+            print("flow", "checks", type(error).__name__, file=sys.stderr)
     out.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -263,3 +324,11 @@ def write(answer: Answer, out: Path) -> int:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return len(payload)
+
+
+def _compact(answer: Answer) -> bytes:
+    """Measure the complete candidate before applying the consumer or contract ceiling."""
+    return json.dumps(
+        {key: value for key, value in answer.model_dump(mode="json").items() if value is not None},
+        separators=(",", ":"),
+    ).encode("utf-8")
