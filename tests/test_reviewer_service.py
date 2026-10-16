@@ -1067,6 +1067,40 @@ def test_an_ignored_file_is_dropped_before_the_split(tmp_path: Path) -> None:
     assert records[-1].data["diff_truncated"] is False
 
 
+def test_a_change_made_only_of_ignored_files_is_still_judged(tmp_path: Path) -> None:
+    """Measured on brain-v42#452 (head 35d9fc91): a pull request that changes only `uv.lock`,
+    with `*.lock` ignored, sent its judge an empty diff, and the judge blocked on "the diff is
+    empty". `ignored_globs` lowers the priority of generated files beside code; it never hides
+    the whole change. When dropping them leaves nothing, the judge reads them."""
+    repo, ledger = _repo(tmp_path)
+    lock = "diff --git a/uv.lock b/uv.lock\n-version = 1\n+version = 2\n"
+    github = FakeGitHub(diff_text=lock, messages=["chore: bump the lockfile"])
+    policy = default_policy().model_copy(
+        update={"ignored_globs": (*default_policy().ignored_globs, "*.lock")}
+    )
+    seen: list[str] = []
+
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
+        seen.append(diff)
+        return approve(provider, tier)
+
+    review_pull(
+        PR,
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+
+    assert seen, "the change is judged"
+    assert all("uv.lock" in diff and "+version = 2" in diff for diff in seen), seen
+
+
 # -- the contract a pull request is judged against (ticket 155d3d67) ---------------------
 
 

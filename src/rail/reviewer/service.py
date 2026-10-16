@@ -1239,10 +1239,12 @@ def _review_started(
     # on the first external pull request, 21% of the change, ruled `approve`. Only a file too
     # large to bound on its own still counts as truncated. Split and measure what the judge
     # reads: an ignored generated file is neither a cut file nor an empty piece (f0aa9c29).
+    # Ignored globs lower priority beside code; they cannot hide an all-ignored change
+    # (brain-v42#452).
     budget = diff_budget(
         pr, policy, chain, criteria=criteria, notes=notes, instructions=instructions
     )
-    diff = drop_ignored(diff, policy)
+    diff = drop_ignored(diff, policy) or diff
     judged_files = _files(diff)
     known = {f.id: (f.file, f.line) for f in judged_state.findings if f.id}
     chunks = split_diff(diff, budget=budget)
