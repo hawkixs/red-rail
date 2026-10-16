@@ -4,6 +4,7 @@ or a rerun by label or push. Fail-closed: no verdict → reviewer failure, never
 from __future__ import annotations
 
 import fnmatch
+import logging
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -43,6 +44,7 @@ from rail.reviewer.verdict import (
 REVIEWER_IDENTITY = "red-rail-reviewer"
 _TIMEOUT_RETRY_TITLE = "no verdict: judge timeout, one automatic retry pending"
 RunJudge = Callable[..., JudgeReply]
+logger = logging.getLogger(__name__)
 
 
 def _headers_parsed(diff: str) -> bool:
@@ -91,6 +93,45 @@ class CarrySourceError(ValueError):
     """No source state can be carried; raised before any GitHub or ledger write."""
 
 
+def _stale_check(check: Any, cutoff: datetime) -> bool:
+    return (
+        check.status == "in_progress" and check.started_at is not None and check.started_at < cutoff
+    )
+
+
+def _checks_need_review(
+    checks: Iterable[Any],
+    policy: ReviewPolicy,
+    *,
+    now: datetime | None = None,
+    retry_failed: bool = False,
+) -> bool:
+    cutoff = (now or datetime.now(UTC)) - timedelta(minutes=policy.stale_check_minutes)
+    return all(
+        _stale_check(check, cutoff)
+        or (retry_failed and check.status == "completed" and check.conclusion != "success")
+        for check in checks
+    )
+
+
+def _skip_covered_head(pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy) -> bool:
+    checks = github.check_runs(pr.repository, pr.head_sha, name=policy.check_name)
+    if policy.rerun_label in pr.labels:
+        # The label asks for a new judgment even on an approved head: only a pass that is
+        # judging this head right now stands in the way.
+        cutoff = datetime.now(UTC) - timedelta(minutes=policy.stale_check_minutes)
+        checks = [c for c in checks if c.status != "completed" and not _stale_check(c, cutoff)]
+    if _checks_need_review(checks, policy, retry_failed=True):
+        return False
+    logger.info(
+        "%s#%s %s: skipping, a successful or active review check already exists",
+        pr.repository,
+        pr.number,
+        pr.head_sha,
+    )
+    return True
+
+
 def needs_review(
     pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy, now: datetime | None = None
 ) -> bool:
@@ -106,11 +147,7 @@ def needs_review(
     if completed and not (len(completed) == 1 and completed[0].title == _TIMEOUT_RETRY_TITLE):
         return False
     cutoff = (now or datetime.now(UTC)) - timedelta(minutes=policy.stale_check_minutes)
-    return all(
-        check.status == "in_progress" and check.started_at is not None and check.started_at < cutoff
-        for check in checks
-        if check.status != "completed"
-    )
+    return all(_stale_check(check, cutoff) for check in checks if check.status != "completed")
 
 
 def pending_reviews(
@@ -214,12 +251,7 @@ def _close_interrupted_checks(
     # Ticket 71776743: retire stale runs before starting a replacement pass.
     cutoff = datetime.now(UTC) - timedelta(minutes=policy.stale_check_minutes)
     for check in github.check_runs(pr.repository, pr.head_sha, name=policy.check_name):
-        if (
-            check.status == "in_progress"
-            and check.started_at is not None
-            and check.started_at < cutoff
-            and _attested_check(ledger, project, check.id) is None
-        ):
+        if _stale_check(check, cutoff) and _attested_check(ledger, project, check.id) is None:
             started = check.started_at.isoformat()
             github.complete_check(
                 pr.repository,
@@ -790,7 +822,7 @@ def review_pull(
     repo_path: Path | None = None,
     run_judge: RunJudge = judge,
     root: Path | None = None,
-) -> ReviewOutcome:
+) -> ReviewOutcome | None:
     if policy.rerun_label not in pr.labels and policy.check_name == "red-rail/review":
         decision = carry_decision(
             github, pr.repository, pr.number, pr.head_sha, require_green=False
@@ -811,6 +843,8 @@ def review_pull(
                 # patch normally; carry_review validates it before creating any check.
                 pass
     _close_interrupted_checks(pr, github=github, policy=policy, ledger=ledger, project=project)
+    if _skip_covered_head(pr, github=github, policy=policy):
+        return None
     check = github.start_check(pr.repository, pr.head_sha, name=policy.check_name)
     try:
         return _review_started(
@@ -848,7 +882,7 @@ def carry_review(
     ledger: Ledger,
     project: str,
     repo_path: Path | None = None,
-) -> ReviewOutcome:
+) -> ReviewOutcome | None:
     """Publish the same findings on a new head, with provenance, through the normal ledger.
 
     A carried approval is not a new judgment. The source receipt must belong to this PR and
@@ -889,6 +923,8 @@ def carry_review(
     except (ValueError, TypeError, AttributeError) as exc:
         raise CarrySourceError(f"source verdict malformed: {exc}") from exc
     _close_interrupted_checks(pr, github=github, policy=policy, ledger=ledger, project=project)
+    if _skip_covered_head(pr, github=github, policy=policy):
+        return None
     check = github.start_check(pr.repository, pr.head_sha, name="red-rail/review")
     data = {
         **source,

@@ -111,6 +111,10 @@ def carry(repository: str, pr: int, config_path: Path | None) -> None:
                 project=cfg.project,
                 repo_path=watched.path,
             )
+            if outcome is None:
+                raise click.ClickException(
+                    "a successful or active review check appeared; retry verdict carry"
+                )
             if not outcome.attested:
                 raise click.ClickException("; ".join(outcome.failures))
             click.echo(

@@ -1242,6 +1242,92 @@ def test_a_stale_in_progress_check_is_reviewed_again() -> None:
     assert not needs_review(PR, github=github, policy=policy, now=now)
 
 
+@pytest.mark.parametrize("state", ["success", "fresh"])
+def test_the_rerun_label_overrides_an_approval_but_not_a_running_pass(tmp_path, state):
+    repo, ledger = _repo(tmp_path)
+    _bind(ledger)
+    github = FakeGitHub()
+    policy = default_policy()
+    pull = replace(PR, labels=(policy.rerun_label,))
+    github.existing_checks = [
+        CheckRun(
+            1,
+            "completed" if state == "success" else "in_progress",
+            "success" if state == "success" else None,
+            started_at=datetime.now(UTC),
+        )
+    ]
+
+    def run_judge(pr, diff, policy, *, provider, tier, **kwargs):
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        pull,
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+    )
+    started = any(c[0] == "start" for c in github.calls)
+    if state == "success":
+        assert started and outcome is not None
+    else:
+        assert not started and outcome is None
+
+
+@pytest.mark.parametrize("state", ["fresh", "success", "stale", "failure"])
+def test_review_rechecks_the_head_before_opening_a_check(tmp_path, caplog, state):
+    from rail.reviewer.service import pending_reviews
+
+    class ListingGitHub(FakeGitHub):
+        def open_pulls(self, repository):
+            return [PR]
+
+    repo, ledger = _repo(tmp_path)
+    _bind(ledger)
+    github = ListingGitHub()
+    policy = default_policy()
+    [pull] = pending_reviews(github, PR.repository, policy)
+    github.existing_checks = [
+        CheckRun(
+            1,
+            "completed" if state in ("success", "failure") else "in_progress",
+            state if state in ("success", "failure") else None,
+            started_at=datetime.now(UTC)
+            - timedelta(minutes=policy.stale_check_minutes + 1 if state == "stale" else 0),
+        )
+    ]
+    judges = []
+
+    def run_judge(pr, diff, policy, *, provider, tier, **kwargs):
+        judges.append(provider)
+        return approve(provider, tier)
+
+    with caplog.at_level("INFO", logger="rail.reviewer.service"):
+        outcome = review_pull(
+            pull,
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project="red-alpha",
+            repo_path=repo,
+            run_judge=run_judge,
+        )
+    if state in ("fresh", "success"):
+        assert not any(c[0] == "start" for c in github.calls)
+        assert not judges
+        assert outcome is None
+        assert not ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+        assert "skipping" in caplog.text
+        assert PR.head_sha in caplog.text
+    else:
+        assert outcome is not None and outcome.attested
+        assert sum(c[0] == "start" for c in github.calls) == 1
+        assert judges
+
+
 def test_the_interrupted_check_is_closed_before_a_new_review(tmp_path: Path) -> None:
     now = datetime.now(UTC)
     started = now - timedelta(minutes=301)

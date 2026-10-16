@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from rail.brain.settings import DEFAULT_REVIEWER_TOKEN_FILE
 from rail.commands._actor import resolve_or_exit
 from rail.ledger import open_ledger
 from rail.private import PrivateFileError
+from rail.publish import state_directory
 
 
 @click.group("reviewer")
@@ -25,6 +27,28 @@ def _config(path: Path | None):
     from rail.reviewer.config import DEFAULT_CONFIG, load_reviewer_config
 
     return load_reviewer_config(path or DEFAULT_CONFIG)
+
+
+@contextmanager
+def _pass_lock(*, no_wait: bool = False):
+    """Serialize manual and automatic passes on this host (ticket 52c2525c)."""
+    import fcntl
+
+    directory = state_directory()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    fd = os.open(directory / "reviewer.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(fd, "a") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if no_wait:
+                click.echo("reviewer: a running pass holds the host lock", err=True)
+                raise SystemExit(75) from None
+            click.echo("reviewer: waiting for a running pass to finish", err=True)
+            fcntl.flock(stream, fcntl.LOCK_EX)
+        yield
 
 
 def _merged_ignored_globs(repo: Path, working: tuple[str, ...]) -> tuple[str, ...]:
@@ -136,6 +160,12 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
                     project=cfg.project,
                     repo_path=repository.path,
                 )
+                if outcome is None:
+                    click.echo(
+                        f"{repository.slug}#{pull.number} {pull.head_sha[:12]} "
+                        "skipped: a successful or active review check already exists"
+                    )
+                    continue
                 reviewed += 1
                 status = "attested" if outcome.attested else "UNATTESTED"
                 verdict = outcome.verdict.verdict if outcome.verdict is not None else "no verdict"
@@ -166,9 +196,10 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
     "--pr",
     type=int,
     default=None,
-    help="Review this PR even if already reviewed (needs --repository).",
+    help="Review this PR unless a successful or active check exists (needs --repository).",
 )
-def once(config_path: Path | None, only: str | None, pr: int | None) -> None:
+@click.option("--no-wait", is_flag=True, help="Exit 75 if another reviewer pass is running.")
+def once(config_path: Path | None, only: str | None, pr: int | None, no_wait: bool) -> None:
     """One pass over the watched repositories; exit 0, or 2 for a repository it does not watch."""
     if pr is not None and not only:
         raise click.UsageError("--pr needs --repository")
@@ -185,7 +216,8 @@ def once(config_path: Path | None, only: str | None, pr: int | None) -> None:
             f"{only} is not watched by {config_path or DEFAULT_CONFIG}; "
             f"watched: {', '.join(watched) or 'none'}"
         )
-    reviewed = _once(config, only=only, pr=pr)
+    with _pass_lock(no_wait=no_wait):
+        reviewed = _once(config, only=only, pr=pr)
     click.echo(f"reviewed {reviewed} pull request(s)")
 
 
@@ -199,7 +231,8 @@ def run(config_path: Path | None) -> None:
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(1) from exc
     while True:
-        _once(config, only=None, pr=None)
+        with _pass_lock():
+            _once(config, only=None, pr=None)
         time.sleep(config.poll_seconds)
 
 
