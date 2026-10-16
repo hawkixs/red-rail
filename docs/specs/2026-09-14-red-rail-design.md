@@ -299,6 +299,16 @@ is what allows **measuring the drift between git and what is deployed**.
    pollute the change failure rate.
 9. **learn** — brain learnings/decision, `brain_delivery_accept` → `fulfilled`.
 
+Schema-aware drills (decision 20c229ed): a manifest may declare
+`drill.schema_head: {path: schema.json, field: head}`. Before any remote step or attestation,
+`rail drill` reads that top-level JSON field at each artefact's released commit and refuses
+the swap if either head is unknown or the heads differ, naming both versions and heads on
+a mismatch and pointing to `rail drill --restore`. Restore execution follows in part B;
+`observe.drill` already accepts a single `restored` attestation strictly after the latest
+release-mode deployment with `drill: true`, `restore: true`, `artefact_digest` (the previous
+artefact booted), `backup_sha256`, and numeric `recovery_seconds > 0` in its payload. This
+evidence needs no `rolled_back` record and stays excluded from real-incident metrics.
+
 `rail metrics red-probe` then reads contract, binding, receipts and attestations and outputs:
 lead time (commit → deployed *and* contract → deployed), deployment frequency, change failure
 rate (deployed followed by a non-drill rollback within 24 h), recovery time (incident →

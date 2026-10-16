@@ -6,6 +6,7 @@ rollback or a drill's roll-forward; phase 1 checks the evidence chain itself."""
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -404,6 +405,35 @@ def _timers_visible(
     )
 
 
+def _restore_drill_error(record: Record) -> str | None:
+    # Brain's contract carries these extra fields in the free-form `payload` object,
+    # exposed here as Record.data, alongside the existing drill and recovery_seconds.
+    data = record.data
+    missing = [
+        name
+        for name in ("artefact_digest", "backup_sha256", "recovery_seconds")
+        if data.get(name) in (None, "")
+    ]
+    if missing:
+        return f"restore drill missing {', '.join(missing)}"
+    invalid = [
+        name
+        for name in ("artefact_digest", "backup_sha256")
+        if not isinstance(data.get(name), str) or not data[name].strip()
+    ]
+    if invalid:
+        return f"restore drill invalid {', '.join(invalid)}"
+    seconds = data.get("recovery_seconds")
+    if (
+        not isinstance(seconds, int | float)
+        or isinstance(seconds, bool)
+        or (isinstance(seconds, float) and not math.isfinite(seconds))
+        or seconds <= 0
+    ):
+        return "restore drill recovery_seconds must be a number > 0"
+    return None
+
+
 def drill(repo: Path) -> GateResult:
     deploy = _newest_release_deploy(repo)
     if isinstance(deploy, Need):
@@ -422,20 +452,46 @@ def drill(repo: Path) -> GateResult:
         return restores.result(Stage.OBSERVE, "drill")
     if isinstance(rollbacks, str) or isinstance(restores, str):
         return GateResult(Stage.OBSERVE, "drill", False, "ledger unreadable")
+    restore_error = None
+    for record in reversed(restores):
+        data = record.data
+        if not (
+            data.get("drill") is True
+            and data.get("restore") is True
+            and record.recorded_at > deploy.recorded_at
+        ):
+            continue
+        error = _restore_drill_error(record)
+        if error is None:
+            return GateResult(Stage.OBSERVE, "drill", True, f"restore drill {record.digest[:19]}")
+        restore_error = restore_error or error
     after = [r for r in rollbacks if r.data.get("drill") and r.recorded_at > deploy.recorded_at]
     if not after:
         return GateResult(
-            Stage.OBSERVE, "drill", False, "no rollback drill after the last deployment"
+            Stage.OBSERVE,
+            "drill",
+            False,
+            restore_error or "no rollback drill after the last deployment",
         )
     restored = [
-        r for r in restores if r.data.get("drill") and r.recorded_at > after[-1].recorded_at
+        r
+        for r in restores
+        if r.data.get("drill")
+        and not r.data.get("restore")
+        and r.recorded_at > after[-1].recorded_at
     ]
     if not restored:
         return GateResult(
-            Stage.OBSERVE, "drill", False, "no restored attestation after the drill's rollback"
+            Stage.OBSERVE,
+            "drill",
+            False,
+            restore_error or "no restored attestation after the drill's rollback",
         )
     return GateResult(
-        Stage.OBSERVE, "drill", True, f"drill {after[-1].digest[:19]} → {restored[-1].digest[:19]}"
+        Stage.OBSERVE,
+        "drill",
+        True,
+        f"rollback drill {after[-1].digest[:19]} → {restored[-1].digest[:19]}",
     )
 
 

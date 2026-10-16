@@ -4,6 +4,7 @@ marked `drill` so the change failure rate stays clean."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
@@ -40,6 +41,9 @@ def command(repo: Path, yes: bool, as_json: bool) -> None:
                 abort=True,
             )
         outcome = flow.drill(repo, cfg, ledger, issuer=issuer, target=target)
+    except flow.DrillRefused as exc:
+        click.echo(json.dumps(exc.data) if as_json else str(exc), err=not as_json)
+        raise SystemExit(1) from exc
     except Locked as exc:
         click.echo(f"error: {exc}", err=True)
         raise SystemExit(3) from exc
