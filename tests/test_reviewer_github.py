@@ -428,6 +428,23 @@ def test_check_run_lifecycle_and_lookup() -> None:
     assert recorder.requests[3].url.params["check_name"] == "red-rail/review"
 
 
+def test_check_run_reads_started_at() -> None:
+    parsed = github._check(
+        {
+            "id": 1,
+            "name": "red-rail/review",
+            "status": "in_progress",
+            "started_at": "2026-10-16T10:00:00Z",
+        }
+    )
+    assert parsed.started_at == datetime(2026, 10, 16, 10, 0, tzinfo=UTC)
+    assert github._check({"id": 2, "status": "in_progress"}).started_at is None
+    assert (
+        github._check({"id": 3, "status": "in_progress", "started_at": "garbage"}).started_at
+        is None
+    )
+
+
 def test_review_and_label_removal() -> None:
     recorder = Recorder(
         {

@@ -2,6 +2,7 @@
 `review_verdict` attested through the project's own ledger. Fail-closed on every gap."""
 
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,7 @@ class FakeGitHub:
         default_factory=lambda: ["feat: x\n\nCo-Authored-By: Claude Opus 5 <n@a>"]
     )
     existing_checks: list[CheckRun] = field(default_factory=list)
+    completed_checks: list[tuple] = field(default_factory=list)
     calls: list[tuple] = field(default_factory=list)
     compare_text: str = "diff --git a/src/x.py b/src/x.py\n+print(2)\n"
     compare_error: bool = False
@@ -76,6 +78,7 @@ class FakeGitHub:
 
     def complete_check(self, repository, check_id, *, conclusion, title, summary, text=""):
         self.calls.append(("complete", check_id, conclusion, title))
+        self.completed_checks.append((check_id, conclusion, title, summary))
         self.check_summaries[check_id] = summary
         self.check_texts[check_id] = text
         return CheckRun(id=check_id, status="completed", conclusion=conclusion)
@@ -707,6 +710,70 @@ def test_a_review_in_progress_is_not_started_again() -> None:
     assert not needs_review(PR, github=github, policy=policy)
     relabelled = replace(PR, labels=("rail-review:rerun",))
     assert needs_review(relabelled, github=github, policy=policy)
+
+
+def test_a_stale_in_progress_check_is_reviewed_again() -> None:
+    now = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
+    github = FakeGitHub()
+    policy = default_policy()
+    github.existing_checks = [
+        CheckRun(1, "in_progress", None, started_at=now - timedelta(minutes=301))
+    ]
+    assert needs_review(PR, github=github, policy=policy, now=now)
+    github.existing_checks = [
+        CheckRun(1, "in_progress", None, started_at=now - timedelta(minutes=299))
+    ]
+    assert not needs_review(PR, github=github, policy=policy, now=now)
+    github.existing_checks = [CheckRun(1, "in_progress", None)]
+    assert not needs_review(PR, github=github, policy=policy, now=now)
+    github.existing_checks = [
+        CheckRun(1, "completed", "failure", started_at=now - timedelta(days=1))
+    ]
+    assert not needs_review(PR, github=github, policy=policy, now=now)
+
+
+def test_the_interrupted_check_is_closed_before_a_new_review(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    started = now - timedelta(minutes=301)
+    repo, ledger = _repo(tmp_path)
+    _bind(ledger)
+    github = FakeGitHub(existing_checks=[CheckRun(1, "in_progress", None, started_at=started)])
+
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
+        return approve(provider, tier)
+
+    outcome = review_pull(
+        PR,
+        github=github,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert github.completed_checks[0][:3] == (1, "failure", "interrupted")
+    assert started.isoformat() in github.completed_checks[0][3]
+    assert github.calls.index(("complete", 1, "failure", "interrupted")) < github.calls.index(
+        ("start", "red-rail/review", PR.head_sha)
+    )
+    assert outcome.check_run_id != 1
+    other_head = replace(PR, head_sha="c" * 40)  # same PR, already bound above
+    fresh = FakeGitHub(existing_checks=[CheckRun(2, "in_progress", None, started_at=now)])
+    assert not needs_review(other_head, github=fresh, policy=default_policy(), now=now)
+    review_pull(
+        other_head,
+        github=fresh,
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
+    )
+    assert all(check[0] != 2 for check in fresh.completed_checks), "a fresh check stays open"
 
 
 def test_pending_reviews_are_loaded_in_full_before_judging() -> None:
