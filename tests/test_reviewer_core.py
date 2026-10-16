@@ -311,6 +311,101 @@ def test_judge_runs_the_provider_in_an_isolated_seat_and_parses_the_reply(tmp_pa
     assert spec.report_log is not None and str(spec.report_log).startswith(str(tmp_path))
 
 
+@pytest.mark.parametrize(
+    ("prompt_bytes", "timeout", "overrides"),
+    [
+        (5000, 660, {}),
+        (10240, 660, {}),
+        (10241, 720, {}),
+        (204800, 1800, {}),
+        (10241, 150, {"timeout_seconds": 100, "timeout_seconds_per_10kb": 25}),
+    ],
+)
+def test_judge_scales_timeout_with_the_utf8_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt_bytes: int,
+    timeout: int,
+    overrides: dict,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    policy = ReviewPolicy(**overrides)
+    overhead = len(build_prompt(replace(PR, body=""), DIFF, policy, criteria=None).text.encode())
+    padding = prompt_bytes - overhead
+    pr = replace(PR, body="é" * (padding // 2) + "x" * (padding % 2))
+    seen = []
+
+    def runner(provider, spec):
+        seen.append(spec)
+        return 0, _reply()
+
+    reply = judge(pr, DIFF, policy, provider="codex", tier="light", runner=runner, root=tmp_path)
+    assert reply.verdict is not None
+    assert len(seen[0].prompt.encode("utf-8")) == prompt_bytes
+    assert seen[0].timeout_seconds == timeout
+
+
+@pytest.mark.parametrize("prompt_bytes", [204801, 300000])
+def test_judge_refuses_a_prompt_over_the_timeout_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prompt_bytes: int
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    policy = default_policy()
+    overhead = len(build_prompt(replace(PR, body=""), DIFF, policy, criteria=None).text.encode())
+    pr = replace(PR, body="x" * (prompt_bytes - overhead))
+    seen = []
+
+    def runner(provider, spec):
+        seen.append(spec)
+        return 0, _reply()
+
+    reply = judge(pr, DIFF, policy, provider="codex", tier="light", runner=runner, root=tmp_path)
+    assert not seen
+    assert reply.verdict is None and reply.reason == "prompt too large"
+    assert reply.failure and f"{prompt_bytes / 1024:.1f} KB" in reply.failure
+    assert "1800" in reply.failure
+
+
+def test_timeout_policy_defaults() -> None:
+    policy = default_policy()
+    assert policy.timeout_seconds_per_10kb == 60
+    assert policy.timeout_max_seconds == 1800
+
+
+def test_timeout_policy_rejects_a_cap_below_the_base() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="timeout_max_seconds must be greater than or equal to timeout_seconds",
+    ):
+        ReviewPolicy(timeout_seconds=700, timeout_max_seconds=600)
+    assert ReviewPolicy(timeout_seconds=700, timeout_max_seconds=700).timeout_max_seconds == 700
+
+
+@pytest.mark.parametrize("field", ["timeout_seconds_per_10kb", "timeout_max_seconds"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_timeout_policy_requires_positive_budgets(field: str, value: int) -> None:
+    with pytest.raises(ValidationError, match="greater than 0"):
+        ReviewPolicy(**{field: value})
+
+
+def test_timeout_measures_the_prompt_after_the_final_shrink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    policy = ReviewPolicy(prompt_limits={"agy": 10000})
+    diff = "diff --git a/src/x.py b/src/x.py\n" + "+é\n" * 70000
+    seen = []
+
+    def runner(provider, spec):
+        seen.append(spec)
+        return 0, _reply()
+
+    reply = judge(PR, diff, policy, provider="agy", tier="light", runner=runner, root=tmp_path)
+    assert reply.verdict is not None and reply.verdict.diff_truncated
+    assert len(seen[0].prompt.encode("utf-8")) <= 10000
+    assert seen[0].timeout_seconds == 660
+
+
 def test_judge_fails_closed_on_exit_code_timeout_or_garbage(tmp_path: Path) -> None:
     policy = default_policy()
     failing = judge(

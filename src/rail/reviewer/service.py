@@ -1,6 +1,6 @@
 """Pull-mode reviewer: for each watched repository, every open non-draft PR whose head SHA
 has no completed `red-rail/review` check of ours (or carries the rerun label) gets exactly
-one review. Fail-closed: no verdict → failure + REQUEST_CHANGES, never neutral."""
+one review. Fail-closed: no verdict → reviewer failure, never a verdict; re-run by label or push."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ class ReviewOutcome:
     repository: str
     number: int
     head_sha: str
-    verdict: ReviewVerdict
+    verdict: ReviewVerdict | None
     check_run_id: int
     attested: bool = False
     receipt: Path | None = None
@@ -1473,25 +1473,25 @@ def _review_started(
             )
 
     if merged is None:
-        # No verdict at all: fail closed. An outage is not a judged round (Ruling 32): it is
-        # recorded as "no_verdict", which moves neither the round counter nor `last_judged`, so
-        # an outage never burns a round and never ages the rulings of a closure check out of
-        # `state.rulings`. The open findings stay open until a real judge answers them.
-        findings = [
-            f.model_copy(update={"status": "still_open"}) if f.open_blocker else f
-            for f in state.findings
-        ]
-        verdict = ReviewVerdict(
-            verdict="request_changes",
+        # An outage is not a judged round (Ruling 32): leave findings and rulings in the
+        # ledger untouched, and publish only the failed check so a later pass can retry.
+        details = list(judge_notes)
+        if unseen:
+            names = ", ".join(unseen[:10])
+            if len(unseen) > 10:
+                names += f" and {len(unseen) - 10} more"
+            details.append(f"Not read whole: {names}")
+        github.complete_check(
+            pr.repository,
+            check.id,
+            conclusion="failure",
+            title="no verdict",
             summary=_no_judge_summary(failures, policy),
-            findings=_capped(findings),
-            mode=mode,
-            providers=(),
-            diff_truncated=truncated,
-            round="no_verdict",
-            artifact=artifact,
-        ).model_copy(update=coverage)
-        title = "no verdict"
+            text="\n".join(details),
+        )
+        return ReviewOutcome(
+            pr.repository, pr.number, pr.head_sha, None, check.id, failures=failures
+        )
     else:
         verdict = _finish(
             merged,
