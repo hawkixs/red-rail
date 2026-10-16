@@ -142,6 +142,7 @@ class CheckRun:
     name: str = ""
     app_id: int | None = None
     started_at: datetime | None = None
+    title: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +208,7 @@ def _check(raw: dict[str, Any]) -> CheckRun:
         name=str(raw.get("name", "")),
         app_id=int(app_id) if app_id is not None else None,
         started_at=started_at,
+        title=str((raw.get("output") or {}).get("title") or ""),
     )
 
 
@@ -686,8 +688,8 @@ class GitHubApp:
         return _check(data)
 
     def check_runs(self, repository: str, sha: str, *, name: str | None = None) -> list[CheckRun]:
-        """Read all current checks, or only ours by name; CI evidence is never a partial page."""
-        query = {"per_page": "50", "filter": "latest"}
+        """Read current checks, or every attempt of ours by name; never a partial page."""
+        query = {"per_page": "50", "filter": "all" if name is not None else "latest"}
         if name is not None:
             query.update(app_id=str(self.app_id), check_name=name)
         path: str | None = f"/repos/{repository}/commits/{sha}/check-runs?{urlencode(query)}"

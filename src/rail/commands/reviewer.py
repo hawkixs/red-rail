@@ -168,9 +168,10 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
                     continue
                 reviewed += 1
                 status = "attested" if outcome.attested else "UNATTESTED"
+                verdict = outcome.verdict.verdict if outcome.verdict is not None else "no verdict"
                 click.echo(
                     f"{repository.slug}#{pull.number} {pull.head_sha[:12]} "
-                    f"{outcome.verdict.verdict} check={outcome.check_run_id} {status}"
+                    f"{verdict} check={outcome.check_run_id} {status}"
                 )
                 for failure in outcome.failures:
                     click.echo(f"  ! {failure}", err=True)

@@ -78,6 +78,8 @@ class ReviewPolicy(BaseModel):
     # ReD's sessions are Claude Code (found by the independent reviewer on PR #3)
     unknown_producer_excludes: tuple[Provider, ...] = ("claude",)
     timeout_seconds: float = Field(default=600.0, gt=0)
+    timeout_seconds_per_10kb: float = Field(default=60.0, gt=0)
+    timeout_max_seconds: float = Field(default=1800.0, gt=0)
     glm_quota_skip_minutes: float = Field(default=60.0, gt=0)
     # Ticket 71776743: four-hour unit timeout plus one hour ensures dead checks are stale.
     stale_check_minutes: float = Field(default=300.0, gt=0)
@@ -102,6 +104,12 @@ class ReviewPolicy(BaseModel):
                 "reviewer.yaml"
             )
         return data
+
+    @model_validator(mode="after")
+    def _timeout_cap_covers_base(self) -> ReviewPolicy:
+        if self.timeout_max_seconds < self.timeout_seconds:
+            raise ValueError("timeout_max_seconds must be greater than or equal to timeout_seconds")
+        return self
 
     @model_validator(mode="after")
     def _every_provider_has_a_model(self) -> ReviewPolicy:

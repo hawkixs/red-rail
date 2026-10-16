@@ -4,6 +4,7 @@ a JSON object back. The runtime is `headless-agents` (pinned); every policy is o
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -28,9 +29,6 @@ from rail.reviewer.split import Sight, sight_of
 from rail.reviewer.verdict import FINDING_ID, PreviousAnswer, ReviewVerdict
 
 GUARD = Path(__file__).resolve().parent / "guard.sh"
-Failure = Literal[
-    "timeout", "provider_fallback", "failed", "unparsable", "diff is empty; nothing was judged"
-]
 Runner = Callable[[str, RunSpec], tuple[int, str]]  # (provider, spec) -> (exit code, reply text)
 CREDENTIALS = {
     "glm": Credentials(paths=(".local/share/opencode/auth.json",), mode="symlink"),
@@ -139,11 +137,12 @@ class JudgeReply:
     tier: str
     model: str
     verdict: ReviewVerdict | None
-    failure: Failure | None
+    failure: str | None
     raw: str
     reason: str | None = None  # why it dropped out, classified (`failure_reason`)
     sight: Sight | None = None  # elsewhere-built replies saw their whole input (spec D1)
     note: str | None = None
+    prompt_bytes: int = 0
 
 
 # Why a judge dropped out (ticket 0b950eea). The check runs are public and a seat's logs can
@@ -504,12 +503,19 @@ def build_spec(
         model=model or policy.model(provider, tier),
         profile=profile,
         max_turns=1,
-        timeout_seconds=policy.timeout_seconds,
+        timeout_seconds=min(_prompt_timeout(prompt, policy), policy.timeout_max_seconds),
         report_log=home / "report.log",
         events_log=home / "events.jsonl",
         stderr_log=home / "stderr.log",
         raw_log=home / "raw.log",
         environment=sandbox_environment(home, environ=os.environ),
+    )
+
+
+def _prompt_timeout(prompt: str, policy: ReviewPolicy) -> float:
+    # Ticket 52c2525c: budget the UTF-8 text actually sent, after any prompt shrinking.
+    return policy.timeout_seconds + policy.timeout_seconds_per_10kb * math.ceil(
+        len(prompt.encode("utf-8")) / 10240
     )
 
 
@@ -596,6 +602,23 @@ def judge(
             reason="empty diff",
             sight=sight_of(built.visible, diff),
         )
+    timeout = _prompt_timeout(built.text, policy)
+    if timeout > policy.timeout_max_seconds:
+        size_kb = len(built.text.encode("utf-8")) / 1024
+        return JudgeReply(
+            provider=provider,
+            tier=tier,
+            model=policy.model(provider, tier),
+            verdict=None,
+            failure=(
+                f"prompt too large: {size_kb:.1f} KB needs {timeout:g}s; "
+                f"budget is {policy.timeout_max_seconds:g}s"
+            ),
+            raw="",
+            reason="prompt too large",
+            sight=sight_of(built.visible, diff),
+            prompt_bytes=len(built.text.encode("utf-8")),
+        )
     base = root or ephemeral_root(os.environ) or Path(tempfile.gettempdir())
     note = None
     model = policy.model(provider, tier)
@@ -631,7 +654,7 @@ def judge(
         )
         started = time.time() - 1.0
         exit_code, text = _run(runner, provider, spec)
-    failure: Failure | None = None
+    failure: str | None = None
     verdict: ReviewVerdict | None = None
     if exit_code == TIMEOUT_EXIT_CODE:
         failure = "timeout"

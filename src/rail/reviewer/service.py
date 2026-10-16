@@ -1,6 +1,5 @@
-"""Pull-mode reviewer: for each watched repository, every open non-draft PR whose head SHA
-has no completed `red-rail/review` check of ours (or carries the rerun label) gets exactly
-one review. Fail-closed: no verdict → failure + REQUEST_CHANGES, never neutral."""
+"""Pull-mode reviewer: review each open non-draft head, with one automatic retry on timeout
+or a rerun by label or push. Fail-closed: no verdict → reviewer failure, never a verdict."""
 
 from __future__ import annotations
 
@@ -43,6 +42,7 @@ from rail.reviewer.verdict import (
 )
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
+_TIMEOUT_RETRY_TITLE = "no verdict: judge timeout, one automatic retry pending"
 RunJudge = Callable[..., JudgeReply]
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class ReviewOutcome:
     repository: str
     number: int
     head_sha: str
-    verdict: ReviewVerdict
+    verdict: ReviewVerdict | None
     check_run_id: int
     attested: bool = False
     receipt: Path | None = None
@@ -140,7 +140,14 @@ def needs_review(
     if policy.rerun_label in pr.labels:
         return True
     checks = github.check_runs(pr.repository, pr.head_sha, name=policy.check_name)
-    return _checks_need_review(checks, policy, now=now)
+    if not checks:
+        return True
+    completed = [check for check in checks if check.status == "completed"]
+    # Decision 83d40f02: only a head's single first-timeout check permits an automatic retry.
+    if completed and not (len(completed) == 1 and completed[0].title == _TIMEOUT_RETRY_TITLE):
+        return False
+    cutoff = (now or datetime.now(UTC)) - timedelta(minutes=policy.stale_check_minutes)
+    return all(_stale_check(check, cutoff) for check in checks if check.status != "completed")
 
 
 def pending_reviews(
@@ -649,14 +656,25 @@ def _context(state: rounds.LoopState, *, cf_open: list[str], cf_addressed: list[
     return "\n".join(lines).strip()
 
 
+def _no_judge_cause(replies: list[JudgeReply]) -> str:
+    """Classify this pass from every attempted judge, including unsuccessful fallbacks."""
+    size = [reply.reason == "prompt too large" for reply in replies]
+    if replies and all(size):
+        return "size"
+    if not any(size) and any(reply.failure == "timeout" for reply in replies):
+        return "timeout"
+    return "no judge"
+
+
 def _no_judge_summary(failures: list[str], policy: ReviewPolicy) -> str:
     """Ticket 0b950eea, defect 3: a pass in which no judge answered is not a judged
     request_changes, and the check says so in plain words — what failed, that nothing was judged
     and no round was spent, and what unblocks the pull request."""
     causes = "; ".join(failures) or "no judge available"
     return (
-        f"no verdict: {causes}. No judge was available: nothing was judged and no round was "
-        "spent. The check stays failed until a judge answers: re-run once a provider is back "
+        f"no verdict: {causes}. This is not a verdict. No judge was available: "
+        "nothing was judged and no round was spent. The check stays failed until a judge "
+        "answers: re-run once a provider is back "
         f"(label `{policy.rerun_label}` or a new push); until then a merge is the operator's "
         "own call."
     )[:4000]
@@ -764,6 +782,7 @@ def _judge_chain(
     notes: str = "",
     instructions: str = "",
     judge_notes: list[str] | None = None,
+    attempts: list[JudgeReply] | None = None,
 ) -> list[JudgeReply]:
     """Walk the chain until `wanted` verdicts are in hand; a failure is logged, never fatal."""
     replies: list[JudgeReply] = []
@@ -779,6 +798,8 @@ def _judge_chain(
             **({"notes": notes} if notes else {}),
             **({"instructions": instructions} if instructions else {}),
         )
+        if attempts is not None:
+            attempts.append(reply)
         if reply.note and judge_notes is not None:
             judge_notes.append(f"{provider}/{tier}: {reply.note}")
         if reply.verdict is None:
@@ -1389,6 +1410,7 @@ def _review_started(
         head_moved=step == "closure" and not same_head,
         delta=delta is not None,
     )
+    judge_replies: list[JudgeReply] = []
     common = dict(
         criteria=criteria,
         run_judge=run_judge,
@@ -1397,6 +1419,7 @@ def _review_started(
         notes=notes,
         instructions=instructions,
         judge_notes=judge_notes,
+        attempts=judge_replies,
     )
     # One depth for the whole review, computed once from the change. The chunked path below
     # used to hardcode `deep` and never read `light`, so a docs-only pull request big enough
@@ -1505,25 +1528,41 @@ def _review_started(
             )
 
     if merged is None:
-        # No verdict at all: fail closed. An outage is not a judged round (Ruling 32): it is
-        # recorded as "no_verdict", which moves neither the round counter nor `last_judged`, so
-        # an outage never burns a round and never ages the rulings of a closure check out of
-        # `state.rulings`. The open findings stay open until a real judge answers them.
-        findings = [
-            f.model_copy(update={"status": "still_open"}) if f.open_blocker else f
-            for f in state.findings
-        ]
-        verdict = ReviewVerdict(
-            verdict="request_changes",
+        # An outage is not a judged round (Ruling 32): leave findings and rulings in the
+        # ledger untouched, and publish only the failed check so a later pass can retry.
+        cause = _no_judge_cause(judge_replies)
+        rerun = f"add label {policy.rerun_label} or push"
+        if cause == "size":
+            size_kb = max(reply.prompt_bytes for reply in judge_replies) / 1024
+            title = (
+                f"no verdict: prompt {size_kb:.1f} KB over the "
+                f"{policy.timeout_max_seconds:g} s budget, {rerun}"
+            )
+        elif cause == "timeout":
+            again = any(
+                c.status == "completed" and c.title == _TIMEOUT_RETRY_TITLE
+                for c in github.check_runs(pr.repository, pr.head_sha, name=policy.check_name)
+            )
+            title = f"no verdict: judge timeout again, {rerun}" if again else _TIMEOUT_RETRY_TITLE
+        else:
+            title = f"no verdict: no judge answered, {rerun}"
+        details = list(judge_notes)
+        if unseen:
+            names = ", ".join(unseen[:10])
+            if len(unseen) > 10:
+                names += f" and {len(unseen) - 10} more"
+            details.append(f"Not read whole: {names}")
+        github.complete_check(
+            pr.repository,
+            check.id,
+            conclusion="failure",
+            title=title,
             summary=_no_judge_summary(failures, policy),
-            findings=_capped(findings),
-            mode=mode,
-            providers=(),
-            diff_truncated=truncated,
-            round="no_verdict",
-            artifact=artifact,
-        ).model_copy(update=coverage)
-        title = "no verdict"
+            text="\n".join(details),
+        )
+        return ReviewOutcome(
+            pr.repository, pr.number, pr.head_sha, None, check.id, failures=failures
+        )
     else:
         verdict = _finish(
             merged,

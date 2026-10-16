@@ -50,8 +50,9 @@ def test_once_reports_the_error_of_an_unreadable_checkout(tmp_path: Path, monkey
     assert out.exit_code != 0 and "rail.yaml" in out.output
 
 
+@pytest.mark.parametrize("verdict", ["approve", None])
 def test_reconciliation_failure_still_reviews_pending_pulls_of_the_repository(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, verdict: str | None
 ) -> None:
     from types import SimpleNamespace
 
@@ -81,8 +82,8 @@ def test_reconciliation_failure_still_reviews_pending_pulls_of_the_repository(
     def review_pull(pr, **kwargs):
         seen.append(("review", pr))
         return SimpleNamespace(
-            attested=True,
-            verdict=ReviewVerdict(verdict="approve", summary="clean"),
+            attested=verdict is not None,
+            verdict=ReviewVerdict(verdict=verdict, summary="clean") if verdict else None,
             check_run_id=99,
             failures=[],
         )
@@ -102,6 +103,7 @@ def test_reconciliation_failure_still_reviews_pending_pulls_of_the_repository(
     ]
     assert out.stderr == "hawkixs/red-alpha: RuntimeError\n"
     assert "reviewed 1 pull request(s)" in out.stdout
+    assert f"{verdict or 'no verdict'} check=99" in out.stdout
 
 
 def test_once_does_not_count_a_head_skipped_after_selection(tmp_path, monkeypatch):

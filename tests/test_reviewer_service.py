@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -84,7 +85,7 @@ class FakeGitHub:
         self.completed_checks.append((check_id, conclusion, title, summary))
         self.check_summaries[check_id] = summary
         self.check_texts[check_id] = text
-        return CheckRun(id=check_id, status="completed", conclusion=conclusion)
+        return CheckRun(id=check_id, status="completed", conclusion=conclusion, title=title)
 
     def review(self, repository, number, *, commit_id, event, body):
         self.calls.append(("review", number, event))
@@ -555,9 +556,13 @@ def test_all_four_producers_leave_no_judge_and_never_call_the_runner(tmp_path: P
         root=tmp_path,
     )
     assert seen == []
-    assert outcome.verdict.verdict == "request_changes"
-    assert outcome.verdict.providers == () and outcome.verdict.round == "no_verdict"
-    assert ("complete", 99, "failure", "no verdict") in github.calls
+    assert outcome.verdict is None
+    assert (
+        "complete",
+        99,
+        "failure",
+        "no verdict: no judge answered, add label rail-review:rerun or push",
+    ) in github.calls
 
 
 def test_a_glm_empty_report_is_provider_fallback_and_fails_closed(
@@ -590,11 +595,15 @@ def test_a_glm_empty_report_is_provider_fallback_and_fails_closed(
         root=tmp_path,
     )
     assert seen == ["glm", "glm"]  # the subscription, then its OpenRouter fallback (9f2947cb)
-    assert outcome.verdict.verdict == "request_changes" and outcome.verdict.round == "no_verdict"
-    assert outcome.verdict.providers == ()
+    assert outcome.verdict is None
     assert any("glm/light: provider_fallback" in failure for failure in outcome.failures)
     assert "unparsable" not in " ".join(outcome.failures)
-    assert ("complete", 99, "failure", "no verdict") in github.calls
+    assert (
+        "complete",
+        99,
+        "failure",
+        "no verdict: no judge answered, add label rail-review:rerun or push",
+    ) in github.calls
 
 
 def test_no_verdict_at_all_fails_closed(tmp_path: Path) -> None:
@@ -610,13 +619,198 @@ def test_no_verdict_at_all_fails_closed(tmp_path: Path) -> None:
         run_judge=lambda pr, diff, policy, *, provider, tier, criteria, **_: fail(provider, tier),
         root=tmp_path,
     )
-    assert outcome.verdict.verdict == "request_changes" and "no verdict" in outcome.verdict.summary
-    assert ("complete", 99, "failure", "no verdict") in github.calls
-    assert ("review", 7, "REQUEST_CHANGES") in github.calls
+    assert outcome.verdict is None
     assert (
-        ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)[0].data["verdict"]
-        == "request_changes"
+        "complete",
+        99,
+        "failure",
+        "no verdict: judge timeout, one automatic retry pending",
+    ) in github.calls
+    assert not any(call[0] == "review" for call in github.calls)
+    assert not ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "prompt too large", "outage"])
+def test_judge_budget_failures_leave_the_head_pending_without_a_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from headless_agents.capability import TIMEOUT_EXIT_CODE
+
+    from rail.reviewer import rounds
+    from rail.reviewer.service import pending_reviews, previous_verdicts, rulings_of
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    repo, ledger = _repo(tmp_path)
+    _bind(ledger)
+    pr = replace(PR, body="x" * 205000 if failure == "prompt too large" else "")
+
+    class ListingGitHub(FakeGitHub):
+        def open_pulls(self, repository):
+            return [pr]
+
+        def pull(self, repository, number):
+            return pr
+
+        def start_check(self, repository, head_sha, *, name):
+            check = replace(
+                super().start_check(repository, head_sha, name=name),
+                id=max([98, *(c.id for c in self.existing_checks)]) + 1,
+            )
+            self.existing_checks.append(check)
+            return check
+
+        def complete_check(self, repository, check_id, **kwargs):
+            check = super().complete_check(repository, check_id, **kwargs)
+            self.existing_checks = [check if c.id == check_id else c for c in self.existing_checks]
+            return check
+
+    github = ListingGitHub()
+    policy = ReviewPolicy(providers=("codex", "agy"), rerun_label="review:retry")
+    attempts = []
+    replies = []
+
+    def runner(provider, spec):
+        attempts.append(provider)
+        if failure == "outage":
+            return 1, ""
+        # Even partial output from a timed-out process is never a verdict.
+        return TIMEOUT_EXIT_CODE, json.dumps(
+            {"verdict": "request_changes", "summary": "partial", "findings": []}
+        )
+
+    def run_judge(pr, diff, policy, **kwargs):
+        reply = judge(pr, diff, policy, runner=runner, **kwargs)
+        replies.append(reply)
+        return reply
+
+    outcome = review_pull(
+        pr,
+        github=github,
+        policy=policy,
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=repo,
+        run_judge=run_judge,
+        root=tmp_path,
     )
+    assert len(replies) == 2 and all(reply.verdict is None for reply in replies)
+    if failure == "timeout":
+        assert attempts == ["codex", "agy"]
+        assert all(reply.failure == "timeout" for reply in replies)
+    elif failure == "prompt too large":
+        assert not attempts
+        assert all(reply.reason == "prompt too large" for reply in replies)
+    else:
+        assert attempts == ["codex", "agy"]
+        assert all(reply.failure == "failed" for reply in replies)
+    assert outcome.verdict is None and not outcome.attested
+    assert outcome.receipt is None
+    assert not ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+    assert not any(call[0] == "review" for call in github.calls)
+    _, conclusion, title, summary = github.completed_checks[-1]
+    assert conclusion == "failure"
+    assert "This is not a verdict" in summary
+    if failure == "prompt too large":
+        match = re.fullmatch(
+            rf"no verdict: prompt (\d+\.\d) KB over the {policy.timeout_max_seconds:g} s "
+            rf"budget, add label {policy.rerun_label} or push",
+            title,
+        )
+        assert match and float(match[1]) >= 200
+    elif failure == "timeout":
+        assert title == "no verdict: judge timeout, one automatic retry pending"
+    else:
+        assert title == f"no verdict: no judge answered, add label {policy.rerun_label} or push"
+    state = rounds.loop_state(
+        previous_verdicts(ledger, "red-alpha", pr), rulings_of(ledger, "red-alpha", pr)
+    )
+    assert state.judged == 0
+    if failure == "timeout":
+        assert needs_review(pr, github=github, policy=policy)
+        assert pending_reviews(github, pr.repository, policy) == [pr]
+        second = review_pull(
+            pr,
+            github=github,
+            policy=policy,
+            ledger=ledger,
+            project="red-alpha",
+            repo_path=repo,
+            run_judge=run_judge,
+            root=tmp_path,
+        )
+        assert second.verdict is None and not second.attested and second.receipt is None
+        assert len(github.existing_checks) == 2
+        assert github.completed_checks[-1][2] == (
+            f"no verdict: judge timeout again, add label {policy.rerun_label} or push"
+        )
+        assert not ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+        assert not any(call[0] == "review" for call in github.calls)
+    assert not needs_review(pr, github=github, policy=policy)
+    assert pending_reviews(github, pr.repository, policy) == []
+    rerun = replace(pr, labels=(*pr.labels, policy.rerun_label))
+    assert needs_review(rerun, github=github, policy=policy)
+    pr = rerun
+    assert pending_reviews(github, pr.repository, policy) == [rerun]
+
+
+@pytest.mark.parametrize(
+    ("reasons", "failures", "expected"),
+    [
+        ([], [], "no judge"),
+        (["prompt too large", "prompt too large"], ["failed", "failed"], "size"),
+        (["prompt too large", None], ["failed", "timeout"], "no judge"),
+        (["prompt too large", None], ["failed", "provider_fallback"], "no judge"),
+        ([None, None], ["timeout", "failed"], "timeout"),
+        ([None, None], ["provider_fallback", "unparsable"], "no judge"),
+    ],
+)
+def test_no_judge_cause_uses_all_attempts(reasons, failures, expected) -> None:
+    from rail.reviewer.service import _no_judge_cause
+
+    replies = [
+        replace(fail("codex"), failure=failure, reason=reason)
+        for reason, failure in zip(reasons, failures, strict=True)
+    ]
+    assert _no_judge_cause(replies) == expected
+
+
+@pytest.mark.parametrize("other_title", ["approve", "request_changes", "no verdict", "interrupted"])
+def test_timeout_retry_is_blocked_by_any_other_completed_check(other_title) -> None:
+    first = CheckRun(
+        1,
+        "completed",
+        "failure",
+        title="no verdict: judge timeout, one automatic retry pending",
+    )
+    github = FakeGitHub(
+        existing_checks=[first, CheckRun(2, "completed", "failure", title=other_title)]
+    )
+    assert not needs_review(PR, github=github, policy=default_policy())
+
+
+def test_timeout_retry_waits_for_in_progress_checks_to_become_stale() -> None:
+    now = datetime.now(UTC)
+    first = CheckRun(
+        1,
+        "completed",
+        "failure",
+        title="no verdict: judge timeout, one automatic retry pending",
+    )
+    github = FakeGitHub(existing_checks=[first])
+    policy = default_policy()
+    assert needs_review(PR, github=github, policy=policy, now=now)
+    running = CheckRun(2, "in_progress", None, started_at=now)
+    github.existing_checks.append(running)
+    assert not needs_review(PR, github=github, policy=policy, now=now)
+    assert needs_review(
+        replace(PR, labels=(policy.rerun_label,)), github=github, policy=policy, now=now
+    )
+    github.existing_checks[-1] = replace(
+        running, started_at=now - timedelta(minutes=policy.stale_check_minutes + 1)
+    )
+    assert needs_review(PR, github=github, policy=policy, now=now)
+    github.existing_checks.append(replace(first, id=3))
+    assert not needs_review(PR, github=github, policy=policy, now=now)
 
 
 def test_a_pass_without_any_judge_says_so_plainly(tmp_path: Path) -> None:
@@ -635,7 +829,8 @@ def test_a_pass_without_any_judge_says_so_plainly(tmp_path: Path) -> None:
         run_judge=lambda pr, diff, policy, *, provider, tier, criteria, **_: fail(provider, tier),
         root=tmp_path,
     )
-    summary = outcome.verdict.summary
+    assert outcome.verdict is None
+    summary = github.completed_checks[-1][3]
     assert "No judge was available" in summary
     assert "nothing was judged" in summary and "no round was spent" in summary
     assert "rail-review:rerun" in summary
@@ -665,7 +860,8 @@ def test_the_check_says_why_each_judge_dropped_out(tmp_path: Path) -> None:
         root=tmp_path,
     )
     assert "provider_fallback (quota exhausted, resets in 2h)" in outcome.failures[0]
-    assert "(quota exhausted, resets in 2h)" in outcome.verdict.summary
+    assert outcome.verdict is None
+    assert "(quota exhausted, resets in 2h)" in github.completed_checks[-1][3]
 
 
 def test_the_rerun_label_is_removed_after_the_review(tmp_path: Path) -> None:
@@ -2440,6 +2636,9 @@ def test_the_closure_context_carries_only_the_fix_ruled_findings(tmp_path) -> No
 
 
 def test_a_no_verdict_pass_at_round_two_keeps_blockers_open(tmp_path) -> None:  # M10
+    from rail.reviewer import rounds
+    from rail.reviewer.service import previous_verdicts, rulings_of
+
     repo, ledger = _repo(tmp_path)
     _verdict_with(ledger, sha="0" * 40, check_run_id=11, round_=1, findings=[_open(1)])
 
@@ -2456,9 +2655,12 @@ def test_a_no_verdict_pass_at_round_two_keeps_blockers_open(tmp_path) -> None:  
         project="red-alpha",
         run_judge=failing_judge,
     )
-    assert outcome.verdict.round == "no_verdict"  # Ruling 32: an outage is not round 2
-    assert outcome.verdict.verdict == "request_changes"
-    assert outcome.verdict.findings[0].status == "still_open"
+    assert outcome.verdict is None  # Ruling 32: an outage is not round 2
+    state = rounds.loop_state(
+        previous_verdicts(ledger, "red-alpha", PR), rulings_of(ledger, "red-alpha", PR)
+    )
+    assert state.judged == 1
+    assert state.findings[0].open_blocker
 
 
 def test_a_failed_closure_check_keeps_the_ruling(tmp_path) -> None:  # I5
@@ -2501,9 +2703,8 @@ def test_a_failed_closure_check_keeps_the_ruling(tmp_path) -> None:  # I5
         project="red-alpha",
         run_judge=failing_judge,
     )
-    # I3 (Ruling 32): an outage is "no_verdict", never judged, so the ruling survives it
-    assert outcome.verdict.round == "no_verdict"
-    assert outcome.verdict.mode == "incremental"
+    # I3 (Ruling 32): an outage is never judged, so the ruling survives it.
+    assert outcome.verdict is None
 
     state = rounds.loop_state(
         previous_verdicts(ledger, "red-alpha", PR), rulings_of(ledger, "red-alpha", PR)
@@ -2903,7 +3104,7 @@ def test_an_outage_does_not_burn_a_round(tmp_path) -> None:  # I3
     _pass(ledger, "b", _judge_saying(reply_findings=[bug]))
     for head in "cd":
         down = _pass(ledger, head, _dead)
-        assert (down.verdict.round, down.verdict.verdict) == ("no_verdict", "request_changes")
+        assert down.verdict is None
     assert _pass(ledger, "e", _judge_saying(decision="approve")).verdict.round == 2
 
 
@@ -3962,10 +4163,10 @@ def test_a_fix_ruled_closure_drops_an_answer_on_an_unseen_location(tmp_path) -> 
 
 
 def test_a_no_verdict_pass_names_every_unseen_file(tmp_path) -> None:
-    out = _partial_pass(tmp_path, [_open()], FakeGitHub(), _dead)
-    assert out.verdict.round == "no_verdict"
-    assert out.verdict.unseen_files == ("src/x.py",)
-    assert out.verdict.unseen_count == 1
+    github = FakeGitHub()
+    out = _partial_pass(tmp_path, [_open()], github, _dead)
+    assert out.verdict is None
+    assert "Not read whole: src/x.py" in github.check_texts[99]
 
 
 @pytest.mark.parametrize("cut_stage", ["prompt", "argv"])
