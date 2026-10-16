@@ -198,33 +198,40 @@ class DrillRefused(DeployError):
         self.data = {"refused": True, "reason": reason, "message": message, **details}
 
 
+def schema_head(cfg: RailConfig, ledger: Ledger, target: Target, artefact: Artefact) -> str | int:
+    """Read the schema head at the artefact's released commit, failing closed."""
+    declared = cfg.drill.schema_head if cfg.drill else None
+    if declared is None:
+        raise DrillRefused("schema_head_unknown", "drill.schema_head is not declared")
+    releases = ledger.list(cfg.project, attestation=AttestationKind.RELEASED)
+    try:
+        release = next(r for r in reversed(releases) if r.data.get("digest") == artefact.digest)
+        released = Artefact.from_release(release.data)
+        content = json.loads(target.file_at(released.sha, declared.path, "drill schema head"))
+        head = content.get(declared.field) if isinstance(content, dict) else None
+        if not isinstance(head, str | int) or isinstance(head, bool) or head == "":
+            raise ValueError("missing or invalid schema head")
+    except (StopIteration, DeployError, OSError, ValueError) as exc:
+        raise DrillRefused(
+            "schema_head_unknown",
+            f"drill refused: schema head unknown for {artefact.version}: "
+            f"cannot read {declared.path} field {declared.field!r} at its released commit; "
+            "provide a readable JSON file and schema head before drilling",
+            version=artefact.version,
+            path=declared.path,
+            field=declared.field,
+        ) from exc
+    return head
+
+
 def _check_schema_heads(
     cfg: RailConfig, ledger: Ledger, target: Target, live: Artefact, previous: Artefact
 ) -> None:
-    declared = cfg.drill.schema_head if cfg.drill else None
-    if declared is None:
+    if cfg.drill is None or cfg.drill.schema_head is None:
         return
-    releases = ledger.list(cfg.project, attestation=AttestationKind.RELEASED)
     heads: list[str | int] = []
     for artefact in (live, previous):
-        try:
-            release = next(r for r in reversed(releases) if r.data.get("digest") == artefact.digest)
-            released = Artefact.from_release(release.data)
-            content = json.loads(target.file_at(released.sha, declared.path, "drill schema head"))
-            head = content.get(declared.field) if isinstance(content, dict) else None
-            if not isinstance(head, str | int) or isinstance(head, bool) or head == "":
-                raise ValueError("missing or invalid schema head")
-        except (StopIteration, DeployError, OSError, ValueError) as exc:
-            raise DrillRefused(
-                "schema_head_unknown",
-                f"rollback drill refused: schema head unknown for {artefact.version}: "
-                f"cannot read {declared.path} field {declared.field!r} at its released commit; "
-                "provide a readable JSON file and schema head before drilling",
-                version=artefact.version,
-                path=declared.path,
-                field=declared.field,
-            ) from exc
-        heads.append(head)
+        heads.append(schema_head(cfg, ledger, target, artefact))
     if heads[0] != heads[1]:
         raise DrillRefused(
             "schema_head_mismatch",

@@ -251,10 +251,58 @@ class SchemaHeadConfig(BaseModel):
         return value
 
 
+class RestoreConfig(BaseModel):
+    """The complete environment allow-list for an isolated PostgreSQL restore drill."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    database_image: str
+    database_env: list[str] = Field(min_length=1)
+    env: dict[str, str] = Field(default_factory=dict)
+    env_deny_prefixes: list[str] = Field(default_factory=list)
+    health_command: list[str] = Field(min_length=1)
+    read_command: list[str] = Field(min_length=1)
+    disk_margin: float = Field(default=2.0, ge=1)
+    schema_head_file: str | None = None
+
+    @field_validator("database_image")
+    @classmethod
+    def _pinned_image(cls, value: str) -> str:
+        component = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
+        repository = rf"(?:[a-z0-9.-]+:[0-9]+/)?{component}(?:/{component})*"
+        if not re.fullmatch(rf"{repository}@sha256:[0-9a-f]{{64}}", value):
+            raise ValueError("drill.restore.database_image must be a digest-pinned image reference")
+        return value
+
+    @model_validator(mode="after")
+    def _explicit_environment_and_argv(self) -> RestoreConfig:
+        keys = [*self.database_env, *self.env]
+        if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in keys):
+            raise ValueError("drill.restore environment keys must be env var names")
+        if len(set(keys)) != len(keys):
+            raise ValueError(
+                "drill.restore environment keys must be unique, including database_env"
+            )
+        for key in self.env:
+            if any(key.startswith(prefix) for prefix in self.env_deny_prefixes):
+                raise ValueError(f"drill.restore.env key {key} matches env_deny_prefixes")
+        for value in [*self.env.values(), *self.health_command, *self.read_command]:
+            if "\0" in value:
+                raise ValueError("drill.restore values and argv must not contain NUL")
+        if not self.health_command[0] or not self.read_command[0]:
+            raise ValueError("drill.restore commands must name an executable")
+        if self.schema_head_file is not None and (
+            not self.schema_head_file or "\0" in self.schema_head_file
+        ):
+            raise ValueError("drill.restore.schema_head_file must name a file")
+        return self
+
+
 class DrillConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_head: SchemaHeadConfig | None = None
+    restore: RestoreConfig | None = None
 
 
 class RailConfig(BaseModel):
