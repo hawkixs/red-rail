@@ -17,10 +17,11 @@ from rail.autonomy import SINCE, MergedPull
 from rail.brain.settings import DEFAULT_REVIEWER_TOKEN_FILE
 from rail.cli import main
 from rail.commands import metrics as command_module
+from rail.flow import FlowDiscovery
 from rail.ledger import AttestationKind, LedgerError, Record, RecordKind, open_ledger
 from rail.ledger.file import FileLedger
 from rail.metrics import Conformance, Metrics
-from rail.metrics_contract import MAX_BYTES, Answer
+from rail.metrics_contract import MAX_BYTES, Answer, encode
 from rail.reviewer.config import DEFAULT_CONFIG
 from rail.reviewer.github import GitHubApp, GitHubError
 from tests.test_record_payload import MALFORMED_PAYLOADS, receipt_fields
@@ -74,6 +75,15 @@ class ReadGitHub:
         self.fail: set[str] = set()
         self.inactive: set[str] = set()
         self.closed = False
+        self.flow_fail = False
+
+    def flow_merged_pulls(
+        self, repository: str, *, base: str, since: datetime, until: datetime
+    ) -> FlowDiscovery:
+        assert base == "main"
+        if self.flow_fail:
+            raise GitHubError("unreadable flow")
+        return FlowDiscovery((), 0)
 
     def default_branch(self, repository: str) -> str:
         self.clock.advance(f"branch:{repository}")
@@ -573,6 +583,7 @@ def test_invalid_computation_keeps_previous_file(
 @pytest.mark.parametrize("previous", [False, True])
 def test_every_read_failing_writes_nothing(publication: dict[str, Any], previous: bool) -> None:
     publication["failures"].update(publication["paths"])
+    publication["github"].flow_fail = True
     if previous:
         publication["out"].parent.mkdir()
         publication["out"].write_bytes(b"previous")
@@ -676,7 +687,7 @@ def test_oversized_answer_keeps_previous_file(
     def oversized(*args: Any, **kwargs: Any) -> Answer:
         answer = original(*args, **kwargs)
         assert answer.autonomy is not None
-        large = answer.autonomy.not_measured[0].model_copy(update={"why": "x" * MAX_BYTES})
+        large = answer.autonomy.not_measured[0].model_copy(update={"why": "x" * (16 * 1024)})
         return answer.model_copy(
             update={"autonomy": answer.autonomy.model_copy(update={"not_measured": (large,)})}
         )
@@ -685,7 +696,7 @@ def test_oversized_answer_keeps_previous_file(
     publication["out"].parent.mkdir()
     publication["out"].write_bytes(b"previous")
     result = invoke(publication)
-    assert result.exit_code == 1 and "bytes" in result.output and str(MAX_BYTES) in result.output
+    assert result.exit_code == 1 and "bytes" in result.output and "16384" in result.output
     assert publication["out"].read_bytes() == b"previous"
     assert list(publication["out"].parent.iterdir()) == [publication["out"]]
 
@@ -819,3 +830,182 @@ def test_historical_errors_are_byte_identical(
         assert result.stdout_bytes == b'{"error": "rail.yaml is missing"}\n'
     else:
         assert result.stderr_bytes == b"error: rail.yaml is missing\n"
+
+
+def flow_answer() -> Answer:
+    """Use the complete public fixture, preserving every flow field at size boundaries."""
+    answer = Answer.model_validate_json(
+        (ROOT / "contracts/rail-metrics-v1/flow-full.json").read_bytes()
+    )
+    assert answer.delivery is not None and answer.delivery_v2 is not None
+    assert answer.autonomy is not None
+    return answer.model_copy(
+        update={
+            "delivery": answer.delivery.model_copy(update={"projects": ()}),
+            "delivery_v2": answer.delivery_v2.model_copy(update={"projects": ()}),
+            "autonomy": answer.autonomy.model_copy(update={"projects": ()}),
+        }
+    )
+
+
+def sized_flow_answer(size: int) -> Answer:
+    """Pad an existing unbounded explanation to pin exact compact byte sizes."""
+    answer = flow_answer()
+    assert answer.autonomy is not None
+    item = answer.autonomy.not_measured[0]
+    empty = item.model_copy(update={"why": ""})
+    autonomy = answer.autonomy.model_copy(update={"not_measured": (empty,)})
+    answer = answer.model_copy(update={"autonomy": autonomy})
+    length = len(
+        json.dumps(
+            answer.model_dump(mode="json", exclude_none=False), separators=(",", ":")
+        ).encode()
+    )
+    # All blocks are present in this fixture, so no top-level nulls need removal.
+    padding = size - length
+    assert padding >= 0
+    return answer.model_copy(
+        update={
+            "autonomy": autonomy.model_copy(
+                update={"not_measured": (empty.model_copy(update={"why": "x" * padding}),)}
+            )
+        }
+    )
+
+
+def test_publish_window_reaches_flow_and_preserves_historical_metrics(
+    publication: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from rail import publish
+
+    seen: list[int] = []
+    original = publish.collect
+
+    def collect(*args: Any, **kwargs: Any) -> Answer:
+        seen.append(kwargs["window_days"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(publish, "collect", collect)
+    result = CliRunner().invoke(
+        main,
+        [
+            "metrics",
+            "--window",
+            "17",
+            "publish",
+            "--config",
+            str(publication["config"]),
+            "--out",
+            str(publication["out"]),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen == [17]
+    answer = Answer.model_validate_json(publication["out"].read_bytes())
+    assert answer.flow is not None
+    assert answer.flow.window_days == 17 and answer.flow.window_start == NOW - timedelta(days=17)
+    for as_json in (False, True):
+        with monkeypatch.context() as context:
+            test_historical_output_is_byte_identical(tmp_path, context, as_json)
+
+
+@pytest.mark.parametrize("cap", [16 * 1024, MAX_BYTES])
+def test_publish_leaves_flow_absent_when_it_would_exceed_the_cap(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    cap: int,
+) -> None:
+    from rail.publish import write
+
+    answer = sized_flow_answer(cap + 1)
+    base = encode(answer.model_copy(update={"flow": None}))
+    assert len(base) < cap
+    out = tmp_path / "metrics.json"
+    write(answer, out, max_bytes=cap)
+    assert out.read_bytes() == base
+    assert capsys.readouterr().err == f"flow_size {len(base)} {cap + 1} {cap}\n"
+    if cap < MAX_BYTES:
+        write(answer, out, max_bytes=MAX_BYTES)
+        assert out.read_bytes() == encode(answer)
+        assert Answer.model_validate_json(out.read_bytes()).flow == answer.flow
+    exact = sized_flow_answer(cap)
+    write(exact, out, max_bytes=cap)
+    assert out.read_bytes() == encode(exact)
+
+
+def test_publish_flow_omission_preserves_other_blocks_byte_identically(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    publication: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rail.publish import write
+
+    answer = sized_flow_answer(16385)
+    base = answer.model_copy(update={"flow": None})
+    first, second = tmp_path / "without.json", tmp_path / "with.json"
+    write(base, first)
+    write(answer, second)
+    assert first.read_bytes() == second.read_bytes() == encode(base)
+    assert "flow_size" in capsys.readouterr().err
+    from rail import publish
+
+    monkeypatch.setattr(publish, "flow_block", lambda *a, **k: None)
+    result = invoke(publication)
+    assert result.exit_code == 0, result.output
+    before = publication["out"].read_bytes()
+    calls = list(publication["clock"].events)
+    publication["clock"].events.clear()
+    monkeypatch.setattr(publish, "flow_block", lambda *a, **k: answer.flow)
+    result = invoke(publication)
+    assert result.exit_code == 0, result.output
+    assert "flow_size" in result.stderr
+    assert publication["out"].read_bytes() == before
+    assert publication["clock"].events == calls
+    assert Answer.model_validate_json(before).autonomy is not None
+
+
+def test_publish_non_flow_consumer_cap_refuses_before_atomic_replace(tmp_path: Path) -> None:
+    from rail.publish import write
+
+    answer = flow_answer().model_copy(update={"flow": None})
+    out = tmp_path / "metrics.json"
+    out.write_bytes(b"previous")
+    size = len(encode(answer))
+    with pytest.raises(ValueError, match=f"{size}.*{size - 1}"):
+        write(answer, out, max_bytes=size - 1)
+    assert out.read_bytes() == b"previous"
+    for cap in (0, MAX_BYTES + 1):
+        with pytest.raises(ValueError):
+            write(answer, out, max_bytes=cap)
+        assert out.read_bytes() == b"previous"
+
+
+def test_flow_only_publication_and_all_blocks_unread(
+    publication: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rail.flow import FlowDiscovery
+
+    publication["failures"].update(publication["paths"])
+    monkeypatch.setattr(
+        ReadGitHub, "flow_merged_pulls", lambda *a, **k: FlowDiscovery((), 0), raising=False
+    )
+    result = invoke(publication)
+    assert result.exit_code == 0, result.output
+    answer = Answer.model_validate_json(publication["out"].read_bytes())
+    assert answer.autonomy is answer.delivery is answer.delivery_v2 is None
+    assert answer.flow is not None and len(answer.flow.repositories) == 2
+    assert "2/2 read" in result.stdout
+    previous = publication["out"].read_bytes()
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise GitHubError("source content must stay private")
+
+    monkeypatch.setattr(ReadGitHub, "flow_merged_pulls", fail)
+    result = invoke(publication)
+    assert result.exit_code == 1 and "no repository" in result.output
+    assert publication["out"].read_bytes() == previous
+    assert "source content" not in result.output

@@ -340,3 +340,54 @@ def test_fully_qualified_main_ignores_local_branch(history: tuple[Path, Path, Pa
     assert answer.delivery is not None and answer.delivery.projects[0].d7.deployments == 1
     assert gitrepo.files_at(checkout, "origin/main", RECEIPTS_DIR) == {}
     assert len(gitrepo.files_at(checkout, MAIN_REF, RECEIPTS_DIR) or {}) == 2
+
+
+def test_flow_keeps_committed_and_local_receipt_integrity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rail.flow_cache import FlowCache
+    from tests.test_flow_publish import NOW as FLOW_NOW
+    from tests.test_flow_publish import FlowGitHub, receipt
+
+    checkout = tmp_path / "checkout"
+    manifest(checkout, "red-example", tier="dev")
+    record = receipt()
+    local = FileLedger(checkout / RECEIPTS_DIR)
+    local.mirror(record)
+    raw = local.path_of(record).read_text()
+    monkeypatch.setattr("rail.gitrepo.fetch_main", lambda repo: True)
+    monkeypatch.setattr("rail.gitrepo.file_at", lambda *args: (checkout / "rail.yaml").read_text())
+    monkeypatch.setattr("rail.gitrepo.files_at", lambda *args: {"docs/receipts/review.json": raw})
+
+    class BothGitHub(FlowGitHub, ReadGitHub):
+        def __init__(self) -> None:
+            ReadGitHub.__init__(self, Clock())
+            FlowGitHub.__init__(self)
+
+    cfg = ReviewerConfig(
+        app_id=1,
+        installation_id=2,
+        private_key_file=tmp_path / "unused.pem",
+        repositories=[RepositoryConfig(slug="example/repo", path=checkout)],
+    )
+
+    def collect() -> Answer:
+        return publish.collect(
+            cfg,
+            now=FLOW_NOW,
+            clock=lambda: FLOW_NOW,
+            open_ledger=open_ledger,
+            github=BothGitHub(),
+            flow_cache=FlowCache(tmp_path / "cache"),
+        )
+
+    answer = collect()
+    assert answer.flow is not None
+    assert answer.flow.recent[0].rounds == 1
+    assert len(CommittedLedger(checkout).list("red-example")) == 1
+    local.path_of(record).write_text(raw.replace('"example-reviewer"', '"changed"'))
+    answer = collect()
+    assert answer.flow is not None and answer.autonomy is None
+    assert answer.flow.recent[0].rounds is answer.flow.recent[0].carried is None
+    assert answer.flow.coverage.unread_segments["example/repo"]["ledger"] == 1

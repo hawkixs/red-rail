@@ -1,5 +1,7 @@
 """Serve the validated metrics file on loopback without exposing raw file contents."""
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -9,8 +11,13 @@ from pydantic import ValidationError
 from rail.metrics_contract import MAX_BYTES, Answer, TooLarge, encode
 
 
-def create_server(file: Path, *, port: int = 9230) -> ThreadingHTTPServer:
+def create_server(
+    file: Path, *, port: int = 9230, max_bytes: int = 16 * 1024
+) -> ThreadingHTTPServer:
     """Fix the bind to loopback so the endpoint cannot be exposed by a host option."""
+
+    if not 1 <= max_bytes <= MAX_BYTES:
+        raise ValueError(f"metrics budget must be between 1 and {MAX_BYTES}")
 
     class Handler(BaseHTTPRequestHandler):
         def __getattr__(self, name: str) -> Callable[[], None]:
@@ -28,10 +35,13 @@ def create_server(file: Path, *, port: int = 9230) -> ThreadingHTTPServer:
             else:
                 try:
                     with file.open("rb") as source:
-                        raw = source.read(MAX_BYTES + 1)
-                    if len(raw) > MAX_BYTES:
+                        raw = source.read(max_bytes + 1)
+                    if len(raw) > max_bytes or len(raw) > MAX_BYTES:
                         raise TooLarge(len(raw))
-                    body = encode(Answer.model_validate_json(raw, strict=True))
+                    payload = encode(Answer.model_validate_json(raw, strict=True))
+                    if len(payload) > max_bytes:
+                        raise TooLarge(len(payload))
+                    body = payload
                     status = 200
                 except FileNotFoundError:
                     status = 200
