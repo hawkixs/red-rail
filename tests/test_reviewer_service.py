@@ -1,6 +1,9 @@
 """One review: check run started → judges → verdict → check completed + PR review →
 `review_verdict` attested through the project's own ledger. Fail-closed on every gap."""
 
+from __future__ import annotations
+
+import json
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -710,6 +713,231 @@ def test_a_review_in_progress_is_not_started_again() -> None:
     assert not needs_review(PR, github=github, policy=policy)
     relabelled = replace(PR, labels=("rail-review:rerun",))
     assert needs_review(relabelled, github=github, policy=policy)
+
+
+class DisconnectedCompletion(FakeGitHub):
+    """Leave the successful publication unacknowledged, accepting any erroneous failure."""
+
+    def complete_check(self, repository, check_id, **kwargs):
+        if kwargs["title"] == "reviewer error":
+            return super().complete_check(repository, check_id, **kwargs)
+        self.calls.append(("publish", check_id, kwargs))
+        raise RuntimeError("completion disconnected")
+
+
+def test_an_attested_verdict_is_never_published_as_a_failure(tmp_path: Path) -> None:
+    """Ticket 62195cc5: a lost completion cannot contradict its durable receipt."""
+    ledger = FileLedger(tmp_path / "receipts")
+    _bind(ledger)
+    github = DisconnectedCompletion(messages=["chore: plain"])
+
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
+        return approve(provider, tier)
+
+    with pytest.raises(RuntimeError, match="completion disconnected"):
+        review_pull(
+            PR,
+            github=github,
+            policy=default_policy(),
+            ledger=ledger,
+            project="red-alpha",
+            run_judge=run_judge,
+        )
+    (receipt,) = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+    assert receipt.data["check_run_id"] == 99 and receipt.data["verdict"] == "approve"
+    assert not github.completed_checks
+    assert not any(call[0] == "review" for call in github.calls)
+
+
+@pytest.mark.parametrize("decision", ["approve", "request_changes"])
+def test_the_next_pass_completes_an_attested_check_from_its_receipt(
+    tmp_path: Path, monkeypatch, decision: str
+) -> None:
+    from rail.reviewer import service
+
+    ledger = FileLedger(tmp_path / "receipts")
+    _bind(ledger)
+    failed = DisconnectedCompletion(messages=["chore: plain"])
+
+    def run_judge(
+        pr, diff, policy, *, provider, tier, criteria, root=None, notes="", instructions=""
+    ):
+        return approve(provider, tier) if decision == "approve" else block(provider, tier)
+
+    with pytest.raises(RuntimeError, match="completion disconnected"):
+        review_pull(
+            PR,
+            github=failed,
+            policy=default_policy(),
+            ledger=ledger,
+            project="red-alpha",
+            run_judge=run_judge,
+        )
+    publication = next(call[2] for call in failed.calls if call[0] == "publish")
+    before = ledger.list("red-alpha")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("reconciliation must neither judge nor attest")
+
+    monkeypatch.setattr(service, "judge", forbidden)
+    monkeypatch.setattr(service, "review_pull", forbidden)
+    monkeypatch.setattr(ledger, "attest", forbidden)
+
+    class OpenChecks(FakeGitHub):
+        def open_pulls(self, repository):
+            return [PR]
+
+        def complete_check(self, repository, check_id, **kwargs):
+            completed = super().complete_check(repository, check_id, **kwargs)
+            self.existing_checks = [
+                completed if check.id == check_id else check for check in self.existing_checks
+            ]
+            return completed
+
+    stale = datetime.now(UTC) - timedelta(days=1)
+    untouched = CheckRun(100, "in_progress", None, started_at=stale)
+    github = OpenChecks(
+        existing_checks=[CheckRun(99, "in_progress", None, started_at=stale), untouched]
+    )
+    policy = default_policy()
+    # A stale attested check belongs to reconciliation, never to interrupted-run cleanup.
+    service._close_interrupted_checks(
+        PR, github=github, policy=policy, ledger=ledger, project="red-alpha"
+    )
+    assert not any(check[0] == 99 for check in github.completed_checks)
+    github.existing_checks = [CheckRun(99, "in_progress", None), untouched]
+    github.completed_checks.clear()
+    assert (
+        service.complete_attested_checks(
+            PR.repository, github=github, policy=policy, ledger=ledger, project="red-alpha"
+        )
+        == 1
+    )
+    assert github.completed_checks == [
+        (99, publication["conclusion"], publication["title"], f"Attested verdict: {decision}")
+    ]
+    fields = {k: v for k, v in before[-1].data.items() if k in ReviewVerdict.model_fields}
+    fields["summary"] = f"Attested verdict: {decision}"
+    assert github.check_texts[99] == _render(ReviewVerdict.model_validate(fields))
+    assert publication["conclusion"] == ("success" if decision == "approve" else "failure")
+    assert untouched in github.existing_checks
+    assert ledger.list("red-alpha") == before
+    assert not needs_review(PR, github=github, policy=policy)
+    assert (
+        service.complete_attested_checks(
+            PR.repository, github=github, policy=policy, ledger=ledger, project="red-alpha"
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize("mismatch", ["repository", "pr", "sha", "project", "check_run_id"])
+def test_reconciliation_requires_the_attested_check_identity(tmp_path: Path, mismatch: str) -> None:
+    from rail.reviewer.service import complete_attested_checks
+
+    ledger = FileLedger(tmp_path / "receipts")
+    verdict = ReviewVerdict(verdict="approve", summary="clean")
+    data = verdict.as_attestation_data(
+        sha=PR.head_sha, check_run_id=99, repository=PR.repository, pr=PR.number
+    )
+    if mismatch != "project":
+        data[mismatch] = {
+            "repository": "example/red-other",
+            "pr": PR.number + 1,
+            "sha": "c" * 40,
+            "check_run_id": 100,
+        }[mismatch]
+    ledger.attest(
+        "red-other" if mismatch == "project" else "red-alpha",
+        AttestationKind.REVIEW_VERDICT,
+        data,
+        issuer="red-rail-reviewer",
+        idempotency_key="verdict:99",
+    )
+
+    class OpenChecks(FakeGitHub):
+        def open_pulls(self, repository):
+            return [PR]
+
+    github = OpenChecks(existing_checks=[CheckRun(99, "in_progress", None)])
+    assert (
+        complete_attested_checks(
+            PR.repository,
+            github=github,
+            policy=default_policy(),
+            ledger=ledger,
+            project="red-alpha",
+        )
+        == 0
+    )
+    assert not github.completed_checks
+
+
+def test_publication_preserves_the_attestation_payload_and_budget(tmp_path: Path) -> None:
+    from rail.reviewer.service import _publish
+    from rail.reviewer.verdict import RECEIPT_BUDGET
+
+    ledger = FileLedger(tmp_path / "receipts")
+    verdict = ReviewVerdict(
+        verdict="approve",
+        summary="\U0001f600" * 4000,
+        findings=[
+            Finding(
+                id=f"F-7-{i}",
+                severity="minor",
+                klass="note",
+                file="x" * 200,
+                title="t" * 200,
+                evidence="e" * 300,
+            )
+            for i in range(1, 101)
+        ],
+    )
+    outcome = _publish(
+        PR,
+        CheckRun(99, "in_progress", None),
+        verdict,
+        "approve",
+        github=FakeGitHub(),
+        policy=default_policy(),
+        ledger=ledger,
+        project="red-alpha",
+        repo_path=None,
+        failures=[],
+    )
+    (receipt,) = ledger.list("red-alpha", attestation=AttestationKind.REVIEW_VERDICT)
+    assert set(receipt.data) == {
+        "sha",
+        "independent",
+        "verdict",
+        "check_run_id",
+        "repository",
+        "pr",
+        "mode",
+        "providers",
+        "finding_count",
+        "blocking",
+        "diff_truncated",
+        "unseen_files",
+        "unseen_count",
+        "not_reviewed",
+        "round",
+        "artifact",
+        "findings",
+    }
+    encoded = json.dumps(receipt.data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert len(encoded.encode()) <= RECEIPT_BUDGET
+    expected = verdict.as_attestation_data(
+        sha=PR.head_sha, check_run_id=99, repository=PR.repository, pr=PR.number
+    )
+    assert (
+        encoded.encode()
+        == json.dumps(expected, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    )
+    assert receipt.idempotency_key == f"review_verdict:{PR.head_sha}:99"
+    assert outcome.attested
 
 
 def test_a_stale_in_progress_check_is_reviewed_again() -> None:

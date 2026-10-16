@@ -34,7 +34,12 @@ from rail.reviewer.judges import (
 )
 from rail.reviewer.policy import ReviewPolicy, producer_providers
 from rail.reviewer.split import Sight, oversized, sight_of, split_diff
-from rail.reviewer.verdict import CarryForwards, Finding, PreviousAnswer, ReviewVerdict
+from rail.reviewer.verdict import (
+    CarryForwards,
+    Finding,
+    PreviousAnswer,
+    ReviewVerdict,
+)
 
 REVIEWER_IDENTITY = "red-rail-reviewer"
 RunJudge = Callable[..., JudgeReply]
@@ -117,7 +122,86 @@ def pending_reviews(
     ]
 
 
-def _close_interrupted_checks(pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy) -> None:
+def _attested_check(ledger: Ledger, project: str, check_id: int) -> Record | None:
+    """An attested check must never be overwritten by an error (ticket 62195cc5)."""
+    return next(
+        (
+            record
+            for record in reversed(ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT))
+            if record.data.get("check_run_id") == check_id
+        ),
+        None,
+    )
+
+
+def complete_attested_checks(
+    repository: str,
+    *,
+    github: Any,
+    policy: ReviewPolicy,
+    ledger: Ledger,
+    project: str,
+) -> int:
+    """Publish durable verdicts whose completion was lost, without judging or attesting."""
+    completed = 0
+    receipts = ledger.list(project, attestation=AttestationKind.REVIEW_VERDICT)
+    for pr in github.open_pulls(repository):
+        for check in github.check_runs(repository, pr.head_sha, name=policy.check_name):
+            if check.status != "in_progress":
+                continue
+            receipt = next(
+                (
+                    record
+                    for record in reversed(receipts)
+                    if record.data.get("check_run_id") == check.id
+                    and record.data.get("repository") == repository
+                    and record.data.get("pr") == pr.number
+                    and record.data.get("sha") == pr.head_sha
+                ),
+                None,
+            )
+            if receipt is None:
+                continue
+            data = receipt.data
+            fields = {k: v for k, v in data.items() if k in ReviewVerdict.model_fields}
+            # Reconstruct publication prose without changing the attestation payload.
+            fields.setdefault("summary", f"Attested verdict: {data['verdict']}")
+            if isinstance(fields.get("findings"), list):
+                fields["findings"] = [
+                    {**f, "evidence": f.get("evidence") or "(trimmed)"} for f in fields["findings"]
+                ]
+            else:
+                fields.pop("findings", None)
+            verdict = ReviewVerdict.model_validate(fields)
+            title = (
+                f"approve carried from {data['carried_from']}"
+                if data.get("carried_from")
+                else "awaiting ruling"
+                if verdict.round == "awaiting_ruling"
+                else "no verdict"
+                if verdict.round == "no_verdict"
+                else verdict.verdict
+            )
+            github.complete_check(
+                repository,
+                check.id,
+                conclusion="success" if verdict.verdict == "approve" else "failure",
+                title=title,
+                summary=verdict.summary,
+                text=_render(verdict),
+            )
+            completed += 1
+    return completed
+
+
+def _close_interrupted_checks(
+    pr: PullRequest,
+    *,
+    github: GitHubLike,
+    policy: ReviewPolicy,
+    ledger: Ledger,
+    project: str,
+) -> None:
     # Ticket 71776743: retire stale runs before starting a replacement pass.
     cutoff = datetime.now(UTC) - timedelta(minutes=policy.stale_check_minutes)
     for check in github.check_runs(pr.repository, pr.head_sha, name=policy.check_name):
@@ -125,6 +209,7 @@ def _close_interrupted_checks(pr: PullRequest, *, github: GitHubLike, policy: Re
             check.status == "in_progress"
             and check.started_at is not None
             and check.started_at < cutoff
+            and _attested_check(ledger, project, check.id) is None
         ):
             started = check.started_at.isoformat()
             github.complete_check(
@@ -699,7 +784,7 @@ def review_pull(
                 # A missing or malformed source receipt proves no findings state. Judge the
                 # patch normally; carry_review validates it before creating any check.
                 pass
-    _close_interrupted_checks(pr, github=github, policy=policy)
+    _close_interrupted_checks(pr, github=github, policy=policy, ledger=ledger, project=project)
     check = github.start_check(pr.repository, pr.head_sha, name=policy.check_name)
     try:
         return _review_started(
@@ -713,7 +798,10 @@ def review_pull(
             run_judge=run_judge,
             root=root,
         )
-    except Exception as exc:  # never leave a check in progress: fail it, then surface the crash
+    except Exception as exc:
+        # Ticket 62195cc5: reconciliation publishes an attested verdict on the next pass.
+        if _attested_check(ledger, project, check.id) is not None:
+            raise
         github.complete_check(
             pr.repository,
             check.id,
@@ -774,7 +862,7 @@ def carry_review(
         verdict = ReviewVerdict.model_validate({**fields, "summary": summary})
     except (ValueError, TypeError, AttributeError) as exc:
         raise CarrySourceError(f"source verdict malformed: {exc}") from exc
-    _close_interrupted_checks(pr, github=github, policy=policy)
+    _close_interrupted_checks(pr, github=github, policy=policy, ledger=ledger, project=project)
     check = github.start_check(pr.repository, pr.head_sha, name="red-rail/review")
     data = {
         **source,
@@ -804,6 +892,8 @@ def carry_review(
             publish_review=False,
         )
     except Exception as exc:
+        if _attested_check(ledger, project, check.id) is not None:
+            raise
         github.complete_check(
             pr.repository,
             check.id,

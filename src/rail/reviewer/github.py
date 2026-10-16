@@ -1,4 +1,4 @@
-"""The reviewer's own minimal GitHub App client (ADR-0003): synchronous, no retries,
+"""The reviewer's own minimal GitHub App client (ADR-0003): synchronous, bounded retries,
 bounded responses, explicit errors. brain-v42's observer has a richer one; the rail carries
 its own rather than importing brain_v42."""
 
@@ -41,6 +41,10 @@ class GitHubError(Exception):
     def __init__(self, message: str, *, status: int | None = None) -> None:
         super().__init__(message)
         self.status = status
+
+
+class GitHubTransportError(GitHubError):
+    """Transport failed; an idempotent completion can be retried (ticket 62195cc5)."""
 
 
 @contextmanager
@@ -215,12 +219,14 @@ class GitHubApp:
         private_key_pem: str,
         transport: httpx.BaseTransport | None = None,
         clock: Callable[[], datetime] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
         api: str = API,
     ) -> None:
         self.app_id = app_id
         self.installation_id = installation_id
         self._pem = private_key_pem
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._sleep = sleep
         self._http = httpx.Client(base_url=api, transport=transport, timeout=TIMEOUT_SECONDS)
         self._token: str | None = None
         self._expires_at: datetime | None = None
@@ -272,6 +278,8 @@ class GitHubApp:
             sent["Authorization"] = f"Bearer {self.token()}"
         try:
             response = self._http.request(method, path, headers=sent, params=params, json=json_body)
+        except httpx.TransportError as exc:
+            raise GitHubTransportError(f"{method} {path}: {exc}") from exc
         except httpx.HTTPError as exc:
             raise GitHubError(f"{method} {path}: {exc}") from exc
         if len(response.content) > MAX_RESPONSE_BYTES:
@@ -664,9 +672,18 @@ class GitHubApp:
             "completed_at": self._clock().astimezone(UTC).isoformat(),
             "output": {"title": title[:255], "summary": summary[:65535], "text": text[:65535]},
         }
-        return _check(
-            self._request("PATCH", f"/repos/{repository}/check-runs/{check_id}", json_body=body)
-        )
+        # Ticket 62195cc5: repeat the same completion body when its acknowledgement is lost.
+        for attempt in range(3):
+            try:
+                data = self._request(
+                    "PATCH", f"/repos/{repository}/check-runs/{check_id}", json_body=body
+                )
+                break
+            except GitHubTransportError:
+                if attempt == 2:
+                    raise
+                self._sleep(attempt + 1)
+        return _check(data)
 
     def check_runs(self, repository: str, sha: str, *, name: str | None = None) -> list[CheckRun]:
         """Read all current checks, or only ours by name; CI evidence is never a partial page."""

@@ -69,7 +69,12 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
     from rail.ledger import LedgerError
     from rail.model import IGNORED_GLOBS, MANIFEST_NAME, load_rail_config
     from rail.reviewer.github import GitHubApp, GitHubError
-    from rail.reviewer.service import REVIEWER_IDENTITY, pending_reviews, review_pull
+    from rail.reviewer.service import (
+        REVIEWER_IDENTITY,
+        complete_attested_checks,
+        pending_reviews,
+        review_pull,
+    )
 
     github = GitHubApp(
         app_id=config.app_id,
@@ -107,6 +112,16 @@ def _once(config, *, only: str | None, pr: int | None) -> int:
                 policy = policy.model_copy(
                     update={"ignored_globs": (*policy.ignored_globs, *merged)}
                 )
+            try:
+                complete_attested_checks(
+                    repository.slug,
+                    github=github,
+                    policy=policy,
+                    ledger=ledger,
+                    project=cfg.project,
+                )
+            except Exception as exc:
+                click.echo(f"{repository.slug}: {type(exc).__name__}", err=True)
             pulls = (
                 [github.pull(repository.slug, pr)]
                 if pr
