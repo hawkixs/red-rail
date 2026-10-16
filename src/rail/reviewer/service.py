@@ -7,6 +7,7 @@ from __future__ import annotations
 import fnmatch
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -85,24 +86,57 @@ class CarrySourceError(ValueError):
     """No source state can be carried; raised before any GitHub or ledger write."""
 
 
-def needs_review(pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy) -> bool:
+def needs_review(
+    pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy, now: datetime | None = None
+) -> bool:
     if pr.draft:
         return False
     if policy.rerun_label in pr.labels:
         return True
-    # any check of ours on this head — completed or still running — means the review exists
-    # (found by the independent reviewer on PR #3: a second process could start it twice)
-    return not github.check_runs(pr.repository, pr.head_sha, name=policy.check_name)
+    checks = github.check_runs(pr.repository, pr.head_sha, name=policy.check_name)
+    if not checks:
+        return True
+    if any(check.status == "completed" for check in checks):
+        return False
+    cutoff = (now or datetime.now(UTC)) - timedelta(minutes=policy.stale_check_minutes)
+    return all(
+        check.status == "in_progress" and check.started_at is not None and check.started_at < cutoff
+        for check in checks
+    )
 
 
-def pending_reviews(github: Any, repository: str, policy: ReviewPolicy) -> list[PullRequest]:
+def pending_reviews(
+    github: Any, repository: str, policy: ReviewPolicy, *, now: datetime | None = None
+) -> list[PullRequest]:
     """The open pull requests that need a review, loaded in full: the list endpoint carries
     no additions/deletions, and the mode (light/deep) depends on them."""
     return [
         github.pull(repository, summary.number)
         for summary in github.open_pulls(repository)
-        if needs_review(summary, github=github, policy=policy)
+        if needs_review(summary, github=github, policy=policy, now=now)
     ]
+
+
+def _close_interrupted_checks(pr: PullRequest, *, github: GitHubLike, policy: ReviewPolicy) -> None:
+    # Ticket 71776743: retire stale runs before starting a replacement pass.
+    cutoff = datetime.now(UTC) - timedelta(minutes=policy.stale_check_minutes)
+    for check in github.check_runs(pr.repository, pr.head_sha, name=policy.check_name):
+        if (
+            check.status == "in_progress"
+            and check.started_at is not None
+            and check.started_at < cutoff
+        ):
+            started = check.started_at.isoformat()
+            github.complete_check(
+                pr.repository,
+                check.id,
+                conclusion="failure",
+                title="interrupted",
+                summary=(
+                    f"The pass which started this check at {started} never completed it, "
+                    "so a new pass reviews this head."
+                ),
+            )
 
 
 def docs_only(diff: str, policy: ReviewPolicy) -> bool:
@@ -665,6 +699,7 @@ def review_pull(
                 # A missing or malformed source receipt proves no findings state. Judge the
                 # patch normally; carry_review validates it before creating any check.
                 pass
+    _close_interrupted_checks(pr, github=github, policy=policy)
     check = github.start_check(pr.repository, pr.head_sha, name=policy.check_name)
     try:
         return _review_started(
@@ -739,6 +774,7 @@ def carry_review(
         verdict = ReviewVerdict.model_validate({**fields, "summary": summary})
     except (ValueError, TypeError, AttributeError) as exc:
         raise CarrySourceError(f"source verdict malformed: {exc}") from exc
+    _close_interrupted_checks(pr, github=github, policy=policy)
     check = github.start_check(pr.repository, pr.head_sha, name="red-rail/review")
     data = {
         **source,

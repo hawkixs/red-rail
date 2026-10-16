@@ -137,6 +137,7 @@ class CheckRun:
     conclusion: str | None
     name: str = ""
     app_id: int | None = None
+    started_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,12 +186,23 @@ def _pull(repository: str, raw: dict[str, Any]) -> PullRequest:
 
 def _check(raw: dict[str, Any]) -> CheckRun:
     app_id = (raw.get("app") or {}).get("id")
+    started_at = None
+    if isinstance(raw.get("started_at"), str):
+        try:
+            started_at = datetime.fromisoformat(raw["started_at"].replace("Z", "+00:00"))
+            if started_at.tzinfo is not None:
+                started_at = started_at.astimezone(UTC)
+            else:
+                started_at = None
+        except ValueError:
+            pass
     return CheckRun(
         id=int(raw["id"]),
         status=str(raw["status"]),
         conclusion=raw.get("conclusion"),
         name=str(raw.get("name", "")),
         app_id=int(app_id) if app_id is not None else None,
+        started_at=started_at,
     )
 
 
