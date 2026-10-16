@@ -28,7 +28,9 @@ from rail.reviewer.split import Sight, sight_of
 from rail.reviewer.verdict import FINDING_ID, PreviousAnswer, ReviewVerdict
 
 GUARD = Path(__file__).resolve().parent / "guard.sh"
-Failure = Literal["timeout", "provider_fallback", "failed", "unparsable"]
+Failure = Literal[
+    "timeout", "provider_fallback", "failed", "unparsable", "diff is empty; nothing was judged"
+]
 Runner = Callable[[str, RunSpec], tuple[int, str]]  # (provider, spec) -> (exit code, reply text)
 CREDENTIALS = {
     "glm": Credentials(paths=(".local/share/opencode/auth.json",), mode="symlink"),
@@ -293,7 +295,8 @@ def drop_ignored(diff: str, policy: ReviewPolicy) -> str:
 
 def prioritise_diff(diff: str, policy: ReviewPolicy) -> str:
     """The same hunks, code first (`policy.diff_priority` order), docs last, generated
-    lockfiles dropped — so a truncation cuts what matters least."""
+    lockfiles dropped unless they are the whole change — so a truncation cuts what matters least.
+    """
     import fnmatch
 
     hunks = [h for h in _HUNK.split(diff) if h.startswith("diff --git")]
@@ -311,6 +314,9 @@ def prioritise_diff(diff: str, policy: ReviewPolicy) -> str:
         return (1, 0)
 
     kept = [h for h in hunks if not _ignored(h, policy)]
+    # brain-v42#452: ignored globs lower priority beside code, never hide the whole change.
+    if not kept:
+        kept = hunks
     return "".join(sorted(kept, key=rank))
 
 
@@ -579,6 +585,17 @@ def judge(
             built = build_prompt(
                 pr, diff, shrunk, criteria=criteria, notes=notes, instructions=instructions
             )
+    if not _HUNK.search(built.visible):
+        return JudgeReply(
+            provider=provider,
+            tier=tier,
+            model=policy.model(provider, tier),
+            verdict=None,
+            failure="diff is empty; nothing was judged",
+            raw="",
+            reason="empty diff",
+            sight=sight_of(built.visible, diff),
+        )
     base = root or ephemeral_root(os.environ) or Path(tempfile.gettempdir())
     note = None
     model = policy.model(provider, tier)
