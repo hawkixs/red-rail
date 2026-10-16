@@ -36,7 +36,7 @@ DEFAULT_MODELS: dict[str, dict[str, str]] = {
         # provider_fallback (ticket 7dc34128), so deep uses its strongest listed model
         "agy": "gemini-3.8-flash-high",
         "codex": "gpt-6-astra",
-        "claude": "claude-opus-5",
+        "claude": "claude-sonnet-5",
         "glm": GLM_FLASH,
     },
 }
@@ -61,7 +61,8 @@ PRODUCERS: tuple[tuple[str, Provider], ...] = (
 class ReviewPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    providers: tuple[Provider, ...] = ("glm", "codex", "claude", "agy")
+    # Decision 60bc0e99: Claude last, Sonnet only.
+    providers: tuple[Provider, ...] = ("glm", "codex", "agy", "claude")
     models: dict[Tier, dict[Provider, str]] = Field(
         default_factory=lambda: {tier: dict(models) for tier, models in DEFAULT_MODELS.items()}
     )

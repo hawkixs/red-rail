@@ -40,7 +40,7 @@ DIFF = "diff --git a/src/probe.py b/src/probe.py\n+def healthz(): return 200\n"
 
 def test_default_policy_is_the_measured_data() -> None:
     policy = default_policy()
-    assert policy.providers == ("glm", "codex", "claude", "agy")
+    assert policy.providers == ("glm", "codex", "agy", "claude")
     assert policy.models["light"] == {
         "agy": "gemini-3.8-flash-high",
         "codex": "gpt-5.6-luna",
@@ -50,7 +50,7 @@ def test_default_policy_is_the_measured_data() -> None:
     assert policy.models["deep"] == {
         "agy": "gemini-3.8-flash-high",
         "codex": "gpt-6-astra",
-        "claude": "claude-opus-5",
+        "claude": "claude-sonnet-5",
         "glm": "opencode-go/glm-5.3-flash",
     }
     assert policy.light_max_changed_lines == 200
