@@ -257,6 +257,7 @@ class RestoreConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     database_image: str
+    database_url_scheme: str = "postgresql"
     database_env: list[str] = Field(min_length=1)
     env: dict[str, str] = Field(default_factory=dict)
     env_deny_prefixes: list[str] = Field(default_factory=list)
@@ -272,6 +273,13 @@ class RestoreConfig(BaseModel):
         repository = rf"(?:[a-z0-9.-]+:[0-9]+/)?{component}(?:/{component})*"
         if not re.fullmatch(rf"{repository}@sha256:[0-9a-f]{{64}}", value):
             raise ValueError("drill.restore.database_image must be a digest-pinned image reference")
+        return value
+
+    @field_validator("database_url_scheme")
+    @classmethod
+    def _database_url_scheme(cls, value: str) -> str:
+        if not re.fullmatch(r"[a-z][a-z0-9]*(\+[a-z][a-z0-9]*)?", value):
+            raise ValueError("drill.restore.database_url_scheme must be a URL scheme")
         return value
 
     @model_validator(mode="after")

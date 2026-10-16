@@ -135,7 +135,7 @@ def script_for(
         '--env "POSTGRES_PASSWORD=$password" --env POSTGRES_USER=drill --env POSTGRES_DB=drill '
         '--mount "type=bind,source=$backup,target=/backup.dump,readonly" '
         f"{quote(config.database_image)} >/dev/null 2>&1",
-        'database_url="postgresql://drill:$password@database:5432/drill"',
+        f'database_url="{config.database_url_scheme}://drill:$password@database:5432/drill"',
         # TCP readiness avoids mistaking the image's temporary initialization server for
         # the final database. No Docker or application logs are ever collected.
         f"deadline=$((SECONDS + {params.healthcheck_timeout}))",

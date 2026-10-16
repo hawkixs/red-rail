@@ -182,10 +182,38 @@ def test_restore_model_rejects_unsafe_configuration(setup_restore, field, value)
     repo, manifest, _, transport = setup_restore
     valid = load_rail_config(repo)
     assert valid.drill.restore.database_image == DATABASE
+    assert valid.drill.restore.database_url_scheme == "postgresql"
     assert valid.drill.restore.disk_margin == 2.0
     manifest["drill"]["restore"] = {**RESTORE, field: value}
     write_manifest(repo, manifest)
     with pytest.raises(ValidationError):
+        load_rail_config(repo)
+    assert transport.scripts == []
+
+
+@pytest.mark.parametrize("scheme", [None, "postgresql", "postgresql+asyncpg", "postgresql+psycopg"])
+def test_restore_script_uses_database_url_scheme(setup_restore, scheme):
+    repo, manifest, _, transport = setup_restore
+    if scheme is not None:
+        manifest["drill"]["restore"] = {**RESTORE, "database_url_scheme": scheme}
+        write_manifest(repo, manifest)
+    result = invoke(repo)
+    assert result.exit_code == 0, result.output
+    expected = scheme or "postgresql"
+    assert (
+        f'database_url="{expected}://drill:$password@database:5432/drill"' in transport.scripts[0]
+    )
+
+
+@pytest.mark.parametrize(
+    "scheme",
+    ["postgresql://x", "pg;rm -rf", "Postgres", "a b", "$(id)", "postgresql+", ""],
+)
+def test_restore_model_rejects_invalid_database_url_scheme(setup_restore, scheme):
+    repo, manifest, _, transport = setup_restore
+    manifest["drill"]["restore"] = {**RESTORE, "database_url_scheme": scheme}
+    write_manifest(repo, manifest)
+    with pytest.raises(ValueError, match=r"drill\.restore\.database_url_scheme must"):
         load_rail_config(repo)
     assert transport.scripts == []
 

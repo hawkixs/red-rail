@@ -51,3 +51,9 @@ or restore the link, then deploy again.
 5. Real incident: `rail attest incident_detected --repo <path> --data …`, then
    `rail deploy --repo <path> --rollback`. Never `docker compose` on the VPS by hand: the rail
    would not know. When this skill and the CLI disagree, the CLI is right.
+
+For `rail drill --restore`, `drill.restore.schema_head_file` names the backup's schema-head
+file (relative paths resolve beside the backup). The optional
+`drill.restore.database_url_scheme` defaults to `postgresql`; use `postgresql+asyncpg` or
+`postgresql+psycopg` when the application requires a driver-specific URL. It accepts only
+`^[a-z][a-z0-9]*(\+[a-z][a-z0-9]*)?$`, without `://` or connection details.
